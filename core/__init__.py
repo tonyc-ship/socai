@@ -1,2 +1,1 @@
-"""SocAI core package."""
-
+"""Socai core package."""

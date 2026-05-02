@@ -1,4 +1,4 @@
-"""Minimal tool interface for the SocAI agent loop.
+"""Minimal tool interface for the Socai agent loop.
 
 Each tool exposes:
 - name / description / parameters  → sent to the Anthropic tool_use API

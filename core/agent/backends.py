@@ -1,4 +1,4 @@
-"""LLM backend abstraction for the SocAI agent loop.
+"""LLM backend abstraction for the Socai agent loop.
 
 The agent loop only depends on the small ``Backend`` interface in this module.
 Hosted SDKs are imported lazily so the core can be tested without installing
@@ -550,4 +550,3 @@ def create_backend(model: str | None = None, *, provider: str | None = None) -> 
     if resolved_provider == PROVIDER_QWEN:
         return QwenBackend(model=selected_model)
     return OpenAIBackend(model=selected_model)
-

@@ -1,4 +1,4 @@
-"""Structured per-run state for the generic SocAI agent."""
+"""Structured per-run state for the generic Socai agent."""
 
 from __future__ import annotations
 
