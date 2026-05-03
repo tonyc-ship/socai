@@ -13,12 +13,16 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_OPENAI = "openai"
 PROVIDER_KIMI = "kimi"
 PROVIDER_QWEN = "qwen"
+
+SOCAI_AUTH_FILE = Path.home() / ".socai" / "auth.json"
+CODEX_AUTH_FILE = Path.home() / ".codex" / "auth.json"
 
 
 @dataclass(frozen=True)
@@ -95,7 +99,100 @@ def default_model_for_provider(provider: str) -> str:
     config = PROVIDERS.get(provider)
     if config is None:
         raise ValueError(f"Unknown provider: {provider!r}")
-    return config.default_model
+    return _configured_default_model(provider) or config.default_model
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _auth_configs() -> list[tuple[Path, dict]]:
+    configs: list[tuple[Path, dict]] = []
+    data = _read_json(SOCAI_AUTH_FILE)
+    if data:
+        configs.append((SOCAI_AUTH_FILE, data))
+    return configs
+
+
+def save_api_key(provider: str, api_key: str) -> Path:
+    provider = str(provider or "").strip().lower()
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown provider: {provider!r}")
+    secret = str(api_key or "").strip()
+    if not secret:
+        raise ValueError("API key is required.")
+
+    data = _read_json(SOCAI_AUTH_FILE)
+    provider_block = dict(data.get(provider) or {})
+    provider_block["api_key"] = secret
+    data[provider] = provider_block
+    defaults = dict(data.get("defaults") or {})
+    defaults["provider"] = provider
+    data["defaults"] = defaults
+
+    SOCAI_AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SOCAI_AUTH_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(SOCAI_AUTH_FILE, 0o600)
+    except OSError:
+        pass
+    return SOCAI_AUTH_FILE
+
+
+def _configured_secret(provider: str, key: str) -> tuple[str, str] | None:
+    for path, data in _auth_configs():
+        block = data.get(provider) or {}
+        if not isinstance(block, dict):
+            continue
+        value = str(block.get(key) or "").strip()
+        if value:
+            return str(path), value
+    return None
+
+
+def _configured_default_provider() -> str:
+    for _, data in _auth_configs():
+        defaults = data.get("defaults") or {}
+        if not isinstance(defaults, dict):
+            continue
+        provider = str(defaults.get("provider") or "").strip().lower()
+        if provider in PROVIDERS:
+            return provider
+    return ""
+
+
+def _configured_default_model(provider: str) -> str:
+    for _, data in _auth_configs():
+        defaults = data.get("defaults") or {}
+        if not isinstance(defaults, dict):
+            continue
+        model = str(defaults.get(f"{provider}_model") or "").strip()
+        if model:
+            return model
+    return ""
+
+
+def _codex_api_key() -> str:
+    return str(_read_json(CODEX_AUTH_FILE).get("OPENAI_API_KEY") or "").strip()
+
+
+def _provider_has_key(provider: str) -> bool:
+    config = PROVIDERS.get(provider)
+    if config is None:
+        return False
+    if any(os.environ.get(key, "").strip() for key in config.api_key_env):
+        return True
+    if _configured_secret(provider, "api_key"):
+        return True
+    return provider == PROVIDER_OPENAI and bool(_codex_api_key())
+
+
+def has_any_api_key() -> bool:
+    return any(_provider_has_key(provider) for provider in PROVIDERS)
 
 
 def resolve_model_provider(model: str | None = None, provider: str | None = None) -> str:
@@ -109,6 +206,11 @@ def resolve_model_provider(model: str | None = None, provider: str | None = None
     for name, config in PROVIDERS.items():
         if normalized and any(normalized.startswith(prefix) for prefix in config.model_prefixes):
             return name
+    if configured := _configured_default_provider():
+        return configured
+    for name in PROVIDERS:
+        if _provider_has_key(name):
+            return name
     return PROVIDER_OPENAI
 
 
@@ -117,8 +219,18 @@ def _api_key_for(config: ProviderConfig) -> str:
         value = os.environ.get(key, "").strip()
         if value:
             return value
+    configured = _configured_secret(config.name, "api_key")
+    if configured is not None:
+        return configured[1]
+    if config.name == PROVIDER_OPENAI:
+        codex_key = _codex_api_key()
+        if codex_key:
+            return codex_key
     hint = " or ".join(f"${key}" for key in config.api_key_env)
-    raise RuntimeError(f"No API key found for {config.display_name}. Set {hint}.")
+    raise RuntimeError(
+        f"No API key found for {config.display_name}. Set {hint}, "
+        f"or add {config.name}.api_key to {SOCAI_AUTH_FILE}."
+    )
 
 
 def _truncate(text: str, max_chars: int) -> str:

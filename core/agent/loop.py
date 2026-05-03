@@ -323,8 +323,56 @@ async def run_agent(
         )
 
     if turn >= max_turns and not completed:
-        suffix = "Reached max_turns before the model returned a final answer."
-        final_text = f"{final_text}\n\n{suffix}".strip() if final_text else suffix
+        log("turn", f"final-summary (max_turns={max_turns} reached)")
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"You have reached the maximum of {max_turns} tool-using turns. "
+                    "Do not call any more tools. Based on the evidence already gathered, "
+                    "produce the best possible final answer for the user now in the same "
+                    "language as the original task. If information is incomplete, state "
+                    "what is known, what is missing, and give your best-effort conclusion."
+                ),
+            }
+        )
+        request_messages = _prepare_messages_for_context(messages, run_state, context_memory)
+        try:
+            response = backend.create_message(
+                system=system_prompt,
+                messages=request_messages,
+                tools=[],
+                max_tokens=8192,
+            )
+            messages.append({"role": "assistant", "content": backend.format_assistant_content(response)})
+            visible_texts = [text for text in response.text_blocks if not text.startswith("[Thinking] ")]
+            if visible_texts:
+                final_text = "\n".join(visible_texts)
+            run_state.note_assistant_turn(
+                turn=turn + 1,
+                text="\n".join(visible_texts or response.text_blocks),
+                tool_calls=[],
+            )
+            _write_jsonl(
+                reasoning_log_path,
+                {
+                    "type": "llm_response",
+                    "timestamp": datetime.now().isoformat(),
+                    "turn": turn + 1,
+                    "stop_reason": response.stop_reason,
+                    "text": "\n".join(visible_texts),
+                    "tool_calls": [],
+                    "usage": {"input_tokens": response.input_tokens, "output_tokens": response.output_tokens},
+                    "forced_summary": True,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - backend boundary
+            suffix = f"Reached max_turns ({max_turns}) and forced-summary call failed: {exc}"
+            final_text = f"{final_text}\n\n{suffix}".strip() if final_text else suffix
+            _write_jsonl(
+                reasoning_log_path,
+                {"type": "api_error", "timestamp": datetime.now().isoformat(), "turn": turn + 1, "error": str(exc), "forced_summary": True},
+            )
 
     total_duration = round(time.time() - task_start, 2)
     report_path = run_path / "report.md"
