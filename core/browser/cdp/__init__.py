@@ -1,18 +1,25 @@
 """Chrome DevTools Protocol runtime primitives."""
 
-from .browser import BrowserSession, TargetInfo
-from .discovery import Endpoint, discover_chrome_cdp, open_inspect_page
+from .browser import BrowserSession, TargetInfo, connect_cdp_with_retry
+from .discovery import Endpoint, discover_chrome_cdp, endpoint_from_http_url, resolve_cdp_endpoint
+from .managed import (
+    discover_existing_chrome_endpoint,
+    open_remote_debugging_page,
+    wait_for_existing_chrome_endpoint,
+)
 from .page import PageSession, RuntimeEvaluation
-from .transport import CdpTransport, CdpUseTransport
 
 __all__ = [
     "BrowserSession",
-    "CdpTransport",
-    "CdpUseTransport",
     "Endpoint",
     "PageSession",
     "RuntimeEvaluation",
     "TargetInfo",
+    "connect_cdp_with_retry",
     "discover_chrome_cdp",
-    "open_inspect_page",
+    "discover_existing_chrome_endpoint",
+    "endpoint_from_http_url",
+    "open_remote_debugging_page",
+    "resolve_cdp_endpoint",
+    "wait_for_existing_chrome_endpoint",
 ]

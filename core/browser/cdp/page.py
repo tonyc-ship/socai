@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .transport import CdpTransport
-
 
 @dataclass(frozen=True)
 class RuntimeEvaluation:
@@ -112,13 +110,13 @@ def _wrap_expression(expression: str) -> str:
 class PageSession:
     """A target-attached page session."""
 
-    def __init__(self, transport: CdpTransport, *, target_id: str, session_id: str):
-        self.transport = transport
+    def __init__(self, client: Any, *, target_id: str, session_id: str):
+        self.client = client
         self.target_id = target_id
         self.session_id = session_id
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await self.transport.send(method, params or {}, session_id=self.session_id)
+        return await self.client.send_raw(method, params or {}, session_id=self.session_id)
 
     async def enable_default_domains(self) -> None:
         for domain in ("Page", "DOM", "Runtime", "Network"):
@@ -274,4 +272,4 @@ return {
         return str(out)
 
     async def detach(self) -> None:
-        await self.transport.send("Target.detachFromTarget", {"sessionId": self.session_id})
+        await self.client.send_raw("Target.detachFromTarget", {"sessionId": self.session_id})

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from .discovery import Endpoint, discover_chrome_cdp
+from .discovery import Endpoint, resolve_cdp_endpoint
 from .page import PageSession
-from .transport import CdpTransport, CdpUseTransport, connect_with_retry
 
 
 INTERNAL_URL_PREFIXES = (
@@ -58,9 +58,10 @@ class TargetInfo:
 class BrowserSession:
     """Long-lived browser connection with an active page."""
 
-    def __init__(self, transport: CdpTransport, *, endpoint: Endpoint | None = None):
-        self.transport = transport
+    def __init__(self, client: Any, *, endpoint: Endpoint | None = None, owns_client: bool = False):
+        self.client = client
         self.endpoint = endpoint
+        self.owns_client = owns_client
         self.active_page: PageSession | None = None
 
     @classmethod
@@ -68,19 +69,25 @@ class BrowserSession:
         cls,
         *,
         endpoint: Endpoint | None = None,
-        transport: CdpTransport | None = None,
+        browser_ws_url: str | None = None,
+        http_url: str | None = None,
+        client: Any | None = None,
+        start_client: bool = False,
     ) -> "BrowserSession":
-        if transport is None:
-            endpoint = endpoint or discover_chrome_cdp()
-            transport = CdpUseTransport(endpoint.browser_ws_url)
-        await connect_with_retry(transport)
-        return cls(transport, endpoint=endpoint)
+        if client is None:
+            endpoint = endpoint or resolve_cdp_endpoint(browser_ws_url=browser_ws_url, http_url=http_url)
+            client = await connect_cdp_with_retry(endpoint.browser_ws_url)
+            return cls(client, endpoint=endpoint, owns_client=True)
+        if start_client:
+            await client.start()
+        return cls(client, endpoint=endpoint, owns_client=start_client)
 
     async def stop(self) -> None:
-        await self.transport.stop()
+        if self.owns_client:
+            await self.client.stop()
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await self.transport.send(method, params or {})
+        return await self.client.send_raw(method, params or {})
 
     async def list_targets(self) -> list[TargetInfo]:
         result = await self.send("Target.getTargets")
@@ -99,7 +106,7 @@ class BrowserSession:
             except Exception:
                 pass
         attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-        page = PageSession(self.transport, target_id=target_id, session_id=str(attached["sessionId"]))
+        page = PageSession(self.client, target_id=target_id, session_id=str(attached["sessionId"]))
         await page.enable_default_domains()
         self.active_page = page
         return page
@@ -129,3 +136,35 @@ class BrowserSession:
         if self.active_page and self.active_page.target_id == target_id:
             self.active_page = None
         return bool(result.get("success", True))
+
+
+async def connect_cdp_with_retry(
+    browser_ws_url: str,
+    *,
+    attempts: int = 4,
+    per_attempt_timeout: float = 12.0,
+    pause_seconds: float = 1.0,
+) -> Any:
+    try:
+        from cdp_use.client import CDPClient
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing dependency: cdp-use. Install Socai browser dependencies.") from exc
+
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        client = CDPClient(browser_ws_url)
+        try:
+            await asyncio.wait_for(client.start(), timeout=per_attempt_timeout)
+            return client
+        except BaseException as exc:
+            last_error = exc
+            try:
+                await asyncio.wait_for(client.stop(), timeout=2)
+            except BaseException:
+                pass
+            if attempt < attempts:
+                await asyncio.sleep(pause_seconds)
+    raise RuntimeError(
+        "CDP connection failed. Ensure the Socai app backend provided a fresh browser_ws_url "
+        f"and Chrome remote debugging is approved if prompted. Last error: {last_error}"
+    )

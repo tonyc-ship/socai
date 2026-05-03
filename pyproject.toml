@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "socai"
+version = "0.1.0"
+description = "Socai browser-use agent core."
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "cdp-use==1.4.5",
+    "openai>=1.98.0",
+    "pillow>=10.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["core*"]
+
+[tool.setuptools.package-data]
+"core.sites.xhs" = ["extractors.js"]

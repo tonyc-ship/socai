@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
-from urllib.parse import quote
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 from core.browser.cdp.page import PageSession
 
@@ -12,100 +15,48 @@ from .entities import XhsNote, XhsNoteCard
 
 
 XHS_HOME_URL = "https://www.xiaohongshu.com/explore"
+EXTRACTOR_JS = Path(__file__).with_name("extractors.js")
+EXTRACTOR_FUNCTIONS = {
+    "note",
+    "searchCards",
+    "searchInput",
+    "searchState",
+}
 
 
-SEARCH_CARDS_JS = r"""
-return (() => {
-  const text = (el) => (el ? (el.innerText || el.textContent || '').trim() : '');
-  const fromState = [];
-  try {
-    const feeds = window.__INITIAL_STATE__?.search?.feeds?._value || [];
-    for (let i = 0; i < feeds.length; i++) {
-      const item = feeds[i] || {};
-      const card = item.noteCard || item.note_card || null;
-      if (!card) continue;
-      const id = item.id || card.id || card.noteId || '';
-      const token = item.xsecToken || item.xsec_token || '';
-      fromState.push({
-        note_id: id,
-        title: card.displayTitle || card.title || '',
-        author: card.user?.nickname || card.user?.nickName || '',
-        likes: String(card.interactInfo?.likedCount || card.interactInfo?.likes || ''),
-        cover_url: card.cover?.urlDefault || card.cover?.urlPre || '',
-        type: card.type || '',
-        position: i,
-        xsec_token: token,
-        link: id && token
-          ? `https://www.xiaohongshu.com/explore/${id}?xsec_token=${encodeURIComponent(token)}&xsec_source=pc_search`
-          : (id ? `https://www.xiaohongshu.com/explore/${id}` : '')
-      });
-    }
-  } catch (e) {}
-  if (fromState.length) return fromState;
-
-  const cards = Array.from(document.querySelectorAll('section.note-item, [data-note-id], .feeds-page .note-item'));
-  return cards.map((card, i) => {
-    const linkEl = card.querySelector('a[href*="/explore/"], a[href*="/search_result/"]') || card.closest('a') || card.querySelector('a');
-    const link = linkEl ? linkEl.href : '';
-    const idMatch = link.match(/\/(?:explore|search_result|discovery)\/([^/?#]+)/);
-    const noteId = card.dataset?.noteId || (idMatch ? idMatch[1] : '');
-    return {
-      note_id: noteId,
-      title: text(card.querySelector('.title, .note-title, a.title span')),
-      author: text(card.querySelector('.author-wrapper .name, .author .name, .nick-name')),
-      likes: text(card.querySelector('.like-wrapper .count, .engagement .like .count, .count')),
-      cover_url: card.querySelector('.cover img, .note-cover img, img')?.src || '',
-      type: card.querySelector('video, .play-icon, .video-icon, svg[class*="video"], .duration') ? 'video' : 'image',
-      position: i,
-      xsec_token: '',
-      link
-    };
-  }).filter((card) => card.note_id || card.title || card.link);
-})();
-"""
+@lru_cache(maxsize=1)
+def load_extractors() -> str:
+    return EXTRACTOR_JS.read_text(encoding="utf-8")
 
 
-NOTE_JS = r"""
-return (() => {
-  const norm = (s) => String(s || '').replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').trim();
-  const text = (el) => norm(el ? (el.innerText || el.textContent || '') : '');
-  const first = (selectors) => {
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      const value = text(el);
-      if (value) return value;
-    }
-    return '';
-  };
-  const url = location.href;
-  const idMatch = url.match(/\/(?:explore|search_result|discovery)\/([^/?#]+)/);
-  const raw = norm(document.body ? document.body.innerText || '' : '');
-  const title = first(['#detail-title', '.note-content .title', '.note-scroller .title', '.note-detail .title', 'h1']);
-  const author = first(['.author-container .username', '.author-wrapper .username', '.info .username', '.user-name']);
-  const content = first([
-    '#detail-desc .note-text',
-    '#detail-desc',
-    '.note-content .note-text',
-    '.note-scroller .note-text',
-    '.note-content .desc',
-    '.note-scroller .desc'
-  ]);
-  const hashtags = Array.from(document.querySelectorAll('.hash-tag a, a[href*="/page/topics/"], #detail-desc a.tag'))
-    .map((el) => text(el)).filter(Boolean);
-  return {
-    note_id: idMatch ? idMatch[1] : '',
-    url,
-    title,
-    author,
-    content: content || raw.slice(0, 2000),
-    hashtags,
-    likes: first(['.like-wrapper .count', '.engage-bar .like .count', '[data-type="like"] .count']),
-    favorites: first(['.collect-wrapper .count', '.engage-bar .collect .count', '[data-type="collect"] .count']),
-    comments_count: first(['.chat-wrapper .count', '.engage-bar .chat .count', '[data-type="chat"] .count']),
-    raw_text_excerpt: raw.slice(0, 2000)
-  };
-})();
-"""
+def extractor_call(name: str, arg: Any = None) -> str:
+    if name not in EXTRACTOR_FUNCTIONS:
+        raise ValueError(f"Unknown XHS extractor: {name}")
+    args = "" if arg is None else json.dumps(arg, ensure_ascii=False)
+    return f"{load_extractors()}\n// SOCAI_XHS_CALL: {name}\nreturn SocaiXhsExtractors.{name}({args});"
+
+
+def _normalize_keyword(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _search_transition_ok(state: dict, query: str) -> bool:
+    if str(state.get("page_state") or "") != "search_results":
+        return False
+
+    keyword = _normalize_keyword(query)
+    visible_keyword = _normalize_keyword(str(state.get("input_keyword") or ""))
+    url_keyword = _normalize_keyword(str(state.get("url_keyword") or ""))
+    if keyword and visible_keyword and visible_keyword != keyword:
+        return False
+    if keyword and not visible_keyword and url_keyword and url_keyword != keyword:
+        return False
+
+    if int(state.get("card_count") or 0) > 0:
+        return True
+    if state.get("loading"):
+        return False
+    return bool(state.get("has_no_results"))
 
 
 class XhsRuntime:
@@ -127,28 +78,106 @@ class XhsRuntime:
             return
         raise RuntimeError(f"Current page is not Xiaohongshu: {url or 'unknown'}")
 
+    async def run_extractor(self, name: str, *, expected_type: type | tuple[type, ...], arg: Any = None) -> Any:
+        value = await self.page.evaluate(extractor_call(name, arg))
+        if not isinstance(value, expected_type):
+            expected = (
+                " or ".join(item.__name__ for item in expected_type)
+                if isinstance(expected_type, tuple)
+                else expected_type.__name__
+            )
+            raise RuntimeError(f"XHS extractor {name} returned {type(value).__name__}, expected {expected}")
+        return value
+
     async def search_notes(self, query: str, *, wait_seconds: float = 2.0) -> dict:
         keyword = str(query or "").strip()
         if not keyword:
             raise ValueError("query is required")
-        url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_explore_feed"
-        await self.page.navigate(url)
-        if wait_seconds > 0:
-            await asyncio.sleep(min(float(wait_seconds), 6.0))
-        cards = await self.extract_search_cards()
+
+        await self.ensure_xhs(navigate_if_needed=True)
+        submit = await self.submit_search(keyword, wait_seconds=wait_seconds)
+        ok = bool(submit.get("ok"))
+        cards = await self.extract_search_cards() if ok else []
         return {
-            "ok": True,
+            "ok": ok,
             "query": keyword,
+            "submit": submit,
             "url": await self.current_url(),
             "count": len(cards),
             "cards": [card.to_dict() for card in cards],
+            "reason": "" if ok else str(submit.get("error") or "search_submit_failed"),
         }
+
+    async def submit_search(self, query: str, *, wait_seconds: float = 2.0) -> dict:
+        loc = await self.run_extractor("searchInput", expected_type=dict)
+        if not loc.get("ok"):
+            return {"ok": False, "strategy": "search_input_unavailable", "error": loc.get("error", "")}
+
+        input_pos = loc.get("input") or {}
+        await self.page.click(float(input_pos.get("x", 0)), float(input_pos.get("y", 0)))
+        await asyncio.sleep(0.2)
+
+        await self.page.type_text(query)
+        await asyncio.sleep(0.2)
+        input_state = await self.run_extractor("searchState", expected_type=dict)
+        if _normalize_keyword(str(input_state.get("input_keyword") or "")) != _normalize_keyword(query):
+            return {
+                "ok": False,
+                "strategy": "type_search_input_failed",
+                "state": input_state,
+                "error": "Search input did not accept the requested keyword",
+            }
+
+        await asyncio.sleep(0.1)
+        await self.page.press_key("Enter")
+        state = await self.wait_for_search_transition(query, timeout_s=max(0.2, min(float(wait_seconds), 6.0)))
+        if _search_transition_ok(state, query):
+            return {
+                "ok": True,
+                "strategy": "click_input_set_value_enter",
+                "state": state,
+                "url": await self.current_url(),
+            }
+
+        submit_pos = loc.get("submit") or {}
+        if submit_pos.get("x") and submit_pos.get("y"):
+            await self.page.click(float(submit_pos["x"]), float(submit_pos["y"]))
+            state = await self.wait_for_search_transition(query, timeout_s=max(0.2, min(float(wait_seconds), 6.0)))
+            if _search_transition_ok(state, query):
+                return {
+                    "ok": True,
+                    "strategy": "click_search_button",
+                    "state": state,
+                    "url": await self.current_url(),
+                }
+
+        return {
+            "ok": False,
+            "strategy": "manual_submit_failed",
+            "state": state,
+            "url": await self.current_url(),
+            "error": "Search did not transition to a valid Xiaohongshu result page",
+        }
+
+    async def wait_for_search_transition(
+        self,
+        query: str,
+        *,
+        timeout_s: float = 2.0,
+        poll_s: float = 0.15,
+    ) -> dict:
+        deadline = asyncio.get_running_loop().time() + max(0.2, float(timeout_s))
+        latest: dict = {}
+        while asyncio.get_running_loop().time() < deadline:
+            latest = await self.run_extractor("searchState", expected_type=dict)
+            if _search_transition_ok(latest, query):
+                return latest
+            await asyncio.sleep(max(0.05, float(poll_s)))
+        return latest or await self.run_extractor("searchState", expected_type=dict)
 
     async def extract_search_cards(self) -> list[XhsNoteCard]:
         await self.ensure_xhs(navigate_if_needed=False)
-        raw = await self.page.evaluate(SEARCH_CARDS_JS)
-        if not isinstance(raw, list):
-            return []
+        raw = await self.run_extractor("searchCards", expected_type=list)
         cards: list[XhsNoteCard] = []
         for index, item in enumerate(raw):
             if not isinstance(item, dict):
@@ -184,9 +213,7 @@ class XhsRuntime:
 
     async def extract_note(self) -> XhsNote:
         await self.ensure_xhs(navigate_if_needed=False)
-        raw = await self.page.evaluate(NOTE_JS)
-        if not isinstance(raw, dict):
-            raw = {}
+        raw = await self.run_extractor("note", expected_type=dict)
         hashtags = raw.get("hashtags") if isinstance(raw.get("hashtags"), list) else []
         return XhsNote(
             note_id=str(raw.get("note_id") or ""),
