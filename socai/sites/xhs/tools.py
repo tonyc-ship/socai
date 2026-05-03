@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from core.agent.tool import Tool, ToolContext
+from socai.agent.tool import Tool, ToolContext
 
 from .runtime import XhsRuntime
 

@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from core.browser.cdp.page import PageSession
+from socai.browser.cdp.page import PageSession
 
 from .entities import XhsNote, XhsNoteCard
 
