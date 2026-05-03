@@ -8,13 +8,13 @@ import sys
 import termios
 import tty
 
-from core.agent.backends import PROVIDERS, SOCAI_AUTH_FILE, has_any_api_key, save_api_key
-from core.agent.loop import run_agent
-from core.browser.cdp import BrowserTaskSessionManager
-from core.browser.tools.browser import build_browser_tools
-from core.sites.xhs import XhsRuntime
-from core.sites.xhs.runtime import XHS_HOME_URL
-from core.sites.xhs.tools import build_xhs_tools
+from socai.agent.backends import PROVIDERS, SOCAI_AUTH_FILE, has_any_api_key, save_api_key
+from socai.agent.loop import run_agent
+from socai.browser.cdp import BrowserTaskSessionManager
+from socai.browser.tools.browser import build_browser_tools
+from socai.sites.xhs import XhsRuntime
+from socai.sites.xhs.runtime import XHS_HOME_URL
+from socai.sites.xhs.tools import build_xhs_tools
 
 
 EXIT_COMMANDS = {"exit", "quit", "q", ":q", "\x1b"}

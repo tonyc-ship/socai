@@ -2,11 +2,11 @@
 
 ## Structure
 
-- `core/agent/`: generic agent loop, LLM backends, run state, and tool interface.
-- `core/browser/cdp/`: CDP endpoint discovery, long-lived browser session, page primitives, and task tabs.
-- `core/browser/tools/`: generic browser tools built on CDP page sessions.
-- `core/sites/xhs/`: Xiaohongshu entities, JS extractors, runtime, and site tools.
-- `core/cli.py`: minimal interactive CLI that runs the agent loop with browser/site tools.
+- `socai/agent/`: generic agent loop, LLM backends, run state, and tool interface.
+- `socai/browser/cdp/`: CDP endpoint discovery, long-lived browser session, page primitives, and task tabs.
+- `socai/browser/tools/`: generic browser tools built on CDP page sessions.
+- `socai/sites/xhs/`: Xiaohongshu entities, JS extractors, runtime, and site tools.
+- `socai/cli.py`: minimal interactive CLI that runs the agent loop with browser/site tools.
 
 ## Rules
 

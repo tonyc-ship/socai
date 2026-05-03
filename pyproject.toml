@@ -15,10 +15,10 @@ dependencies = [
 ]
 
 [project.scripts]
-socai = "core.cli:main"
+socai = "socai.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["core*"]
+include = ["socai*"]
 
 [tool.setuptools.package-data]
-"core.sites.xhs" = ["extractors.js"]
+"socai.sites.xhs" = ["extractors.js"]

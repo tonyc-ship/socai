@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.agent.tool import Tool, ToolContext
-from core.browser.cdp.browser import BrowserSession
+from socai.agent.tool import Tool, ToolContext
+from socai.browser.cdp.browser import BrowserSession
 
 
 def _json(payload: dict) -> str:
