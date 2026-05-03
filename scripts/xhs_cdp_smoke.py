@@ -3,16 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from typing import Any
 
-from core.browser.cdp import (
-    BrowserSession,
-    discover_existing_chrome_endpoint,
-    open_remote_debugging_page,
-    wait_for_existing_chrome_endpoint,
-)
+from core.browser.cdp import BrowserTaskSessionManager
 from core.sites.xhs import XhsRuntime
 from core.sites.xhs.runtime import XHS_HOME_URL
 
@@ -49,25 +43,15 @@ def _compact_note(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run(args: argparse.Namespace) -> int:
-    endpoint = None
-    if not args.cdp_ws and not args.cdp_url and not os.environ.get("SOCAI_CDP_WS") and not os.environ.get("SOCAI_CDP_URL"):
-        endpoint = discover_existing_chrome_endpoint()
-        if endpoint is None:
-            print("[socai] No CDP endpoint found for the logged-in Chrome. Opening remote-debugging setup page.", file=sys.stderr)
-            print("[socai] In your existing Chrome profile, approve remote debugging if prompted.", file=sys.stderr)
-            open_remote_debugging_page()
-            endpoint = wait_for_existing_chrome_endpoint(timeout=args.inspect_timeout)
-        if endpoint is None:
-            raise RuntimeError(
-                "Could not find CDP for your existing logged-in Chrome profile. "
-                "Open chrome://inspect/#remote-debugging in that Chrome and approve remote debugging, then rerun. "
-            )
-        print(f"[socai] Reusing existing Chrome CDP endpoint from {endpoint.source}", file=sys.stderr)
-
-    browser = await BrowserSession.connect(endpoint=endpoint, browser_ws_url=args.cdp_ws, http_url=args.cdp_url)
+    manager = BrowserTaskSessionManager(
+        browser_ws_url=args.cdp_ws,
+        http_url=args.cdp_url,
+        inspect_timeout=args.inspect_timeout,
+        on_event=lambda message: print(f"[socai] {message}", file=sys.stderr),
+    )
     try:
-        page = await browser.new_page(XHS_HOME_URL)
-        runtime = XhsRuntime(page)
+        task = await manager.create_task(start_url=XHS_HOME_URL, label=f"xhs:{args.query}", site="xiaohongshu")
+        runtime = XhsRuntime(task.page)
         search = await runtime.search_notes(args.query, wait_seconds=args.wait_seconds)
         result: dict[str, Any] = {"search": _compact_search(search, limit=args.limit)}
 
@@ -78,7 +62,9 @@ async def run(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("note", {}).get("ok") else 1
     finally:
-        await browser.stop()
+        # The one-shot smoke CLI exits after one task. The app backend should
+        # keep its BrowserTaskSessionManager alive between user tasks.
+        await manager.shutdown()
 
 
 def build_parser() -> argparse.ArgumentParser:

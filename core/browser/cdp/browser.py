@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from .discovery import Endpoint, resolve_cdp_endpoint
+from .endpoint import Endpoint, resolve_cdp_endpoint
 from .page import PageSession
 
 
