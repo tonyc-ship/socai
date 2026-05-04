@@ -9,12 +9,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import time
-from datetime import datetime
 from pathlib import Path
 
 from .backends import Backend, create_backend
+from .run_logging import RunDebugLogger, current_traceback, make_run_dir
 from .run_state import RunState
 from .tool import Tool, ToolContext
 
@@ -30,17 +29,6 @@ Rules:
 - If a tool fails, explain the failure and choose a smaller recovery step.
 - When enough evidence has been collected, stop calling tools and answer.
 """
-
-
-def _default_runs_root() -> Path:
-    return Path(os.environ.get("SOCAI_RUNS_DIR", ".socai/runs"))
-
-
-def _safe_slug(text: str, max_chars: int = 48) -> str:
-    raw = str(text or "agent").strip().replace("/", " ")
-    slug = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in raw)
-    slug = "_".join(part for part in slug.split("_") if part)
-    return (slug or "agent")[:max_chars]
 
 
 def _build_system_prompt(tools: list[Tool], extra_instructions: str = "") -> str:
@@ -142,12 +130,6 @@ async def _execute_tool(tool: Tool, params: dict, ctx: ToolContext) -> list[dict
     return [{"type": "text", "text": str(result)}]
 
 
-def _write_jsonl(path: Path, entry: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
 async def run_agent(
     task: str,
     *,
@@ -174,8 +156,7 @@ async def run_agent(
     """
 
     if run_dir is None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = _default_runs_root() / f"agent_{ts}_{_safe_slug(task)}"
+        run_dir = make_run_dir(task)
     run_path = Path(run_dir)
     run_path.mkdir(parents=True, exist_ok=True)
 
@@ -185,6 +166,7 @@ async def run_agent(
     selected_model = str(model or getattr(backend, "model", "") or "")
     run_state = RunState(run_dir=run_path, task=task, model=selected_model)
     ctx = ToolContext(run_dir=run_path, run_state=run_state)
+    debug_log = RunDebugLogger(run_path)
 
     def log(event: str, detail: str = "") -> None:
         if log_callback:
@@ -193,7 +175,7 @@ async def run_agent(
     messages: list[dict] = [{"role": "user", "content": task}]
     system_prompt = _build_system_prompt(available_tools, extra_instructions)
     api_tools = [tool.to_api_schema() for tool in available_tools]
-    reasoning_log_path = run_path / "reasoning_log.jsonl"
+    reasoning_log_path = debug_log.reasoning_log_path
     task_start = time.time()
     final_text = ""
     context_memory: list[str] = []
@@ -201,16 +183,7 @@ async def run_agent(
     turn = 0
     completed = False
 
-    _write_jsonl(
-        reasoning_log_path,
-        {
-            "type": "task_start",
-            "timestamp": datetime.now().isoformat(),
-            "task": task,
-            "model": selected_model,
-            "tools": [tool.name for tool in available_tools],
-        },
-    )
+    debug_log.event("task_start", task=task, model=selected_model, tools=[tool.name for tool in available_tools])
     log("start", task)
 
     while turn < max_turns:
@@ -228,10 +201,7 @@ async def run_agent(
             )
         except Exception as exc:  # noqa: BLE001 - backend boundary
             final_text = f"API error: {exc}"
-            _write_jsonl(
-                reasoning_log_path,
-                {"type": "api_error", "timestamp": datetime.now().isoformat(), "turn": turn, "error": str(exc)},
-            )
+            debug_log.api_error(turn=turn, error=str(exc))
             break
 
         messages.append({"role": "assistant", "content": backend.format_assistant_content(response)})
@@ -244,17 +214,13 @@ async def run_agent(
             text="\n".join(visible_texts or response.text_blocks),
             tool_calls=[{"name": call.name, "input": call.input} for call in response.tool_calls],
         )
-        _write_jsonl(
-            reasoning_log_path,
-            {
-                "type": "llm_response",
-                "timestamp": datetime.now().isoformat(),
-                "turn": turn,
-                "stop_reason": response.stop_reason,
-                "text": "\n".join(visible_texts),
-                "tool_calls": [{"name": call.name, "input": call.input} for call in response.tool_calls],
-                "usage": {"input_tokens": response.input_tokens, "output_tokens": response.output_tokens},
-            },
+        debug_log.event(
+            "llm_response",
+            turn=turn,
+            stop_reason=response.stop_reason,
+            text="\n".join(visible_texts),
+            tool_calls=[{"name": call.name, "input": call.input} for call in response.tool_calls],
+            usage={"input_tokens": response.input_tokens, "output_tokens": response.output_tokens},
         )
 
         if not response.tool_calls:
@@ -262,7 +228,7 @@ async def run_agent(
             break
 
         all_results: list[list[dict]] = []
-        for tool_call in response.tool_calls:
+        for call_index, tool_call in enumerate(response.tool_calls, start=1):
             tool_name = tool_call.name
             tool_input = tool_call.input
             ctx.turn = turn
@@ -272,18 +238,43 @@ async def run_agent(
             history.append(turn)
 
             run_state.note_tool_call(turn=turn, tool_name=tool_name, tool_input=tool_input)
+            debug_log.event(
+                "tool_call_start",
+                turn=turn,
+                sequence=call_index,
+                tool=tool_name,
+                input=tool_input,
+                repeat_count=len(history),
+            )
             tool = tool_map.get(tool_name)
             tool_start = time.time()
+            tool_error = ""
+            tool_traceback = ""
             if tool is None:
-                result_content = [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}]
+                tool_error = f"Unknown tool '{tool_name}'"
+                result_content = [{"type": "text", "text": f"Error: {tool_error}"}]
             else:
                 try:
                     result_content = await _execute_tool(tool, tool_input, ctx)
                 except Exception as exc:  # noqa: BLE001 - tool boundary
+                    tool_error = str(exc)
+                    tool_traceback = current_traceback()
                     result_content = [{"type": "text", "text": f"Error executing {tool_name}: {exc}"}]
 
             duration_s = round(time.time() - tool_start, 2)
             summary = _text_summary(result_content, max_len=900)
+            debug_log.tool_result(
+                turn=turn,
+                sequence=call_index,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                content=result_content,
+                duration_s=duration_s,
+                result_summary=summary,
+                repeat_count=len(history),
+                error=tool_error,
+                traceback_text=tool_traceback,
+            )
             run_state.note_tool_result(
                 turn=turn,
                 tool_name=tool_name,
@@ -295,32 +286,12 @@ async def run_agent(
                 f"- turn {turn} {tool_name}({json.dumps(tool_input, ensure_ascii=False)[:160]}): {summary}"
             )
             context_memory = context_memory[-80:]
-            _write_jsonl(
-                reasoning_log_path,
-                {
-                    "type": "tool_result",
-                    "timestamp": datetime.now().isoformat(),
-                    "turn": turn,
-                    "tool": tool_name,
-                    "duration_s": duration_s,
-                    "result_summary": summary,
-                    "repeat_count": len(history),
-                },
-            )
             all_results.append(result_content)
             ctx.active_tool_name = ""
 
         messages.append(backend.format_tool_results(response.tool_calls, all_results))
         await asyncio.sleep(0)
-        _write_jsonl(
-            reasoning_log_path,
-            {
-                "type": "turn_end",
-                "timestamp": datetime.now().isoformat(),
-                "turn": turn,
-                "duration_s": round(time.time() - turn_start, 2),
-            },
-        )
+        debug_log.event("turn_end", turn=turn, duration_s=round(time.time() - turn_start, 2))
 
     if turn >= max_turns and not completed:
         log("turn", f"final-summary (max_turns={max_turns} reached)")
@@ -353,30 +324,24 @@ async def run_agent(
                 text="\n".join(visible_texts or response.text_blocks),
                 tool_calls=[],
             )
-            _write_jsonl(
-                reasoning_log_path,
-                {
-                    "type": "llm_response",
-                    "timestamp": datetime.now().isoformat(),
-                    "turn": turn + 1,
-                    "stop_reason": response.stop_reason,
-                    "text": "\n".join(visible_texts),
-                    "tool_calls": [],
-                    "usage": {"input_tokens": response.input_tokens, "output_tokens": response.output_tokens},
-                    "forced_summary": True,
-                },
+            debug_log.event(
+                "llm_response",
+                turn=turn + 1,
+                stop_reason=response.stop_reason,
+                text="\n".join(visible_texts),
+                tool_calls=[],
+                usage={"input_tokens": response.input_tokens, "output_tokens": response.output_tokens},
+                forced_summary=True,
             )
         except Exception as exc:  # noqa: BLE001 - backend boundary
             suffix = f"Reached max_turns ({max_turns}) and forced-summary call failed: {exc}"
             final_text = f"{final_text}\n\n{suffix}".strip() if final_text else suffix
-            _write_jsonl(
-                reasoning_log_path,
-                {"type": "api_error", "timestamp": datetime.now().isoformat(), "turn": turn + 1, "error": str(exc), "forced_summary": True},
-            )
+            debug_log.api_error(turn=turn + 1, error=str(exc), forced_summary=True)
 
     total_duration = round(time.time() - task_start, 2)
     report_path = run_path / "report.md"
     report_path.write_text(final_text, encoding="utf-8")
+    conversation_path = debug_log.write_conversation(system_prompt=system_prompt, messages=messages)
     summary = {
         "task": task,
         "model": selected_model,
@@ -385,12 +350,13 @@ async def run_agent(
         "run_dir": str(run_path),
         "run_state_dir": str(run_state.state_dir),
         "reasoning_log_file": "reasoning_log.jsonl",
+        "conversation_file": "conversation.json",
+        "report_file": "report.md",
+        "tool_results_dir": "tool_results",
     }
-    (run_path / "agent_log.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    _write_jsonl(
-        reasoning_log_path,
-        {"type": "task_end", "timestamp": datetime.now().isoformat(), "turn": turn, "total_duration_s": total_duration},
-    )
+    debug_log.write_agent_summary(summary)
+    debug_log.event("task_end", turn=turn, total_duration_s=total_duration)
+    log("done", str(run_path))
 
     return {
         "result": final_text,
@@ -398,5 +364,6 @@ async def run_agent(
         "run_dir": str(run_path),
         "run_state_dir": str(run_state.state_dir),
         "reasoning_log": str(reasoning_log_path),
+        "conversation": str(conversation_path),
         "total_duration_s": total_duration,
     }

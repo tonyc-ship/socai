@@ -11,7 +11,7 @@ from .endpoint import (
     resolve_explicit_endpoint,
     wait_for_existing_chrome_endpoint,
 )
-from .page import PageSession, RuntimeEvaluation
+from .page import PageGoneError, PageSession, RuntimeEvaluation
 from .task_session import BrowserTaskSession, BrowserTaskSessionManager
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "BrowserTaskSession",
     "BrowserTaskSessionManager",
     "Endpoint",
+    "PageGoneError",
     "PageSession",
     "RuntimeEvaluation",
     "TargetInfo",

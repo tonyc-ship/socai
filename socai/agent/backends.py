@@ -46,14 +46,14 @@ PROVIDERS: dict[str, ProviderConfig] = {
     PROVIDER_OPENAI: ProviderConfig(
         name=PROVIDER_OPENAI,
         display_name="OpenAI",
-        default_model="gpt-4.1",
+        default_model="gpt-5.5",
         api_key_env=("OPENAI_API_KEY",),
         model_prefixes=("gpt-", "o1", "o3", "o4", "chatgpt-"),
     ),
     PROVIDER_KIMI: ProviderConfig(
         name=PROVIDER_KIMI,
         display_name="Kimi",
-        default_model="kimi-k2.5",
+        default_model="kimi-k2.6",
         api_key_env=("KIMI_API_KEY", "MOONSHOT_API_KEY"),
         base_url="https://api.moonshot.cn/v1",
         model_prefixes=("kimi-", "moonshot-"),
@@ -61,7 +61,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     PROVIDER_QWEN: ProviderConfig(
         name=PROVIDER_QWEN,
         display_name="Qwen",
-        default_model="qwen-plus",
+        default_model="qwen3.6-plus",
         api_key_env=("QWEN_API_KEY", "DASHSCOPE_API_KEY"),
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         model_prefixes=("qwen", "qwq-", "qvq-"),

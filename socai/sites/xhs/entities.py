@@ -66,23 +66,28 @@ class XhsNoteCard:
 class XhsNote:
     note_id: str = ""
     url: str = ""
+    type: str = ""
     title: str = ""
     author: str = ""
     content: str = ""
+    content_source: str = ""
     hashtags: list[str] = field(default_factory=list)
     likes: str = ""
     favorites: str = ""
     comments_count: str = ""
-    raw_text_excerpt: str = ""
+    stale_warning: str = ""
+    wait_meta: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        payload: dict = {
             "note_id": self.note_id,
             "url": normalize_url(self.url),
+            "type": self.type,
             "title": self.title,
             "author": self.author,
             "content": self.content,
             "content_summary": self.content[:500],
+            "content_source": self.content_source,
             "hashtags": self.hashtags[:12],
             "likes": self.likes,
             "likes_value": parse_count_text(self.likes),
@@ -90,5 +95,9 @@ class XhsNote:
             "favorites_value": parse_count_text(self.favorites),
             "comments_count": self.comments_count,
             "comments_count_value": parse_count_text(self.comments_count),
-            "raw_text_excerpt": self.raw_text_excerpt,
         }
+        if self.wait_meta:
+            payload["wait"] = self.wait_meta
+        if self.stale_warning:
+            payload["stale_warning"] = self.stale_warning
+        return payload

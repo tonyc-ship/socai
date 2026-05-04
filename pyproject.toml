@@ -21,4 +21,5 @@ socai = "socai.cli:main"
 include = ["socai*"]
 
 [tool.setuptools.package-data]
-"socai.sites.xhs" = ["extractors.js"]
+"socai.browser.tools" = ["page_scripts.js"]
+"socai.sites.xhs" = ["page_scripts.js"]
