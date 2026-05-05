@@ -19,7 +19,7 @@ from socai.sites.xhs.tools import build_xhs_tools
 
 
 DEFAULT_START_URL = "about:blank"
-DEFAULT_MAX_TURNS = 12
+DEFAULT_MAX_TURNS = 30
 
 XHS_KEYWORD_HINTS = ("小红书", "xiaohongshu", "xhs")
 

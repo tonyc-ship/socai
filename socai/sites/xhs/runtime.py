@@ -21,6 +21,7 @@ XHS_PAGE_SCRIPT_FUNCTIONS = {
     "noteWithWait",
     "searchCards",
     "searchInput",
+    "setSearchInput",
     "searchState",
     "searchTabs",
     "clickSearchTab",
@@ -132,21 +133,27 @@ class XhsRuntime:
             return {"ok": False, "strategy": "search_input_unavailable", "error": loc.get("error", "")}
 
         input_pos = loc.get("input") or {}
+        # Click to focus first so Enter targets the input. Then set the value
+        # via a React-aware JS setter (descriptor.set + InputEvent) instead of
+        # CDP Input.insertText — the latter mutates the DOM value but does not
+        # always notify React's controlled-input layer, so Enter can submit an
+        # empty keyword to the form handler. Using JS also overwrites any
+        # leftover text instead of appending to it.
         await self.page.click(float(input_pos.get("x", 0)), float(input_pos.get("y", 0)))
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.15)
 
-        await self.page.type_text(query)
-        await asyncio.sleep(0.2)
-        input_state = await self.run_page_script("searchState", expected_type=dict)
-        if _normalize_keyword(str(input_state.get("input_keyword") or "")) != _normalize_keyword(query):
+        set_result = await self.run_page_script(
+            "setSearchInput", expected_type=dict, arg={"query": query}
+        )
+        if not set_result.get("ok"):
             return {
                 "ok": False,
-                "strategy": "type_search_input_failed",
-                "state": input_state,
-                "error": "Search input did not accept the requested keyword",
+                "strategy": "set_search_input_failed",
+                "state": set_result,
+                "error": str(set_result.get("error") or "Search input did not accept the requested keyword"),
             }
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.15)
         await self.page.press_key("Enter")
         state = await self.wait_for_search_transition(query, timeout_s=max(0.2, min(float(wait_seconds), 6.0)))
         if _search_transition_ok(state, query):

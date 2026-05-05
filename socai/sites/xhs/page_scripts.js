@@ -69,6 +69,42 @@ const SocaiXhsPageScripts = (() => {
       .find((el) => el instanceof HTMLElement && el.getBoundingClientRect().width >= 120);
   }
 
+  function setSearchInput(arg) {
+    const targetValue = String((arg && arg.query) || '');
+    const input = findSearchInput();
+    if (!input) return { ok: false, error: 'search_input_not_found' };
+
+    input.focus();
+    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+      const proto = input instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor && descriptor.set) descriptor.set.call(input, targetValue);
+      else input.value = targetValue;
+    } else if (input.isContentEditable) {
+      input.textContent = targetValue;
+    } else {
+      return { ok: false, error: 'unsupported_search_input' };
+    }
+
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertReplacementText',
+      data: targetValue,
+    }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const actualValue = input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement
+      ? input.value
+      : input.textContent;
+    const trimmed = String(actualValue || '').trim();
+    return {
+      ok: trimmed === targetValue.trim(),
+      value: trimmed,
+    };
+  }
+
   function searchInput() {
     const input = findSearchInput();
     if (!input) return { ok: false, error: 'search_input_not_found' };
@@ -553,6 +589,7 @@ const SocaiXhsPageScripts = (() => {
     noteWithWait,
     searchCards,
     searchInput,
+    setSearchInput,
     searchState,
     searchTabs,
     clickSearchTab,
