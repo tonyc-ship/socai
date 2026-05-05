@@ -1,0 +1,103 @@
+# Xiaohongshu Site Knowledge
+
+Xiaohongshu / 小红书 / XHS is a Chinese lifestyle social platform. Posts are
+called notes (笔记) and are usually image carousels or short videos with title,
+body text, hashtags, engagement counts, comments, and author/profile context.
+
+Use `xhs_*` tools once this toolkit is enabled. They drive the site through CDP
+card clicks and modal interactions instead of direct `/explore/<note_id>`
+navigation, which often triggers blocked, blank, app-only, or QR-code flows.
+
+## Anti-Bot Rules
+
+- Prefer `xhs_search_notes` from the homepage or any non-XHS tab; it navigates
+  to XHS and submits the search like a user.
+- Do not navigate directly to `/explore/<note_id>` unless no card-click path is
+  available. Open notes from search/profile cards with `xhs_read_note`.
+- Close note modals with `xhs_close_note`, Escape, or the close button. Do not
+  reload the page just to close a note.
+- If a page shows QR/app-only prompts, captcha, security verification, 404/blank
+  direct-detail routes, or "page unavailable" copy, stop retrying that URL and
+  return to search/profile card clicks.
+- Add screenshots when visual state or extraction confidence matters.
+
+## Page States
+
+- `homepage`: left navigation and top search input. Use `xhs_search_notes`.
+- `search_results`: query input, tabs `全部` / `图文` / `视频` / `用户`, waterfall
+  note cards with cover, title, author, likes, and type.
+- `note_detail`: modal or full detail. Left side is carousel/video, right side
+  is author, title/body, hashtags, comments, and engagement bar.
+- `profile_page`: author avatar/name/XHS ID/bio/stats and note-card grid. Use
+  `xhs_extract_profile`; scroll loads more cards.
+
+## Entity Fields
+
+Note fields: `note_id`, `url`, `type`, `title`, `author`, `author_id`,
+`author_url`, `content`, `hashtags`, `date`, `location`, `ip_location`,
+`likes`, `favorites`, `comments_count`, `shares`, `image_count`, `images`,
+`video`, `top_comments`.
+
+Comment fields: `username`, `text`, `likes`, `like_count`, `time`,
+`is_author_reply`, `is_pinned`, `reply_count`, `sub_comments`.
+
+Author fields: `display_name`, `xhs_id`, `profile_url`, `bio`, `followers`,
+`following`, `likes_and_collections`, `note_cards`.
+
+Image fields: `url`, `index`, `is_cover`, optional `ocr_text`,
+`vision_description`, `local_path`.
+
+Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
+`transcript_summary`, `frame_paths`, `frame_descriptions`, `visual_summary`.
+
+## Workflows
+
+- Topic research: call `xhs_topic_scan(query=..., depth="standard")`. It
+  searches, optionally switches tab, samples visible cards in page order,
+  writes artifacts, closes note modals, and marks already analyzed posts.
+- Quick breadth scan: use `xhs_search_notes` or `xhs_extract_search_cards` to
+  inspect cards without opening notes.
+- Manual note read: use `xhs_read_note(index=N)` or `xhs_read_note(note_id=...)`.
+  Use `level="card"` for metadata only, `level="lite"` for body/comments, and
+  `level="deep"` plus `include_media=true` only when images, OCR, video, or
+  visual evidence materially matters.
+- Creator analysis: navigate/open a profile, then use `xhs_extract_profile`.
+  Keep creator inventory/style analysis separate from keyword/topic sampling
+  unless the user explicitly asks for both.
+- Comment sentiment: use lite/deep note reads first; call `xhs_scroll_in_note`
+  then `xhs_extract_comments` when more visible comments are needed.
+- Media-heavy tasks: use deep reads sparingly. OCR, vision, transcription, and
+  frame extraction depend on optional local/cloud capabilities and can be slow.
+
+## Reading Levels
+
+- `card`: note metadata and engagement only. Low latency; no comments/media.
+- `lite`: title, author, body, hashtags, publish metadata, engagement, and a
+  small hot-comment sample. Best default for most search/research tasks.
+- `deep`: lite fields plus optional image OCR/vision, video transcript, sampled
+  frame descriptions, and a larger comment sample. Use only when the user asks
+  for media evidence, screenshots/OCR, video narration, or high-confidence
+  evidence.
+
+## Evidence Rules
+
+- Preserve real XHS post links from cards when available, including
+  `xsec_token` query parameters. Fall back to bare `/explore/<note_id>` only
+  when no real tokenized URL exists.
+- Treat `already_analyzed` on cards as a signal to avoid repeated reads unless
+  the user asks to refresh, compare history, or deepen the previous level.
+- Keep DOM text, comment evidence, image OCR/vision, and video transcript/frame
+  evidence labeled separately in final answers.
+- If a read returns a stale-note warning or note-id mismatch, close the current
+  modal and reopen the intended card before trusting the result.
+- Post-level engagement extraction must exclude comment-area DOM; otherwise
+  comment likes or comment UI text can be misread as the note's own engagement.
+- For reports, include screenshots and artifact paths only when they support the
+  conclusion or make verification easier.
+
+## Chinese UI Hints
+
+- Search tabs: `全部`, `图文`, `视频`, `用户`.
+- No-result copy often contains: `没有找到相关内容`, `换个词试试`, `暂无相关内容`.
+- Engagement labels: `赞`, `收藏`, `评论`, `分享`.
+- Count suffixes: `万` and `w` mean 10000; `k` means 1000.

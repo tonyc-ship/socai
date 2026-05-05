@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import math
 import time
 from dataclasses import dataclass
@@ -18,6 +17,44 @@ class RuntimeEvaluation:
     type: str | None = None
     subtype: str | None = None
     description: str | None = None
+
+
+class PageGoneError(RuntimeError):
+    """Raised when the underlying CDP target/session is no longer attached.
+
+    Typical causes: user closed the tab, page crashed, or the parent browser
+    context was destroyed. Callers (e.g. the task session manager) can catch
+    this and recreate the page instead of bubbling raw cdp-use errors.
+    """
+
+    def __init__(self, target_id: str, session_id: str, original: BaseException):
+        super().__init__(
+            f"CDP page is no longer attached (target_id={target_id}, "
+            f"session_id={session_id}): {original}"
+        )
+        self.target_id = target_id
+        self.session_id = session_id
+        self.original = original
+
+
+# Canonical Chrome CDP messages for "the target/session you reference is gone".
+# cdp-use raises ``RuntimeError(data["error"])`` where ``data["error"]`` is the
+# raw CDP error dict ``{"code": ..., "message": ...}``, so we read the message
+# field directly instead of fuzzy-matching ``str(exc)``.
+_PAGE_GONE_MESSAGES = (
+    "session with given id not found",
+    "no target with given id",
+)
+
+
+def _looks_like_page_gone(exc: BaseException) -> bool:
+    payload = exc.args[0] if exc.args else None
+    if isinstance(payload, dict):
+        message = str(payload.get("message", ""))
+    else:
+        message = str(payload if payload is not None else exc)
+    lowered = message.lower()
+    return any(hint in lowered for hint in _PAGE_GONE_MESSAGES)
 
 
 def _decode_unserializable(value: str) -> Any:
@@ -116,7 +153,12 @@ class PageSession:
         self.session_id = session_id
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await self.client.send_raw(method, params or {}, session_id=self.session_id)
+        try:
+            return await self.client.send_raw(method, params or {}, session_id=self.session_id)
+        except Exception as exc:
+            if _looks_like_page_gone(exc):
+                raise PageGoneError(self.target_id, self.session_id, exc) from exc
+            raise
 
     async def enable_default_domains(self) -> None:
         for domain in ("Page", "DOM", "Runtime", "Network"):
@@ -127,7 +169,7 @@ class PageSession:
                     raise
 
     async def navigate(self, url: str, *, wait_until: str = "domcontentloaded", timeout: float = 15.0) -> dict[str, Any]:
-        result = await self.send("Page.navigate", {"url": url})
+        result = await asyncio.wait_for(self.send("Page.navigate", {"url": url}), timeout=max(0.1, float(timeout)))
         if wait_until:
             await self.wait_for_load_state(wait_until, timeout=timeout)
         return result

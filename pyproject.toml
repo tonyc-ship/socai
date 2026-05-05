@@ -12,6 +12,7 @@ dependencies = [
     "cdp-use==1.4.5",
     "openai>=1.98.0",
     "pillow>=10.0.0",
+    "prompt-toolkit>=3.0.0",
 ]
 
 [project.scripts]
@@ -21,4 +22,5 @@ socai = "socai.cli:main"
 include = ["socai*"]
 
 [tool.setuptools.package-data]
-"socai.sites.xhs" = ["extractors.js"]
+"socai.browser.tools" = ["page_scripts.js"]
+"socai.sites.xhs" = ["page_scripts.js", "*.md"]

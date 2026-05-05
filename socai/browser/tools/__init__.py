@@ -1,8 +1,10 @@
 """Agent tools for generic browser control."""
 
 from .browser import (
+    BrowserClickSelectorTool,
     BrowserClickTool,
     BrowserEvalTool,
+    BrowserFillTool,
     BrowserListTabsTool,
     BrowserNavigateTool,
     BrowserNewTabTool,
@@ -12,12 +14,15 @@ from .browser import (
     BrowserScrollTool,
     BrowserSwitchTabTool,
     BrowserTypeTool,
+    BrowserWaitForSelectorTool,
     build_browser_tools,
 )
 
 __all__ = [
+    "BrowserClickSelectorTool",
     "BrowserClickTool",
     "BrowserEvalTool",
+    "BrowserFillTool",
     "BrowserListTabsTool",
     "BrowserNavigateTool",
     "BrowserNewTabTool",
@@ -27,5 +32,6 @@ __all__ = [
     "BrowserScrollTool",
     "BrowserSwitchTabTool",
     "BrowserTypeTool",
+    "BrowserWaitForSelectorTool",
     "build_browser_tools",
 ]

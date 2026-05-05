@@ -10,30 +10,44 @@ from pathlib import Path
 from typing import Any
 
 from socai.browser.cdp.page import PageSession
+from socai.media import MediaProcessor
 
-from .entities import XhsNote, XhsNoteCard
+from .entities import XhsAuthorProfile, XhsNote, XhsNoteCard
 
 
 XHS_HOME_URL = "https://www.xiaohongshu.com/explore"
-EXTRACTOR_JS = Path(__file__).with_name("extractors.js")
-EXTRACTOR_FUNCTIONS = {
+XHS_PAGE_SCRIPTS_JS = Path(__file__).with_name("page_scripts.js")
+XHS_PAGE_SCRIPT_FUNCTIONS = {
     "note",
+    "noteWithWait",
+    "pageState",
     "searchCards",
     "searchInput",
+    "setSearchInput",
     "searchState",
+    "searchTabs",
+    "clickSearchTab",
+    "clickCard",
+    "closeNote",
+    "noteOpen",
+    "comments",
+    "scrollInNote",
+    "carouselImages",
+    "profileInfo",
+    "profileCards",
 }
 
 
 @lru_cache(maxsize=1)
-def load_extractors() -> str:
-    return EXTRACTOR_JS.read_text(encoding="utf-8")
+def load_xhs_page_scripts() -> str:
+    return XHS_PAGE_SCRIPTS_JS.read_text(encoding="utf-8")
 
 
-def extractor_call(name: str, arg: Any = None) -> str:
-    if name not in EXTRACTOR_FUNCTIONS:
-        raise ValueError(f"Unknown XHS extractor: {name}")
+def xhs_page_script_call(name: str, arg: Any = None) -> str:
+    if name not in XHS_PAGE_SCRIPT_FUNCTIONS:
+        raise ValueError(f"Unknown XHS page script: {name}")
     args = "" if arg is None else json.dumps(arg, ensure_ascii=False)
-    return f"{load_extractors()}\n// SOCAI_XHS_CALL: {name}\nreturn SocaiXhsExtractors.{name}({args});"
+    return f"{load_xhs_page_scripts()}\n// SOCAI_XHS_CALL: {name}\nreturn SocaiXhsPageScripts.{name}({args});"
 
 
 def _normalize_keyword(value: str) -> str:
@@ -59,11 +73,22 @@ def _search_transition_ok(state: dict, query: str) -> bool:
     return bool(state.get("has_no_results"))
 
 
+JS_DISPATCH_ESCAPE = (
+    "document.dispatchEvent(new KeyboardEvent('keydown', "
+    "{key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}))"
+)
+
+
 class XhsRuntime:
     """Site-aware operations for Xiaohongshu."""
 
-    def __init__(self, page: PageSession):
+    def __init__(self, page: PageSession, *, media: MediaProcessor | None = None):
         self.page = page
+        self.media = media
+        # Track the last note_id we extracted so we can warn the agent if it
+        # extracts the same note twice without closing the modal in between —
+        # a common failure mode where a stale overlay masks the new card click.
+        self._last_extracted_note_id: str = ""
 
     async def current_url(self) -> str:
         info = await self.page.page_info()
@@ -78,15 +103,19 @@ class XhsRuntime:
             return
         raise RuntimeError(f"Current page is not Xiaohongshu: {url or 'unknown'}")
 
-    async def run_extractor(self, name: str, *, expected_type: type | tuple[type, ...], arg: Any = None) -> Any:
-        value = await self.page.evaluate(extractor_call(name, arg))
+    async def detect_state(self) -> dict:
+        await self.ensure_xhs(navigate_if_needed=False)
+        return await self.run_page_script("pageState", expected_type=dict)
+
+    async def run_page_script(self, name: str, *, expected_type: type | tuple[type, ...], arg: Any = None) -> Any:
+        value = await self.page.evaluate(xhs_page_script_call(name, arg))
         if not isinstance(value, expected_type):
             expected = (
                 " or ".join(item.__name__ for item in expected_type)
                 if isinstance(expected_type, tuple)
                 else expected_type.__name__
             )
-            raise RuntimeError(f"XHS extractor {name} returned {type(value).__name__}, expected {expected}")
+            raise RuntimeError(f"XHS page script {name} returned {type(value).__name__}, expected {expected}")
         return value
 
     async def search_notes(self, query: str, *, wait_seconds: float = 2.0) -> dict:
@@ -109,26 +138,32 @@ class XhsRuntime:
         }
 
     async def submit_search(self, query: str, *, wait_seconds: float = 2.0) -> dict:
-        loc = await self.run_extractor("searchInput", expected_type=dict)
+        loc = await self.run_page_script("searchInput", expected_type=dict)
         if not loc.get("ok"):
             return {"ok": False, "strategy": "search_input_unavailable", "error": loc.get("error", "")}
 
         input_pos = loc.get("input") or {}
+        # Click to focus first so Enter targets the input. Then set the value
+        # via a React-aware JS setter (descriptor.set + InputEvent) instead of
+        # CDP Input.insertText — the latter mutates the DOM value but does not
+        # always notify React's controlled-input layer, so Enter can submit an
+        # empty keyword to the form handler. Using JS also overwrites any
+        # leftover text instead of appending to it.
         await self.page.click(float(input_pos.get("x", 0)), float(input_pos.get("y", 0)))
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.15)
 
-        await self.page.type_text(query)
-        await asyncio.sleep(0.2)
-        input_state = await self.run_extractor("searchState", expected_type=dict)
-        if _normalize_keyword(str(input_state.get("input_keyword") or "")) != _normalize_keyword(query):
+        set_result = await self.run_page_script(
+            "setSearchInput", expected_type=dict, arg={"query": query}
+        )
+        if not set_result.get("ok"):
             return {
                 "ok": False,
-                "strategy": "type_search_input_failed",
-                "state": input_state,
-                "error": "Search input did not accept the requested keyword",
+                "strategy": "set_search_input_failed",
+                "state": set_result,
+                "error": str(set_result.get("error") or "Search input did not accept the requested keyword"),
             }
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.15)
         await self.page.press_key("Enter")
         state = await self.wait_for_search_transition(query, timeout_s=max(0.2, min(float(wait_seconds), 6.0)))
         if _search_transition_ok(state, query):
@@ -156,7 +191,11 @@ class XhsRuntime:
             "strategy": "manual_submit_failed",
             "state": state,
             "url": await self.current_url(),
-            "error": "Search did not transition to a valid Xiaohongshu result page",
+            "error": (
+                "login_required"
+                if state.get("login_required")
+                else "Search did not transition to a valid Xiaohongshu result page"
+            ),
         }
 
     async def wait_for_search_transition(
@@ -169,15 +208,15 @@ class XhsRuntime:
         deadline = asyncio.get_running_loop().time() + max(0.2, float(timeout_s))
         latest: dict = {}
         while asyncio.get_running_loop().time() < deadline:
-            latest = await self.run_extractor("searchState", expected_type=dict)
+            latest = await self.run_page_script("searchState", expected_type=dict)
             if _search_transition_ok(latest, query):
                 return latest
             await asyncio.sleep(max(0.05, float(poll_s)))
-        return latest or await self.run_extractor("searchState", expected_type=dict)
+        return latest or await self.run_page_script("searchState", expected_type=dict)
 
     async def extract_search_cards(self) -> list[XhsNoteCard]:
         await self.ensure_xhs(navigate_if_needed=False)
-        raw = await self.run_extractor("searchCards", expected_type=list)
+        raw = await self.run_page_script("searchCards", expected_type=list)
         cards: list[XhsNoteCard] = []
         for index, item in enumerate(raw):
             if not isinstance(item, dict):
@@ -187,6 +226,8 @@ class XhsRuntime:
                     note_id=str(item.get("note_id") or ""),
                     title=str(item.get("title") or ""),
                     author=str(item.get("author") or ""),
+                    author_id=str(item.get("author_id") or ""),
+                    author_url=str(item.get("author_url") or ""),
                     likes=str(item.get("likes") or ""),
                     link=str(item.get("link") or ""),
                     cover_url=str(item.get("cover_url") or ""),
@@ -197,7 +238,21 @@ class XhsRuntime:
             )
         return cards
 
-    async def open_note(self, *, note_id: str = "", index: int | None = None) -> dict:
+    async def open_note(
+        self,
+        *,
+        note_id: str = "",
+        index: int | None = None,
+        wait_seconds: float = 4.0,
+    ) -> dict:
+        """Open a note by simulating a human click on the card.
+
+        Direct ``Page.navigate`` to ``/explore/<id>`` triggers Xiaohongshu's
+        anti-bot path (captcha or "scan in app" prompt). We instead locate the
+        card in the current grid, fetch its center coordinates from JS, and
+        dispatch a real CDP mouse click — which opens the note as a modal.
+        """
+
         cards = await self.extract_search_cards()
         selected: XhsNoteCard | None = None
         if note_id:
@@ -206,33 +261,392 @@ class XhsRuntime:
             selected = cards[int(index)]
         if selected is None:
             raise RuntimeError("Could not resolve note target from current search cards.")
-        if not selected.link:
-            raise RuntimeError(f"Selected note has no openable link: {selected.to_dict()}")
-        await self.page.navigate(selected.link)
-        return {"ok": True, "target": selected.to_dict(), "url": await self.current_url()}
 
-    async def extract_note(self) -> XhsNote:
+        click_arg: dict[str, Any] = {}
+        if selected.note_id:
+            click_arg["note_id"] = selected.note_id
+        if index is not None:
+            click_arg["index"] = int(index)
+        elif selected.position is not None:
+            click_arg["index"] = int(selected.position)
+
+        target = await self.run_page_script("clickCard", expected_type=dict, arg=click_arg)
+        if not target.get("ok"):
+            raise RuntimeError(
+                f"Could not locate card to click for note {selected.note_id or selected.position}: "
+                f"{target.get('error')}"
+            )
+
+        # Reset the stale-overlay tracker for the new attempt.
+        self._last_extracted_note_id = ""
+
+        per_attempt = max(0.2, float(wait_seconds) / 2)
+        click_target_kind = str(target.get("target") or "cover")
+
+        await self.page.click(float(target["x"]), float(target["y"]))
+        opened = await self._wait_for_note_open(timeout_s=per_attempt)
+        if opened.get("on_detail_route") or opened.get("has_modal"):
+            return {
+                "ok": True,
+                "target": selected.to_dict(),
+                "url": await self.current_url(),
+                "state": opened,
+                "strategy": f"{click_target_kind}_click",
+            }
+
+        # Fallback: re-issue clickCard so the click coords reflect any layout
+        # shift (scrolling, ad insertion), then click the card body itself.
+        # Mirrors flowlens' two-stage click_card_or_card.click() path.
+        retry = await self.run_page_script("clickCard", expected_type=dict, arg=click_arg)
+        if retry.get("ok"):
+            await self.page.click(float(retry["x"]), float(retry["y"]))
+            opened = await self._wait_for_note_open(timeout_s=per_attempt)
+            if opened.get("on_detail_route") or opened.get("has_modal"):
+                return {
+                    "ok": True,
+                    "target": selected.to_dict(),
+                    "url": await self.current_url(),
+                    "state": opened,
+                    "strategy": f"retry_{retry.get('target') or 'card'}_click",
+                }
+
+        return {
+            "ok": False,
+            "target": selected.to_dict(),
+            "url": await self.current_url(),
+            "state": opened,
+            "strategy": "card_click_failed",
+            "error": (
+                "login_required"
+                if opened.get("login_required")
+                else "Note overlay did not open after card-click attempts; site may be throttling or layout changed"
+            ),
+        }
+
+    async def close_note(self, *, wait_seconds: float = 1.5) -> dict:
+        """Close an open note modal with multiple human-like strategies.
+
+        Order:
+        1. CDP ``Input.dispatchKeyEvent`` Escape — the cleanest path when XHS
+           listens on ``window``.
+        2. JS-level ``document.dispatchEvent(KeyboardEvent('keydown'))`` —
+           some XHS React handlers attach directly to ``document`` and miss
+           the CDP path.
+        3. Click the close-button at coordinates returned by the JS extractor.
+        """
+
+        before = await self.run_page_script("noteOpen", expected_type=dict)
+        if not (before.get("on_detail_route") or before.get("has_modal")):
+            self._last_extracted_note_id = ""
+            return {"ok": True, "strategy": "already_closed", "state": before}
+
+        per_attempt = max(0.2, float(wait_seconds))
+
+        # Strategy 1: real keyboard event via CDP.
+        await self.page.press_key("Escape")
+        state = await self._wait_for_note_closed(timeout_s=per_attempt)
+        if not (state.get("on_detail_route") or state.get("has_modal")):
+            self._last_extracted_note_id = ""
+            return {"ok": True, "strategy": "escape", "state": state, "url": await self.current_url()}
+
+        # Strategy 2: synthetic KeyboardEvent at the document level.
+        try:
+            await self.page.evaluate(JS_DISPATCH_ESCAPE)
+        except Exception:  # noqa: BLE001 - best-effort fallback
+            pass
+        state = await self._wait_for_note_closed(timeout_s=per_attempt)
+        if not (state.get("on_detail_route") or state.get("has_modal")):
+            self._last_extracted_note_id = ""
+            return {"ok": True, "strategy": "escape_dispatch", "state": state, "url": await self.current_url()}
+
+        # Strategy 3: locate and click the close button.
+        close_btn = await self.run_page_script("closeNote", expected_type=dict)
+        if close_btn.get("ok"):
+            await self.page.click(float(close_btn["x"]), float(close_btn["y"]))
+            state = await self._wait_for_note_closed(timeout_s=per_attempt)
+            if not (state.get("on_detail_route") or state.get("has_modal")):
+                self._last_extracted_note_id = ""
+                return {
+                    "ok": True,
+                    "strategy": "close_button",
+                    "selector": close_btn.get("selector", ""),
+                    "state": state,
+                    "url": await self.current_url(),
+                }
+
+        return {
+            "ok": False,
+            "strategy": "close_failed",
+            "state": state,
+            "url": await self.current_url(),
+            "error": "Note modal did not close after Escape, JS-dispatch Escape, and close-button attempts",
+        }
+
+    async def _wait_for_note_open(self, *, timeout_s: float, poll_s: float = 0.15) -> dict:
+        deadline = asyncio.get_running_loop().time() + max(0.2, float(timeout_s))
+        latest: dict = {}
+        while asyncio.get_running_loop().time() < deadline:
+            latest = await self.run_page_script("noteOpen", expected_type=dict)
+            if latest.get("on_detail_route") or latest.get("has_modal"):
+                return latest
+            await asyncio.sleep(max(0.05, float(poll_s)))
+        return latest or await self.run_page_script("noteOpen", expected_type=dict)
+
+    async def _wait_for_note_closed(self, *, timeout_s: float, poll_s: float = 0.15) -> dict:
+        deadline = asyncio.get_running_loop().time() + max(0.2, float(timeout_s))
+        latest: dict = {}
+        while asyncio.get_running_loop().time() < deadline:
+            latest = await self.run_page_script("noteOpen", expected_type=dict)
+            if not (latest.get("on_detail_route") or latest.get("has_modal")):
+                return latest
+            await asyncio.sleep(max(0.05, float(poll_s)))
+        return latest or await self.run_page_script("noteOpen", expected_type=dict)
+
+    async def extract_note(
+        self,
+        *,
+        wait_seconds: float = 8.0,
+        level: str = "lite",
+        include_media: bool = False,
+        max_images: int = 6,
+        max_video_frames: int = 4,
+    ) -> XhsNote:
+        """Extract the currently open note.
+
+        Uses ``noteWithWait`` so the JS side polls until content has hydrated
+        (or the shell has settled long enough to trust an empty body), giving
+        us one round-trip instead of polling from Python.
+        """
+
         await self.ensure_xhs(navigate_if_needed=False)
-        raw = await self.run_extractor("note", expected_type=dict)
-        hashtags = raw.get("hashtags") if isinstance(raw.get("hashtags"), list) else []
-        return XhsNote(
-            note_id=str(raw.get("note_id") or ""),
-            url=str(raw.get("url") or await self.current_url()),
-            title=str(raw.get("title") or ""),
-            author=str(raw.get("author") or ""),
-            content=str(raw.get("content") or ""),
+        raw = await self.run_page_script(
+            "noteWithWait",
+            expected_type=dict,
+            arg={"timeout_ms": int(max(0.5, float(wait_seconds)) * 1000)},
+        )
+        wait_meta = {
+            "ready": bool(raw.get("ready")),
+            "reason": str(raw.get("reason") or ""),
+            "waited_ms": int(raw.get("waited_ms") or 0),
+            "attempts": int(raw.get("attempts") or 0),
+        }
+        body = raw.get("note") or {}
+        if not isinstance(body, dict):
+            body = {}
+        hashtags = body.get("hashtags") if isinstance(body.get("hashtags"), list) else []
+        image_urls = body.get("image_urls") if isinstance(body.get("image_urls"), list) else []
+        images = [
+            {"url": str(url), "index": index, "is_cover": index == 0}
+            for index, url in enumerate(image_urls[: max(0, int(max_images or 0)) or len(image_urls)])
+            if str(url).strip()
+        ]
+        video = body.get("video") if isinstance(body.get("video"), dict) else {}
+        note_id = str(body.get("note_id") or "")
+        stale = ""
+        if note_id and self._last_extracted_note_id and note_id == self._last_extracted_note_id:
+            stale = (
+                f"This note (note_id={note_id}) was already extracted in the previous read. "
+                "The note modal may not have closed before opening the next card — "
+                "call xhs_close_note to verify the modal is gone, then re-open the target card."
+            )
+        if note_id:
+            self._last_extracted_note_id = note_id
+        note = XhsNote(
+            note_id=note_id,
+            url=str(body.get("url") or await self.current_url()),
+            type=str(body.get("type") or ""),
+            title=str(body.get("title") or ""),
+            author=str(body.get("author") or ""),
+            author_id=str(body.get("author_id") or ""),
+            author_url=str(body.get("author_url") or ""),
+            content=str(body.get("content") or ""),
+            content_source=str(body.get("content_source") or ""),
             hashtags=[str(tag) for tag in hashtags if str(tag).strip()],
-            likes=str(raw.get("likes") or ""),
-            favorites=str(raw.get("favorites") or ""),
-            comments_count=str(raw.get("comments_count") or ""),
-            raw_text_excerpt=str(raw.get("raw_text_excerpt") or ""),
+            date=str(body.get("date") or ""),
+            location=str(body.get("location") or ""),
+            ip_location=str(body.get("ip_location") or ""),
+            likes=str(body.get("likes") or ""),
+            favorites=str(body.get("favorites") or ""),
+            comments_count=str(body.get("comments_count") or ""),
+            shares=str(body.get("shares") or ""),
+            image_count=int(body.get("image_count") or len(images) or 0),
+            images=images,
+            video=video,
+            extraction_level=str(level or "lite"),
+        )
+        if include_media:
+            await self._enrich_note_media(note, max_images=max_images, max_video_frames=max_video_frames)
+        note.stale_warning = stale
+        note.wait_meta = wait_meta
+        return note
+
+    async def _enrich_note_media(self, note: XhsNote, *, max_images: int, max_video_frames: int) -> None:
+        if self.media is None:
+            if note.type == "video":
+                note.video = {**(note.video or {}), "media_error": "media processor unavailable"}
+            else:
+                note.images = [{**image, "media_error": "media processor unavailable"} for image in note.images]
+            return
+
+        if note.type == "video":
+            note.video = await self.media.enrich_video_async(
+                note.video or {},
+                note_id=note.note_id,
+                title=note.title,
+                referer=note.url,
+                max_frames=max_video_frames,
+                run_vision=True,
+            )
+            return
+
+        if not note.images:
+            urls = await self.collect_carousel_images(max_images=max_images)
+            note.images = [
+                {"url": url, "index": index, "is_cover": index == 0}
+                for index, url in enumerate(urls[:max_images])
+            ]
+            note.image_count = len(note.images)
+        note.images = await self.media.enrich_images_async(
+            note.images[:max_images],
+            referer=note.url,
+            label=note.note_id or note.title or "xhs_note",
+            run_vision=True,
+        )
+        note.image_count = len(note.images)
+
+    async def collect_carousel_images(self, *, max_images: int = 12) -> list[str]:
+        await self.ensure_xhs(navigate_if_needed=False)
+        raw = await self.run_page_script("carouselImages", expected_type=dict, arg={"max_images": int(max_images)})
+        urls = raw.get("image_urls") if isinstance(raw, dict) else []
+        return [str(url) for url in urls if str(url).strip()] if isinstance(urls, list) else []
+
+    async def extract_comments(
+        self,
+        *,
+        prefer_hot: bool = True,
+        max_comments: int = 20,
+    ) -> list[dict]:
+        await self.ensure_xhs(navigate_if_needed=False)
+        arg: dict[str, Any] = {"prefer_hot": bool(prefer_hot)}
+        if max_comments:
+            arg["max_comments"] = int(max_comments)
+        raw = await self.run_page_script("comments", expected_type=list, arg=arg)
+        return [item for item in raw if isinstance(item, dict)]
+
+    async def scroll_in_note(self, *, pixels: int = 400) -> dict:
+        await self.ensure_xhs(navigate_if_needed=False)
+        return await self.run_page_script("scrollInNote", expected_type=dict, arg={"pixels": int(pixels)})
+
+    async def list_search_tabs(self) -> list[dict]:
+        await self.ensure_xhs(navigate_if_needed=False)
+        raw = await self.run_page_script("searchTabs", expected_type=list)
+        return [item for item in raw if isinstance(item, dict)]
+
+    async def click_search_tab(self, label: str, *, wait_seconds: float = 1.5) -> dict:
+        await self.ensure_xhs(navigate_if_needed=False)
+        loc = await self.run_page_script("clickSearchTab", expected_type=dict, arg=str(label))
+        if not loc.get("ok"):
+            return {"ok": False, "label": label, "error": loc.get("error", "unknown")}
+        if loc.get("was_active"):
+            return {"ok": True, "label": label, "skipped": True, "reason": "already_active"}
+        await self.page.click(float(loc["x"]), float(loc["y"]))
+        if wait_seconds > 0:
+            await asyncio.sleep(min(float(wait_seconds), 4.0))
+        tabs = await self.list_search_tabs()
+        return {
+            "ok": True,
+            "label": label,
+            "active_filter": next((t["label"] for t in tabs if t.get("active")), ""),
+            "tabs": tabs,
+        }
+
+    async def read_note(
+        self,
+        *,
+        note_id: str = "",
+        index: int | None = None,
+        level: str = "lite",
+        with_comments: bool = True,
+        max_comments: int = 12,
+        include_media: bool = False,
+        max_images: int = 6,
+        max_video_frames: int = 4,
+    ) -> dict:
+        if note_id or index is not None:
+            opened = await self.open_note(note_id=note_id, index=index)
+            if not opened.get("ok"):
+                return {"ok": False, "open": opened, "error": opened.get("error", "open_failed")}
+        note = await self.extract_note(
+            level=level,
+            include_media=include_media,
+            max_images=max_images,
+            max_video_frames=max_video_frames,
+        )
+        if note_id and note.note_id and note.note_id != note_id:
+            return {
+                "ok": False,
+                "entity": note.to_dict(),
+                "error": f"stale_note: expected {note_id}, got {note.note_id}",
+            }
+        payload: dict[str, Any] = {"ok": True, "entity": note.to_dict()}
+        if with_comments:
+            try:
+                payload["comments"] = await self.extract_comments(max_comments=max_comments)
+            except Exception as exc:  # noqa: BLE001 - comments are best-effort
+                payload["comments"] = []
+                payload["comments_error"] = str(exc)
+        return payload
+
+    async def extract_profile(self, *, max_notes: int = 20, scroll_rounds: int = 6) -> XhsAuthorProfile:
+        await self.ensure_xhs(navigate_if_needed=False)
+        state = await self.detect_state()
+        if state.get("state") != "profile_page":
+            raise RuntimeError(f"Current Xiaohongshu page is not a profile page: {state.get('url')}")
+        info = await self.run_page_script("profileInfo", expected_type=dict)
+        cards = await self.extract_profile_cards(max_notes=max_notes, scroll_rounds=scroll_rounds)
+        return XhsAuthorProfile(
+            display_name=str(info.get("display_name") or ""),
+            xhs_id=str(info.get("xhs_id") or ""),
+            profile_url=str(info.get("profile_url") or await self.current_url()),
+            bio=str(info.get("bio") or ""),
+            followers=str(info.get("followers") or ""),
+            following=str(info.get("following") or ""),
+            likes_and_collections=str(info.get("likes_and_collections") or ""),
+            note_cards=cards,
         )
 
-    async def read_note(self, *, note_id: str = "", index: int | None = None) -> dict:
-        if note_id or index is not None:
-            await self.open_note(note_id=note_id, index=index)
-        note = await self.extract_note()
-        return {"ok": True, "entity": note.to_dict()}
+    async def extract_profile_cards(self, *, max_notes: int = 20, scroll_rounds: int = 6) -> list[XhsNoteCard]:
+        cards: list[XhsNoteCard] = []
+        seen: set[str] = set()
+        for round_index in range(max(1, int(scroll_rounds or 1))):
+            raw = await self.run_page_script("profileCards", expected_type=list)
+            for index, item in enumerate(raw):
+                if not isinstance(item, dict):
+                    continue
+                card = XhsNoteCard(
+                    note_id=str(item.get("note_id") or ""),
+                    title=str(item.get("title") or ""),
+                    author=str(item.get("author") or ""),
+                    author_id=str(item.get("author_id") or ""),
+                    author_url=str(item.get("author_url") or ""),
+                    likes=str(item.get("likes") or ""),
+                    link=str(item.get("link") or ""),
+                    cover_url=str(item.get("cover_url") or ""),
+                    type=str(item.get("type") or ""),
+                    position=int(item.get("position", index) or index),
+                    xsec_token=str(item.get("xsec_token") or ""),
+                )
+                key = card.note_id or card.link or f"pos:{card.position}"
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                cards.append(card)
+                if len(cards) >= max_notes:
+                    return cards
+            if round_index < scroll_rounds - 1:
+                await self.page.scroll(delta_y=900)
+                await asyncio.sleep(0.8)
+        return cards[:max_notes]
 
 
 def extract_note_id_from_url(url: str) -> str:

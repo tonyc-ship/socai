@@ -46,14 +46,14 @@ PROVIDERS: dict[str, ProviderConfig] = {
     PROVIDER_OPENAI: ProviderConfig(
         name=PROVIDER_OPENAI,
         display_name="OpenAI",
-        default_model="gpt-4.1",
+        default_model="gpt-5.5",
         api_key_env=("OPENAI_API_KEY",),
         model_prefixes=("gpt-", "o1", "o3", "o4", "chatgpt-"),
     ),
     PROVIDER_KIMI: ProviderConfig(
         name=PROVIDER_KIMI,
         display_name="Kimi",
-        default_model="kimi-k2.5",
+        default_model="kimi-k2.6",
         api_key_env=("KIMI_API_KEY", "MOONSHOT_API_KEY"),
         base_url="https://api.moonshot.cn/v1",
         model_prefixes=("kimi-", "moonshot-"),
@@ -61,7 +61,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     PROVIDER_QWEN: ProviderConfig(
         name=PROVIDER_QWEN,
         display_name="Qwen",
-        default_model="qwen-plus",
+        default_model="qwen3.6-plus",
         api_key_env=("QWEN_API_KEY", "DASHSCOPE_API_KEY"),
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         model_prefixes=("qwen", "qwq-", "qvq-"),
@@ -102,12 +102,36 @@ def default_model_for_provider(provider: str) -> str:
     return _configured_default_model(provider) or config.default_model
 
 
+_AUTH_WARNED: set[str] = set()
+
+
 def _read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - filesystem boundary
+        _warn_auth_once(str(path), f"could not read {path}: {exc}")
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        _warn_auth_once(
+            str(path),
+            f"{path} is not valid JSON ({exc.msg} at line {exc.lineno} col {exc.colno}). "
+            f"Fix the file or delete it; provider keys saved there are being ignored.",
+        )
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _warn_auth_once(key: str, message: str) -> None:
+    if key in _AUTH_WARNED:
+        return
+    _AUTH_WARNED.add(key)
+    import sys
+
+    print(f"[socai] warning: {message}", file=sys.stderr)
 
 
 def _auth_configs() -> list[tuple[Path, dict]]:
@@ -125,6 +149,10 @@ def save_api_key(provider: str, api_key: str) -> Path:
     secret = str(api_key or "").strip()
     if not secret:
         raise ValueError("API key is required.")
+    if len(secret) < _MIN_API_KEY_LEN:
+        raise ValueError(
+            f"API key looks too short ({len(secret)} chars). Paste the full key."
+        )
 
     data = _read_json(SOCAI_AUTH_FILE)
     provider_block = dict(data.get(provider) or {})
@@ -180,15 +208,23 @@ def _codex_api_key() -> str:
     return str(_read_json(CODEX_AUTH_FILE).get("OPENAI_API_KEY") or "").strip()
 
 
+_MIN_API_KEY_LEN = 8  # any real provider key is far longer; reject whitespace/typo-saved keys
+
+
+def _looks_like_real_key(value: str | None) -> bool:
+    return bool(value and len(value.strip()) >= _MIN_API_KEY_LEN)
+
+
 def _provider_has_key(provider: str) -> bool:
     config = PROVIDERS.get(provider)
     if config is None:
         return False
-    if any(os.environ.get(key, "").strip() for key in config.api_key_env):
+    if any(_looks_like_real_key(os.environ.get(key)) for key in config.api_key_env):
         return True
-    if _configured_secret(provider, "api_key"):
+    configured = _configured_secret(provider, "api_key")
+    if configured and _looks_like_real_key(configured[1]):
         return True
-    return provider == PROVIDER_OPENAI and bool(_codex_api_key())
+    return provider == PROVIDER_OPENAI and _looks_like_real_key(_codex_api_key())
 
 
 def has_any_api_key() -> bool:
@@ -206,12 +242,14 @@ def resolve_model_provider(model: str | None = None, provider: str | None = None
     for name, config in PROVIDERS.items():
         if normalized and any(normalized.startswith(prefix) for prefix in config.model_prefixes):
             return name
-    if configured := _configured_default_provider():
+    # Honor configured default only if it actually has a usable key.
+    configured = _configured_default_provider()
+    if configured and _provider_has_key(configured):
         return configured
     for name in PROVIDERS:
         if _provider_has_key(name):
             return name
-    return PROVIDER_OPENAI
+    return configured or PROVIDER_OPENAI
 
 
 def _api_key_for(config: ProviderConfig) -> str:
@@ -286,6 +324,40 @@ def _compress_text_maybe_json(text: str, max_chars: int = _TOOL_RESULT_TEXT_MAX_
 def _screenshot_hint_from_text(text: str) -> str | None:
     match = re.search(r"Screenshot saved to ([^\s]+)", text or "")
     return match.group(1) if match else None
+
+
+def _openai_content_parts(blocks: list[dict]) -> tuple[list[dict], bool]:
+    parts: list[dict] = []
+    has_media = False
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            text = str(block.get("text", ""))
+            if text:
+                parts.append({"type": "text", "text": text})
+        elif kind == "image":
+            source = block.get("source") if isinstance(block.get("source"), dict) else {}
+            media_type = str(source.get("media_type") or "image/jpeg")
+            data = str(source.get("data") or "")
+            if source.get("type") == "base64" and data:
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{data}"},
+                    }
+                )
+                has_media = True
+        elif kind == "image_url":
+            image_url = block.get("image_url")
+            if isinstance(image_url, dict):
+                parts.append({"type": "image_url", "image_url": image_url})
+                has_media = True
+            elif block.get("url"):
+                parts.append({"type": "image_url", "image_url": {"url": str(block["url"])}})
+                has_media = True
+    return parts, has_media
 
 
 def _summarize_result_blocks_for_history(
@@ -504,7 +576,8 @@ class OpenAICompatibleBackend(Backend):
                 return [{"role": "user", "content": text}] if text else []
             if isinstance(content, list):
                 result: list[dict] = []
-                text_parts: list[str] = []
+                user_parts: list[dict] = []
+                has_media = False
                 for item in content:
                     if not isinstance(item, dict):
                         continue
@@ -519,11 +592,19 @@ class OpenAICompatibleBackend(Backend):
                                 "content": self._blocks_to_text(blocks),
                             }
                         )
-                    elif item.get("type") == "text":
-                        text_parts.append(str(item.get("text", "")))
-                joined = "\n".join(part for part in text_parts if part).strip()
-                if joined:
-                    result.append({"role": "user", "content": joined})
+                    else:
+                        parts, part_has_media = _openai_content_parts([item])
+                        user_parts.extend(parts)
+                        has_media = has_media or part_has_media
+                if user_parts:
+                    if has_media:
+                        result.append({"role": "user", "content": user_parts})
+                    else:
+                        joined = "\n".join(
+                            str(part.get("text") or "") for part in user_parts if part.get("type") == "text"
+                        ).strip()
+                        if joined:
+                            result.append({"role": "user", "content": joined})
                 return result
 
         return []

@@ -28,6 +28,17 @@ class ToolContext:
     artifact_counter: int = 0
     turn: int = 0
     active_tool_name: str = ""
+    processed_notes: dict | None = None
+    topic_scan_note_ids: list | None = None
+    enabled_sites: set | None = None
+
+    def __post_init__(self) -> None:
+        if self.processed_notes is None:
+            self.processed_notes = {}
+        if self.topic_scan_note_ids is None:
+            self.topic_scan_note_ids = []
+        if self.enabled_sites is None:
+            self.enabled_sites = set()
 
     def next_screenshot_path(self, label: str = "screenshot") -> Path:
         self.screenshot_counter += 1
@@ -104,6 +115,16 @@ class Tool(ABC):
     @property
     def always_available(self) -> bool:
         return False
+
+    @property
+    def defer_until_site(self) -> str:
+        return ""
+
+    def is_available(self, ctx: ToolContext) -> bool:
+        site = self.defer_until_site
+        if not site:
+            return True
+        return site in ctx.enabled_sites
 
     @property
     @abstractmethod
