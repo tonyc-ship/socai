@@ -489,8 +489,7 @@ class XhsRuntime:
             return
 
         if note.type == "video":
-            note.video = await asyncio.to_thread(
-                self.media.enrich_video,
+            note.video = await self.media.enrich_video_async(
                 note.video or {},
                 note_id=note.note_id,
                 title=note.title,
@@ -507,8 +506,7 @@ class XhsRuntime:
                 for index, url in enumerate(urls[:max_images])
             ]
             note.image_count = len(note.images)
-        note.images = await asyncio.to_thread(
-            self.media.enrich_images,
+        note.images = await self.media.enrich_images_async(
             note.images[:max_images],
             referer=note.url,
             label=note.note_id or note.title or "xhs_note",

@@ -10,8 +10,10 @@ for the model (full data lives on disk, agent context stays small).
 from __future__ import annotations
 
 import json
+import time
 
 from socai.agent.tool import Tool, ToolContext
+from socai.media.timing import TimingRecord
 
 from .entities import XhsNoteCard
 from .history import XhsHistoryStore
@@ -417,12 +419,26 @@ class XhsTopicScanTool(XhsToolBase):
         total_limit = max_deep + max_lite
         include_media = bool(profile["media"])
 
-        search = await self.runtime.search_notes(query)
+        scan_timing = TimingRecord()
+        # Snapshot media-processor counters so per-scan timing only reflects
+        # work done by this invocation, not earlier scans in the same run.
+        media_baseline = (
+            dict(self.runtime.media.timing.totals) if getattr(self.runtime, "media", None) else {}
+        )
+        media_count_baseline = (
+            dict(self.runtime.media.timing.counts) if getattr(self.runtime, "media", None) else {}
+        )
+        scan_t0 = time.perf_counter()
+
+        with scan_timing.measure("xhs_search_notes"):
+            search = await self.runtime.search_notes(query)
         tab_label = str(params.get("tab_label") or "").strip()
         tab_result: dict = {}
         if tab_label:
-            tab_result = await self.runtime.click_search_tab(tab_label)
-            cards = [card.to_dict() for card in await self.runtime.extract_search_cards()]
+            with scan_timing.measure("xhs_click_search_tab"):
+                tab_result = await self.runtime.click_search_tab(tab_label)
+            with scan_timing.measure("xhs_extract_search_cards"):
+                cards = [card.to_dict() for card in await self.runtime.extract_search_cards()]
         else:
             cards = search.get("cards") or []
 
@@ -456,6 +472,7 @@ class XhsTopicScanTool(XhsToolBase):
                 })
                 continue
             try:
+                read_t0 = time.perf_counter()
                 payload = await self.runtime.read_note(
                     note_id=card.note_id,
                     index=None if card.note_id else card.position,
@@ -464,12 +481,14 @@ class XhsTopicScanTool(XhsToolBase):
                     max_comments=comment_count,
                     include_media=include_media and level == "deep",
                 )
+                scan_timing.record(f"read_note_{level}", time.perf_counter() - read_t0)
                 entity = payload.get("entity") or {}
                 if isinstance(entity, dict):
                     entity["top_comments"] = (payload.get("comments") or [])[:5]
                     try:
                         screenshot_path = ctx.next_screenshot_path(f"xhs_topic_{index + 1}_{level}")
-                        await self.runtime.page.screenshot(screenshot_path, max_dim=1600)
+                        with scan_timing.measure("note_screenshot"):
+                            await self.runtime.page.screenshot(screenshot_path, max_dim=1600)
                         screenshot_rel = ctx.register_artifact(
                             screenshot_path,
                             label=f"xhs_topic_{index + 1}_{level}",
@@ -511,6 +530,13 @@ class XhsTopicScanTool(XhsToolBase):
                     pass
 
         selected_cards = [card.to_dict() for card in selected]
+        scan_total_s = round(time.perf_counter() - scan_t0, 3)
+        media_timing_delta = self._media_timing_delta(media_baseline, media_count_baseline)
+        timing_summary = {
+            "scan_total_s": scan_total_s,
+            "scan_phases": scan_timing.summary(),
+            "media": media_timing_delta,
+        }
         payload = {
             "ok": bool(search.get("ok")),
             "query": query,
@@ -524,6 +550,7 @@ class XhsTopicScanTool(XhsToolBase):
                 "depth": depth,
                 "include_media": include_media,
             },
+            "timing": timing_summary,
         }
         reply = await self._emit(
             ctx,
@@ -542,6 +569,7 @@ class XhsTopicScanTool(XhsToolBase):
                     }
                     for note in notes[:8]
                 ],
+                "timing": timing_summary,
             },
         )
         artifact = _artifact_from_reply(reply)
@@ -557,6 +585,29 @@ class XhsTopicScanTool(XhsToolBase):
                     source_tool=self.name,
                 )
         return reply
+
+    def _media_timing_delta(
+        self,
+        baseline_totals: dict,
+        baseline_counts: dict,
+    ) -> dict[str, dict[str, float]]:
+        media = getattr(self.runtime, "media", None)
+        if media is None:
+            return {}
+        result: dict[str, dict[str, float]] = {}
+        for op, total in media.timing.totals.items():
+            base_total = float(baseline_totals.get(op, 0.0))
+            base_count = int(baseline_counts.get(op, 0))
+            delta_total = max(0.0, float(total) - base_total)
+            delta_count = max(0, int(media.timing.counts.get(op, 0)) - base_count)
+            if delta_count == 0 and delta_total <= 0:
+                continue
+            result[op] = {
+                "count": delta_count,
+                "total_s": round(delta_total, 3),
+                "avg_s": round(delta_total / delta_count, 3) if delta_count else 0.0,
+            }
+        return dict(sorted(result.items()))
 
     @staticmethod
     def _card_from_dict(value: dict) -> XhsNoteCard:

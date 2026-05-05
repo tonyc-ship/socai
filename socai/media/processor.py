@@ -10,6 +10,7 @@ from socai.agent.backends import Backend
 from .audio import AudioProcessor
 from .common import MediaConfig, download_bytes, download_file, ensure_dir, save_bytes
 from .image import ImageProcessor
+from .timing import TimingRecord
 from .video import VideoProcessor
 
 
@@ -19,13 +20,20 @@ class MediaProcessor:
     def __init__(self, config: MediaConfig, *, backend: Backend | None = None):
         self.config = config
         ensure_dir(self.config.base_dir)
-        self.images = ImageProcessor(config, backend=backend)
-        self.audio = AudioProcessor(config, backend=backend)
-        self.video = VideoProcessor(config, images=self.images, audio=self.audio)
+        self.timing = TimingRecord()
+        self.images = ImageProcessor(config, backend=backend, timing=self.timing)
+        self.audio = AudioProcessor(config, backend=backend, timing=self.timing)
+        self.video = VideoProcessor(config, images=self.images, audio=self.audio, timing=self.timing)
 
     @classmethod
     def for_run_dir(cls, run_dir: str | Path, *, backend: Backend | None = None) -> "MediaProcessor":
         return cls(MediaConfig(base_dir=Path(run_dir) / "site_media"), backend=backend)
+
+    def timing_summary(self) -> dict[str, dict[str, float]]:
+        return self.timing.summary()
+
+    def reset_timing(self) -> None:
+        self.timing.reset()
 
     def download_bytes(self, url: str, *, referer: str = "") -> bytes:
         return download_bytes(url, referer=referer, timeout=self.config.request_timeout_s)
@@ -49,15 +57,22 @@ class MediaProcessor:
     def describe_image(self, payload: bytes, prompt: str, *, max_tokens: int = 180) -> str:
         return self.images.describe_image(payload, prompt, max_tokens=max_tokens)
 
-    def enrich_images(
+    async def enrich_images_async(
         self,
         images: list[dict[str, Any]],
         *,
         referer: str = "",
         label: str = "image",
         run_vision: bool = False,
+        vision_concurrency: int | None = None,
     ) -> list[dict[str, Any]]:
-        return self.images.enrich_images(images, referer=referer, label=label, run_vision=run_vision)
+        return await self.images.enrich_images_async(
+            images,
+            referer=referer,
+            label=label,
+            run_vision=run_vision,
+            vision_concurrency=vision_concurrency,
+        )
 
     def transcribe_video(self, source: str, *, referer: str = "", language: str = "") -> str:
         return self.audio.transcribe_audio(source, referer=referer, language=language)
@@ -77,7 +92,7 @@ class MediaProcessor:
             num_frames=num_frames,
         )
 
-    def enrich_video(
+    async def enrich_video_async(
         self,
         video: dict[str, Any],
         *,
@@ -86,14 +101,16 @@ class MediaProcessor:
         referer: str = "",
         max_frames: int = 4,
         run_vision: bool = False,
+        vision_concurrency: int | None = None,
     ) -> dict[str, Any]:
-        return self.video.enrich_video(
+        return await self.video.enrich_video_async(
             video,
             note_id=note_id,
             title=title,
             referer=referer,
             max_frames=max_frames,
             run_vision=run_vision,
+            vision_concurrency=vision_concurrency,
         )
 
     def diagnostics(self) -> dict[str, Any]:

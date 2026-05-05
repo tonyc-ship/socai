@@ -4,21 +4,35 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
 from socai.agent.backends import Backend
 
 from .common import MediaConfig, MediaUnavailable, download_file, ensure_dir, run_command, url_suffix
+from .timing import TimingRecord
 
 
 class AudioProcessor:
-    def __init__(self, config: MediaConfig, *, backend: Backend | None = None):
+    def __init__(
+        self,
+        config: MediaConfig,
+        *,
+        backend: Backend | None = None,
+        timing: TimingRecord | None = None,
+    ):
         self.config = config
         self.backend = backend
+        self.timing = timing
 
     def transcribe_audio(self, source: str, *, referer: str = "", language: str = "") -> str:
-        return self._transcribe_local(source, referer=referer, language=language)
+        t0 = time.perf_counter()
+        try:
+            return self._transcribe_local(source, referer=referer, language=language)
+        finally:
+            if self.timing is not None:
+                self.timing.record("whisper_transcribe", time.perf_counter() - t0)
 
     def _transcribe_local(self, source: str, *, referer: str = "", language: str = "") -> str:
         if not self.config.use_whisper:

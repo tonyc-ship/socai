@@ -33,6 +33,7 @@ class MediaConfig:
     use_vision: bool = True
     use_whisper: bool = True
     use_ffmpeg: bool = True
+    vision_concurrency: int = 3
 
 
 def ensure_dir(path: Path) -> Path:
