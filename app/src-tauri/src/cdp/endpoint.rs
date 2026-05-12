@@ -30,8 +30,7 @@ pub fn discover() -> Result<Endpoint, String> {
 }
 
 fn profile_roots() -> Vec<PathBuf> {
-    let Ok(home) = env::var("HOME") else { return Vec::new(); };
-    let home = PathBuf::from(home);
+    let Some(home) = home_dir() else { return Vec::new(); };
 
     #[cfg(target_os = "macos")]
     let candidates: &[&str] = &[
@@ -58,6 +57,28 @@ fn profile_roots() -> Vec<PathBuf> {
     ];
 
     candidates.iter().map(|c| home.join(c)).collect()
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(profile) = env::var("USERPROFILE") {
+            if !profile.is_empty() {
+                return Some(PathBuf::from(profile));
+            }
+        }
+        if let (Ok(drive), Ok(path)) = (env::var("HOMEDRIVE"), env::var("HOMEPATH")) {
+            if !drive.is_empty() && !path.is_empty() {
+                return Some(PathBuf::from(format!("{drive}{path}")));
+            }
+        }
+    }
+    None
 }
 
 fn endpoint_from_profile(profile: &Path) -> Option<Endpoint> {

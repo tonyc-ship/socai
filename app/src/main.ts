@@ -182,6 +182,16 @@ function truncate(s: string, n: number): string {
 async function main(): Promise<void> {
   try {
     status = await invoke<Status>("cdp_status");
+    if (status.state === "connected") {
+      // Initial cdp:targets_changed was emitted at connect time, which may
+      // have happened before this webview started listening (e.g. tauri dev
+      // HMR). Pull a fresh snapshot so the tab list isn't blank.
+      try {
+        pages = await invoke<TargetInfo[]>("cdp_list_pages");
+      } catch (e) {
+        console.error("initial cdp_list_pages failed:", e);
+      }
+    }
   } catch (e) {
     console.error("initial cdp_status failed:", e);
   }
