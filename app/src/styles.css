@@ -187,7 +187,7 @@ body.has-paper > * { position: relative; z-index: 1; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: var(--sp-5);
   padding: var(--sp-9) var(--sp-6);
   text-align: center;
@@ -202,5 +202,125 @@ body.has-paper > * { position: relative; z-index: 1; }
   margin: 0;
 }
 .hero .t-lede {
-  max-width: 38ch;
+  max-width: 50ch;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn-primary,
+.btn-ghost {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--r-3);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease),
+              color var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease);
+  user-select: none;
+}
+.btn-primary {
+  background: var(--ink-0);
+  color: var(--ink-9);
+  border: 1px solid var(--ink-0);
+}
+.btn-primary:hover { background: var(--ink-1); }
+.btn-primary:active { background: var(--ink-2); }
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-muted);
+  border: var(--hairline);
+}
+.btn-ghost:hover {
+  color: var(--ink-0);
+  border-color: var(--line-strong);
+}
+
+/* ── Action panel (test/search) ───────────────────────────────── */
+.action-panel {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-5);
+  border: var(--hairline);
+  border-radius: var(--r-4);
+  background: var(--surface);
+}
+.action-panel .t-eyebrow {
+  margin: 0;
+  text-align: left;
+}
+.action-form {
+  display: flex;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.input-field {
+  flex: 1;
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--hairline);
+  border-radius: var(--r-3);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  background: var(--canvas);
+  color: var(--fg);
+  transition: border-color var(--t-fast) var(--ease);
+}
+.input-field::placeholder {
+  color: var(--fg-faint);
+}
+.input-field:focus {
+  outline: none;
+  border-color: var(--ink-0);
+}
+.input-field:disabled {
+  background: var(--surface-2);
+  color: var(--fg-soft);
+  cursor: not-allowed;
+}
+.action-form .btn-primary:disabled {
+  background: var(--ink-3);
+  border-color: var(--ink-3);
+  cursor: not-allowed;
+}
+.action-status {
+  min-height: 1.2em;
+  text-align: left;
+  margin: 0;
+}
+
+/* ── Tab list ─────────────────────────────────────────────────── */
+.tab-list {
+  list-style: none;
+  margin: var(--sp-6) 0 0 0;
+  padding: 0;
+  width: 100%;
+  max-width: 720px;
+  border-top: var(--hairline);
+  text-align: left;
+}
+.tab-row {
+  padding: var(--sp-3) var(--sp-2);
+  border-bottom: var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.tab-title {
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-url {
+  color: var(--fg-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
