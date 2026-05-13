@@ -114,9 +114,10 @@ class BrowserTaskSessionManager:
         label: str = "",
         site: str = "",
         metadata: dict[str, Any] | None = None,
+        wait_for_load: bool = True,
     ) -> BrowserTaskSession:
         browser = await self.ensure_browser()
-        page = await browser.new_page(start_url)
+        page = await browser.new_page(start_url, wait_for_load=wait_for_load)
         task = BrowserTaskSession(
             task_id=uuid.uuid4().hex,
             page=page,

@@ -372,9 +372,20 @@ const SocaiXhsPageScripts = (() => {
     return m ? m[1] : '';
   }
 
+  // URLs that match the fallback selectors but aren't real note carousel
+  // images: author/commenter avatars, sponsor icons, sticker assets, etc.
+  // Note carousel images come from sns-webpic-* / ci.xiaohongshu.com.
+  const NON_NOTE_IMAGE_PATTERNS = [
+    /\/avatar\//i,                            // sns-avatar-qc.xhscdn.com/avatar/...
+    /\/comment\//i,                           // comment-area image attachments
+    /picasso-static\.xiaohongshu\.com/i,      // UI / fe-platform assets
+    /fe-static\.xhscdn\.com/i,                // misc static assets
+  ];
+
   function cleanImageUrl(url) {
     const value = absUrl(url || '');
     if (!value || value.startsWith('data:') || value.startsWith('blob:')) return '';
+    if (NON_NOTE_IMAGE_PATTERNS.some((re) => re.test(value))) return '';
     return value.replace(/imageView2\/\d\/w\/\d+\/format\/[^/?#]+/i, '');
   }
 
@@ -390,6 +401,10 @@ const SocaiXhsPageScripts = (() => {
     for (const sel of NOTE_IMAGE_SELECTORS) {
       for (const img of $$(sel, root)) {
         if (!isVisible(img)) continue;
+        // Broad fallback selectors (#noteContainer img, .note-detail img)
+        // also match imgs inside the comment area. Skip them — note carousel
+        // imgs live above the comments DOM.
+        if (inCommentArea(img)) continue;
         const candidates = [
           img.currentSrc, img.src, img.getAttribute('src'),
           img.getAttribute('data-src'), img.getAttribute('data-original'),

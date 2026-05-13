@@ -12,7 +12,7 @@ from typing import Any
 from socai.browser.cdp.page import PageSession
 from socai.media import MediaProcessor
 
-from .entities import XhsAuthorProfile, XhsNote, XhsNoteCard
+from .entities import XhsAuthorProfile, XhsNote, XhsNoteCard, parse_count_text
 
 
 XHS_HOME_URL = "https://www.xiaohongshu.com/explore"
@@ -127,6 +127,11 @@ class XhsRuntime:
         submit = await self.submit_search(keyword, wait_seconds=wait_seconds)
         ok = bool(submit.get("ok"))
         cards = await self.extract_search_cards() if ok else []
+        # `url_keyword` is internal — used by `_search_transition_ok` to detect
+        # bad redirects — and redundant with the `url` field at the boundary.
+        state = submit.get("state") if isinstance(submit, dict) else None
+        if isinstance(state, dict):
+            state.pop("url_keyword", None)
         return {
             "ok": ok,
             "query": keyword,
@@ -435,8 +440,10 @@ class XhsRuntime:
             body = {}
         hashtags = body.get("hashtags") if isinstance(body.get("hashtags"), list) else []
         image_urls = body.get("image_urls") if isinstance(body.get("image_urls"), list) else []
+        # Cover is always at index 0; we keep that ordering invariant and no
+        # longer surface a redundant is_cover flag.
         images = [
-            {"url": str(url), "index": index, "is_cover": index == 0}
+            {"url": str(url), "index": index}
             for index, url in enumerate(image_urls[: max(0, int(max_images or 0)) or len(image_urls)])
             if str(url).strip()
         ]
@@ -502,7 +509,7 @@ class XhsRuntime:
         if not note.images:
             urls = await self.collect_carousel_images(max_images=max_images)
             note.images = [
-                {"url": url, "index": index, "is_cover": index == 0}
+                {"url": url, "index": index}
                 for index, url in enumerate(urls[:max_images])
             ]
             note.image_count = len(note.images)
@@ -590,12 +597,35 @@ class XhsRuntime:
             }
         payload: dict[str, Any] = {"ok": True, "entity": note.to_dict()}
         if with_comments:
-            try:
-                payload["comments"] = await self.extract_comments(max_comments=max_comments)
-            except Exception as exc:  # noqa: BLE001 - comments are best-effort
-                payload["comments"] = []
-                payload["comments_error"] = str(exc)
+            payload["comments"] = await self._extract_comments_with_retry(
+                expected=parse_count_text(note.comments_count),
+                max_comments=max_comments,
+                payload=payload,
+            )
         return payload
+
+    async def _extract_comments_with_retry(
+        self,
+        *,
+        expected: int,
+        max_comments: int,
+        payload: dict,
+        attempts: int = 4,
+        wait_s: float = 0.4,
+    ) -> list[dict]:
+        """Comments load lazily after the note shell renders — retry briefly
+        if the note advertises comments but our first read returns empty."""
+        result: list[dict] = []
+        for attempt in range(attempts):
+            try:
+                result = await self.extract_comments(max_comments=max_comments)
+            except Exception as exc:  # noqa: BLE001 - comments are best-effort
+                payload["comments_error"] = str(exc)
+                result = []
+            if result or expected <= 0:
+                return result
+            await asyncio.sleep(wait_s)
+        return result
 
     async def extract_profile(self, *, max_notes: int = 20, scroll_rounds: int = 6) -> XhsAuthorProfile:
         await self.ensure_xhs(navigate_if_needed=False)

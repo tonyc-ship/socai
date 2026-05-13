@@ -10,7 +10,14 @@ desktop app (`app/`). The desktop app surfaces the agent to users.
   page primitives, task tabs.
 - `socai/browser/tools/`: generic browser tools built on CDP page sessions.
 - `socai/sites/xhs/`: Xiaohongshu entities, JS extractors, runtime, site tools.
-- `socai/cli/`: interactive CLI (`socai.cli.repl`). Entry point: `uv run socai`.
+- `socai/cli/`: entry point `uv run socai`. Submodules:
+  - `commands`: argparse dispatcher (`socai search_notes` / `topic_scan` /
+    `extract_note` / `stop`). No-args path falls through to the REPL.
+  - `repl`: interactive prompt-toolkit UI.
+  - `runner`: headless task runner (reused by REPL and the future Tauri host).
+  - `daemon` + `daemon_client`: long-lived process owning one browser "tool
+    tab" reused across CLI calls, exposed over `~/.socai/daemon.sock`.
+    Auto-spawns on first tool call, auto-shuts after 3h idle.
 
 Rules:
 
@@ -18,6 +25,9 @@ Rules:
   task tab per user task.
 - Keep JS extractors in a small JSON-returning contract; Python injects, calls,
   and validates results.
+- Tool subcommands wrap existing `XhsRuntime` / site tools — don't duplicate
+  XHS logic in the daemon. Any cleanups to the public data shape go in
+  `sites/xhs/entities.py` and `sites/xhs/tools.py`, not in the daemon layer.
 
 ## Desktop app — `app/`
 

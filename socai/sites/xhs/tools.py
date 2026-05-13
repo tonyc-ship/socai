@@ -24,6 +24,19 @@ def _json(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+_TOP_COMMENT_KEEP = ("text", "username", "likes", "time")
+
+
+def _slim_top_comments(items: list, *, limit: int = 5) -> list[dict]:
+    """Project a raw comment list to the public top_comments shape."""
+    out: list[dict] = []
+    for item in (items or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append({key: item.get(key) for key in _TOP_COMMENT_KEEP})
+    return out
+
+
 _LEVEL_ORDER = {"card": 0, "lite": 1, "deep": 2}
 _SCAN_PROFILES = {
     "quick": {"deep": 0, "lite": 3, "deep_comments": 0, "lite_comments": 4, "media": False},
@@ -276,13 +289,16 @@ class XhsReadNoteTool(XhsToolBase):
         entity = payload.get("entity") or {}
         comments = payload.get("comments") or []
         if isinstance(entity, dict):
-            entity["top_comments"] = comments[:5]
+            entity["top_comments"] = _slim_top_comments(comments)
+        # The full ``comments`` list is collapsed into ``entity.top_comments``;
+        # the top-level field is intentionally not surfaced.
+        payload.pop("comments", None)
         label = f"xhs_note_{entity.get('note_id') or 'note'}"
         reply = await self._emit(
             ctx,
             label=label,
             payload=payload,
-            preview={"ok": payload.get("ok", False), "entity": entity, "comments": comments[:8]},
+            preview={"ok": payload.get("ok", False), "entity": entity},
         )
         artifact = _artifact_from_reply(reply)
         if payload.get("ok") and isinstance(entity, dict):
@@ -484,7 +500,7 @@ class XhsTopicScanTool(XhsToolBase):
                 scan_timing.record(f"read_note_{level}", time.perf_counter() - read_t0)
                 entity = payload.get("entity") or {}
                 if isinstance(entity, dict):
-                    entity["top_comments"] = (payload.get("comments") or [])[:5]
+                    entity["top_comments"] = _slim_top_comments(payload.get("comments") or [])
                     try:
                         screenshot_path = ctx.next_screenshot_path(f"xhs_topic_{index + 1}_{level}")
                         with scan_timing.measure("note_screenshot"):
@@ -512,7 +528,6 @@ class XhsTopicScanTool(XhsToolBase):
                     "source_position": card.position,
                     "ok": bool(payload.get("ok")),
                     "entity": entity,
-                    "comments": (payload.get("comments") or [])[:comment_count],
                     "error": payload.get("error", ""),
                 })
             except Exception as exc:  # noqa: BLE001 - continue sampling

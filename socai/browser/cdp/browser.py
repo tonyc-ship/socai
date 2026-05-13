@@ -119,14 +119,39 @@ class BrowserSession:
             return await self.attach_page(pages[0].target_id)
         return await self.new_page()
 
-    async def new_page(self, url: str = "about:blank", *, activate: bool = True) -> PageSession:
-        # Create blank first, then navigate after attach. This avoids the
-        # createTarget(url) race where load polling can see about:blank.
-        created = await self.send("Target.createTarget", {"url": "about:blank"})
-        page = await self.attach_page(str(created["targetId"]), activate=activate)
-        if url != "about:blank":
-            await page.navigate(url)
-        return page
+    async def new_page(
+        self,
+        url: str = "about:blank",
+        *,
+        activate: bool = True,
+        wait_for_load: bool = True,
+    ) -> PageSession:
+        """Open a new tab and return its attached ``PageSession``.
+
+        Two strategies:
+
+        - ``wait_for_load=True`` (default, safe): create the tab as
+          about:blank, attach + enable domains, then call ``page.navigate(url)``
+          which waits for ``loadEventFired``. Returns when the page is loaded.
+          A few seconds of visible about:blank flicker is the cost — the
+          alternative (createTarget(url) + load polling) races: the load event
+          can fire before we finish attaching, leaving polling stuck.
+
+        - ``wait_for_load=False`` (fast): pass ``url`` directly to
+          ``Target.createTarget`` so Chrome starts navigating the moment the
+          tab appears (no about:blank flicker). Returns as soon as the tab is
+          attached and CDP domains are enabled — load may still be in flight.
+          Callers must do their own readiness polling.
+        """
+        if wait_for_load:
+            created = await self.send("Target.createTarget", {"url": "about:blank"})
+            page = await self.attach_page(str(created["targetId"]), activate=activate)
+            if url != "about:blank":
+                await page.navigate(url)
+            return page
+
+        created = await self.send("Target.createTarget", {"url": url})
+        return await self.attach_page(str(created["targetId"]), activate=activate)
 
     async def switch_page(self, target_id: str) -> PageSession:
         return await self.attach_page(target_id, activate=True)

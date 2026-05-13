@@ -50,6 +50,9 @@ class XhsNoteCard:
         return parse_count_text(self.likes)
 
     def to_dict(self) -> dict:
+        # likes_value and xsec_token are intentionally omitted from the public
+        # shape: likes_value is derivable from `likes`, and xsec_token is
+        # already embedded inside `link`.
         return {
             "note_id": self.note_id,
             "title": self.title,
@@ -57,12 +60,10 @@ class XhsNoteCard:
             "author_id": self.author_id,
             "author_url": normalize_url(self.author_url),
             "likes": self.likes,
-            "likes_value": self.likes_value,
             "link": self.link,
             "cover_url": self.cover_url,
             "type": self.type,
             "position": self.position,
-            "xsec_token": self.xsec_token,
         }
 
 
@@ -93,6 +94,10 @@ class XhsNote:
     wait_meta: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        # Omitted intentionally:
+        # - content_summary: redundant with full `content`
+        # - *_value fields: derivable from their string counterparts
+        # - shares / shares_value: not rendered in the XHS modal
         payload: dict = {
             "note_id": self.note_id,
             "url": normalize_url(self.url),
@@ -102,20 +107,14 @@ class XhsNote:
             "author_id": self.author_id,
             "author_url": normalize_url(self.author_url),
             "content": self.content,
-            "content_summary": self.content[:500],
             "content_source": self.content_source,
             "hashtags": self.hashtags[:12],
             "date": self.date,
             "location": self.location,
             "ip_location": self.ip_location,
             "likes": self.likes,
-            "likes_value": parse_count_text(self.likes),
             "favorites": self.favorites,
-            "favorites_value": parse_count_text(self.favorites),
             "comments_count": self.comments_count,
-            "comments_count_value": parse_count_text(self.comments_count),
-            "shares": self.shares,
-            "shares_value": parse_count_text(self.shares),
             "image_count": self.image_count or len(self.images),
             "images": self.images,
             "video": self.video,
