@@ -7,7 +7,6 @@ returns a structured result dict.
 
 from __future__ import annotations
 
-import re
 from typing import Callable
 
 from socai.agent.backends import create_backend
@@ -16,55 +15,41 @@ from socai.agent.run_logging import JsonlEventLogger, current_traceback, make_ru
 from socai.browser.cdp import BrowserTaskSessionManager
 from socai.browser.tools.browser import build_browser_tools
 from socai.media import MediaProcessor
-from socai.sites.toolbox import SiteToolboxTool, site_catalog_prompt
+from socai.sites.toolbox import SiteToolboxTool
 from socai.sites.xhs import XhsRuntime
 from socai.sites.xhs.tools import build_xhs_tools
 
 
-DEFAULT_START_URL = "about:blank"
+XHS_SITE = "xiaohongshu"
+DEFAULT_START_URL = "https://www.xiaohongshu.com"
 DEFAULT_MAX_TURNS = 30
 
 AGENT_INSTRUCTIONS = """\
-You are running inside the Socai CLI. A fresh browser tab has been opened over a
-reused CDP connection — use the browser tools to drive it.
+You are running inside the Socai CLI. The browser is locked to Xiaohongshu
+(xiaohongshu.com / 小红书) — every task is an XHS task. Do NOT navigate to or
+search on any other website. If the user's task cannot be answered from XHS,
+say so plainly and stop.
 
-Web-use rules:
-- You may use any website. Start from the user's URL when one is provided;
-  otherwise navigate or use a site toolkit when the task implies one.
-- Use `browser_screenshot` early when visual state matters. Verify meaningful
-  clicks, modal changes, and navigation with a fresh screenshot or page state.
-- Prefer generic `browser_*` tools for unknown sites. Prefer a site toolkit only
-  after calling `site_toolbox` for that site; the next turn will expose the
-  site-specific tools and knowledge.
-- When selectors are stable, use selector tools. When a site crosses iframes,
-  shadow DOM, or has visible controls but weak DOM structure, coordinate clicks
-  from screenshots are acceptable.
+A fresh tab has been opened on xiaohongshu.com over a reused CDP connection.
 
-Reply in the same language as the task. Ground every claim in tool output, and
-mention the saved artifact path only when it adds value.
+How to work:
+- On your first turn, call `site_toolbox` with `site="xiaohongshu"` to unlock
+  the `xhs_*` site tools.
+- After unlocking, prefer the `xhs_*` site tools (search_notes, topic_scan,
+  read_note, …) over generic `browser_*` tools — they encapsulate the site's
+  quirks.
+- Use generic `browser_*` tools only when no `xhs_*` tool fits (e.g. clicking
+  a non-standard UI control on an XHS page).
+- Use `browser_screenshot` early when visual state matters; verify modal
+  changes and navigation with a fresh screenshot or `xhs_page_state`.
+
+Reply in the same language as the task. Ground every claim in tool output,
+and mention the saved artifact path only when it adds value.
 """
 
 
 AgentEventCallback = Callable[[str, str], None]
 BrowserEventCallback = Callable[[str], None]
-
-
-def _task_url(task_text: str) -> str:
-    match = re.search(r"https?://[^\s)>\]]+", str(task_text or ""))
-    return match.group(0).rstrip(".,，。") if match else ""
-
-
-def _start_url_for_task(task_text: str = "") -> str:
-    url = _task_url(task_text)
-    return url or DEFAULT_START_URL
-
-
-def _instructions() -> str:
-    parts = [
-        AGENT_INSTRUCTIONS,
-        site_catalog_prompt(),
-    ]
-    return "\n\n".join(part.strip() for part in parts if part.strip())
 
 
 async def run_agent_task(
@@ -91,7 +76,7 @@ async def run_agent_task(
     cli_log_path = run_dir / "cli_events.jsonl"
     cli_log = JsonlEventLogger(cli_log_path)
     backend = None
-    start_url = DEFAULT_START_URL
+    start_url = DEFAULT_START_URL  # always xhs — TUI is locked to xiaohongshu
 
     reused = manager.browser is not None
     previous_on_event = manager.on_event
@@ -112,7 +97,6 @@ async def run_agent_task(
     task = None
     try:
         backend = create_backend(model)
-        start_url = _start_url_for_task(task_text)
         cli_log.write(
             "cli_task_start",
             task=task_text,
@@ -120,7 +104,12 @@ async def run_agent_task(
             start_url=start_url,
             connection="reused" if reused else "new",
         )
-        task = await manager.create_task(start_url=start_url, label=task_text[:80], site="")
+        task = await manager.create_task(
+            start_url=start_url,
+            label=task_text[:80],
+            site=XHS_SITE,
+            wait_for_load=False,
+        )
         cli_log.write("browser_task_created", task=task.to_dict())
         browser = await manager.ensure_browser()
 
@@ -136,7 +125,7 @@ async def run_agent_task(
             run_dir=run_dir,
             max_turns=max_turns,
             model=model,
-            extra_instructions=_instructions(),
+            extra_instructions=AGENT_INSTRUCTIONS,
             log_callback=emit_agent_event,
         )
         result.update(
