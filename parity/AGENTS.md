@@ -46,20 +46,59 @@ sees no failure signal, no hang indication; the Bash call just takes
 however long the user takes to click. **Therefore: preemptively screenshot
 before any CDP-using command**, do not wait for failure.
 
+The popup is a native macOS dialog, not a webpage, so the `claude-in-chrome`
+MCP screenshot tool can't see it (it's browser-scoped). Use macOS
+system-level `screencapture` + the `Read` tool, and `osascript` to click.
+
 Workflow:
 
-1. Load the computer-use tool the first time you need it in a session
-   (deferred MCP tool: `ToolSearch select:mcp__claude-in-chrome__computer`).
-2. **Before** running the first parity / CDP command of a session, take a
-   screenshot and check for the approval dialog. If present, click "Allow".
-3. After clicking, proceed with the parity command via Bash.
-4. If a subsequent command later in the session fails or behaves oddly,
-   take another screenshot — sometimes Chrome re-prompts after profile
-   changes.
+1. **Before** running the first parity / CDP command of a session:
+
+   ```bash
+   screencapture -x parity/_screenshots/<scenario>.png
+   ```
+
+   Then `Read` the PNG with the standard Read tool. Look for the Chrome
+   approval dialog ("Google Chrome wants to allow remote debugging" or the
+   chrome://inspect "Allow" button if that page is in focus).
+
+2. If a popup is visible, click "Allow" via AppleScript:
+
+   ```bash
+   osascript -e 'tell application "System Events" to tell process "Google Chrome" \
+       to click button "Allow" of window 1'
+   ```
+
+   If clicking by name fails, fall back to clicking by coordinate (read the
+   coords off the screenshot):
+
+   ```bash
+   osascript -e 'tell application "System Events" to click at {<x>, <y>}'
+   ```
+
+3. If Chrome isn't visible in the screenshot, it may be in a different Space
+   or hidden:
+
+   ```bash
+   osascript -e 'tell application "Google Chrome" to activate'
+   ```
+
+   Then re-screenshot.
+
+4. After clicking, proceed with the parity command via Bash. If a later
+   command fails or behaves oddly, repeat the screenshot — Chrome re-prompts
+   after profile changes or long idle periods.
 
 If the popup does not appear and discovery still fails, the problem is
 upstream (Chrome not launched with `--remote-debugging-port`, profile
-locked, etc.) — at that point ask the user.
+locked, accessibility permission missing for the terminal, etc.) — at that
+point ask the user.
+
+> Accessibility permission: `osascript` system-level clicks require the
+> terminal application running Claude Code (iTerm2 / Terminal.app) to have
+> Accessibility permission in System Settings → Privacy & Security →
+> Accessibility. If `osascript click at` produces no effect, that's the
+> usual cause.
 
 ## What to commit, what to ignore
 

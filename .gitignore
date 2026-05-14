@@ -16,3 +16,4 @@ target/
 # Parity scratch runs (commit fixtures intentionally, not ad-hoc smoke runs)
 parity/phase1_smoke/
 parity/extract_note/
+parity/_screenshots/

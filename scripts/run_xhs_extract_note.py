@@ -37,7 +37,14 @@ async def main() -> int:
 
     browser = await BrowserSession.connect(endpoint=endpoint)
     try:
-        page = await browser.new_page(args.url, wait_for_load=True)
+        # BrowserSession.new_page(wait_for_load=True) hardcodes a 15s navigate
+        # timeout that XHS sometimes exceeds when rate-limiting. Inline the
+        # same flow with a longer timeout. (Target.createTarget(url) directly
+        # is unreliable here because about:blank's readyState='complete' fires
+        # before the real navigation starts.)
+        created = await browser.send("Target.createTarget", {"url": "about:blank"})
+        page = await browser.attach_page(str(created["targetId"]))
+        await page.navigate(args.url, timeout=60.0)
         try:
             runtime = XhsRuntime(page)
             note = await runtime.extract_note(wait_seconds=args.wait_seconds)
