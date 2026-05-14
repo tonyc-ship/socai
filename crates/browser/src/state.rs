@@ -17,6 +17,7 @@ pub struct TargetInfo {
     pub url: String,
 }
 
+#[allow(clippy::large_enum_variant)] // only one CdpState exists at a time
 pub enum CdpState {
     Disconnected {
         reason: String,

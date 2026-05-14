@@ -3673,10 +3673,9 @@ dependencies = [
 name = "socai_app"
 version = "0.1.0"
 dependencies = [
- "chromiumoxide",
- "futures",
  "serde",
  "serde_json",
+ "socai-browser",
  "tauri",
  "tauri-build",
  "tokio",
