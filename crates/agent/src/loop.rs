@@ -1,0 +1,584 @@
+//! Agent loop — the heart of the agent runtime.
+//!
+//! ```text
+//!   while turn < max_turns:
+//!     response = backend.send(system, messages, tool_schemas)
+//!     append assistant
+//!     if no tool calls: break
+//!     for tc in tool_calls:
+//!       result = dispatcher.call(tc)
+//!       append tool_result
+//! ```
+//!
+//! Cross-cutting concerns are split out:
+//! - `signature.rs` — md5 fingerprint for repeated-call detection
+//! - `memory.rs`    — windowing the message history once it's long
+//! - `report.rs`    — final report enrichment with artifact links
+//! - `compaction.rs` — truncating tool_result bodies for the history budget
+//! - `run_state.rs` / `run_logging.rs` — persisting events + artifacts
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+
+use serde_json::{json, Value};
+use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
+
+use crate::compaction::{compress_text_maybe_json, TOOL_RESULT_TEXT_MAX_CHARS};
+use crate::llm::{
+    Backend, Block, LLMResponse, Message, StopReason, ToolCall, ToolResultContent, ToolSchema,
+};
+use crate::memory::prepare_messages_for_context;
+use crate::report::report_with_artifacts;
+use crate::run_logging::{make_run_dir, RunDebugLogger};
+use crate::run_state::RunState;
+use crate::signature::tool_call_signature;
+use crate::system_prompt::build_system_prompt;
+use crate::tool::{SharedTool, ToolContext, ToolResult, ToolResultBlock};
+
+/// Events streamed to subscribers while the agent is running.
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    Started {
+        run_id: String,
+        task: String,
+        model: String,
+    },
+    Turn {
+        turn: u32,
+    },
+    AssistantText {
+        turn: u32,
+        text: String,
+    },
+    Reasoning {
+        turn: u32,
+        text: String,
+    },
+    ToolCall {
+        turn: u32,
+        name: String,
+        input: Value,
+        repeat_count: u32,
+    },
+    ToolResult {
+        turn: u32,
+        name: String,
+        summary: String,
+        duration_ms: u64,
+        error: Option<String>,
+    },
+    ApiError {
+        turn: u32,
+        message: String,
+    },
+    Done {
+        run_id: String,
+        turns: u32,
+        final_text: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentOptions {
+    pub max_turns: u32,
+    pub max_tokens: u32,
+    pub extra_instructions: String,
+    pub run_dir: Option<PathBuf>,
+    /// Site names to pre-enable in ToolContext (gates `defer_until_site` tools).
+    pub enabled_sites: Vec<String>,
+    /// Recent-message window kept verbatim when history is condensed.
+    pub keep_recent_messages: usize,
+    /// Memory budget for the condensed context_block.
+    pub memory_max_chars: usize,
+}
+
+impl Default for AgentOptions {
+    fn default() -> Self {
+        Self {
+            max_turns: 30,
+            max_tokens: 8192,
+            extra_instructions: String::new(),
+            run_dir: None,
+            enabled_sites: Vec::new(),
+            keep_recent_messages: 12,
+            memory_max_chars: 6000,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentOutcome {
+    pub run_id: String,
+    pub run_dir: PathBuf,
+    pub turns: u32,
+    pub final_text: String,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+}
+
+pub async fn run_agent(
+    task: &str,
+    backend: Arc<dyn Backend>,
+    tools: Vec<SharedTool>,
+    options: AgentOptions,
+) -> anyhow::Result<AgentOutcome> {
+    let (tx, _rx) = broadcast::channel(256);
+    run_agent_with_events(task, backend, tools, options, tx).await
+}
+
+pub async fn run_agent_with_events(
+    task: &str,
+    backend: Arc<dyn Backend>,
+    tools: Vec<SharedTool>,
+    options: AgentOptions,
+    events: broadcast::Sender<AgentEvent>,
+) -> anyhow::Result<AgentOutcome> {
+    let run_id = new_run_id();
+    let run_dir = options.run_dir.unwrap_or_else(|| make_run_dir(task));
+    ensure_dir(&run_dir)?;
+    let run_state = Arc::new(RunState::new(&run_dir, task, backend.model())?);
+    let debug_log = RunDebugLogger::new(&run_dir);
+
+    let mut ctx = ToolContext::new(&run_id, &run_dir).with_run_state(Arc::clone(&run_state));
+    for site in &options.enabled_sites {
+        ctx.enable_site(site.clone());
+    }
+
+    let mut messages: Vec<Message> = vec![Message::user(task.to_string())];
+
+    debug_log.event(
+        "task_start",
+        json!({
+            "task": task,
+            "model": backend.model(),
+            "tools": tools.iter().map(|t| t.name()).collect::<Vec<_>>(),
+        }),
+    );
+    emit(
+        &events,
+        AgentEvent::Started {
+            run_id: run_id.clone(),
+            task: task.to_string(),
+            model: backend.label(),
+        },
+    );
+
+    let mut turn = 0u32;
+    let mut final_text = String::new();
+    let mut total_input_tokens = 0u64;
+    let mut total_output_tokens = 0u64;
+    let mut context_memory: Vec<String> = Vec::new();
+    let mut tool_call_history: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    let mut completed = false;
+    let mut last_system: String = build_system_prompt(&[], &options.extra_instructions);
+
+    while turn < options.max_turns {
+        turn += 1;
+        ctx.turn = turn;
+        emit(&events, AgentEvent::Turn { turn });
+        debug!(turn, "agent turn start");
+
+        let schemas = tool_schemas(&tools, &ctx);
+        let tool_names: Vec<&str> = schemas.iter().map(|s| s.name.as_str()).collect();
+        let system = build_system_prompt(&tool_names, &options.extra_instructions);
+        last_system = system.clone();
+        let request_messages = prepare_messages_for_context(
+            &messages,
+            Some(&run_state),
+            &context_memory,
+            options.keep_recent_messages,
+            options.memory_max_chars,
+        );
+
+        let response: LLMResponse = match backend
+            .send(&system, &request_messages, &schemas, options.max_tokens)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = format!("{e:#}");
+                warn!(turn, error = %msg, "backend error");
+                emit(
+                    &events,
+                    AgentEvent::ApiError {
+                        turn,
+                        message: msg.clone(),
+                    },
+                );
+                debug_log.api_error(turn, &msg, false);
+                final_text = format!("API error: {msg}");
+                break;
+            }
+        };
+
+        total_input_tokens += response.input_tokens;
+        total_output_tokens += response.output_tokens;
+
+        if !response.reasoning_content.trim().is_empty() {
+            emit(
+                &events,
+                AgentEvent::Reasoning {
+                    turn,
+                    text: response.reasoning_content.clone(),
+                },
+            );
+        }
+
+        let assistant_blocks = response.to_assistant_blocks();
+        messages.push(Message::assistant_blocks(assistant_blocks));
+
+        let mut visible_texts: Vec<String> = Vec::new();
+        for text in &response.text_blocks {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                visible_texts.push(trimmed.to_string());
+                emit(
+                    &events,
+                    AgentEvent::AssistantText {
+                        turn,
+                        text: trimmed.to_string(),
+                    },
+                );
+                final_text = trimmed.to_string();
+            }
+        }
+
+        let tool_call_summary: Vec<Value> = response
+            .tool_calls
+            .iter()
+            .map(|tc| json!({"name": tc.name, "input": tc.input}))
+            .collect();
+        run_state.note_assistant_turn(turn, &visible_texts.join("\n"), &tool_call_summary);
+        debug_log.event(
+            "llm_response",
+            json!({
+                "turn": turn,
+                "stop_reason": stop_reason_str(response.stop_reason),
+                "text": visible_texts.join("\n"),
+                "tool_calls": tool_call_summary,
+                "usage": {
+                    "input_tokens": response.input_tokens,
+                    "output_tokens": response.output_tokens,
+                },
+            }),
+        );
+
+        if response.tool_calls.is_empty() {
+            completed = true;
+            break;
+        }
+
+        let mut tool_result_blocks: Vec<Block> = Vec::new();
+        for (idx, tc) in response.tool_calls.iter().enumerate() {
+            let ToolCall { id, name, input } = tc;
+            ctx.active_tool_name = name.clone();
+
+            let sig = tool_call_signature(name, input);
+            let history = tool_call_history.entry(sig).or_default();
+            history.push(turn);
+            let repeat_count = history.len() as u32;
+
+            emit(
+                &events,
+                AgentEvent::ToolCall {
+                    turn,
+                    name: name.clone(),
+                    input: input.clone(),
+                    repeat_count,
+                },
+            );
+            run_state.note_tool_call(turn, name, input);
+            debug_log.event(
+                "tool_call_start",
+                json!({
+                    "turn": turn,
+                    "sequence": idx + 1,
+                    "tool": name,
+                    "input": input,
+                    "repeat_count": repeat_count,
+                }),
+            );
+
+            let started = Instant::now();
+            let (result, error) = dispatch_tool(&tools, name, input, &ctx).await;
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let duration_s = (duration_ms as f64) / 1000.0;
+
+            let result_content = tool_result_to_content(&result);
+            let flat = result.flat_text();
+            let summary = truncate_summary(&flat, 240);
+            emit(
+                &events,
+                AgentEvent::ToolResult {
+                    turn,
+                    name: name.clone(),
+                    summary: summary.clone(),
+                    duration_ms,
+                    error: error.clone(),
+                },
+            );
+            run_state.note_tool_result(turn, name, input, &summary, duration_s);
+            debug_log.tool_result(
+                turn,
+                (idx + 1) as u32,
+                name,
+                input,
+                &content_for_log(&result_content),
+                duration_s,
+                &summary,
+                repeat_count,
+                error.as_deref().unwrap_or(""),
+            );
+
+            tool_result_blocks.push(Block::ToolResult {
+                tool_use_id: id.clone(),
+                content: bound_content_for_history(&result_content),
+            });
+
+            context_memory.push(format!(
+                "- turn {turn} {name}({}): {summary}",
+                truncate_summary(&serde_json::to_string(input).unwrap_or_default(), 160)
+            ));
+            if context_memory.len() > 80 {
+                let overflow = context_memory.len() - 80;
+                context_memory.drain(0..overflow);
+            }
+            ctx.active_tool_name.clear();
+        }
+        messages.push(Message::user_blocks(tool_result_blocks));
+        debug_log.event("turn_end", json!({"turn": turn}));
+    }
+
+    if !completed && turn >= options.max_turns {
+        info!(turn, "reached max_turns, forcing final summary");
+        messages.push(Message::user(format!(
+            "You have reached the maximum of {} tool-using turns. Do not call any \
+             more tools. Based on the evidence already gathered, produce the best \
+             possible final answer for the user now in the same language as the \
+             original task. If information is incomplete, state what is known, \
+             what is missing, and give your best-effort conclusion.",
+            options.max_turns
+        )));
+        let request_messages = prepare_messages_for_context(
+            &messages,
+            Some(&run_state),
+            &context_memory,
+            options.keep_recent_messages,
+            options.memory_max_chars,
+        );
+        match backend
+            .send(&last_system, &request_messages, &[], options.max_tokens)
+            .await
+        {
+            Ok(response) => {
+                total_input_tokens += response.input_tokens;
+                total_output_tokens += response.output_tokens;
+                for text in &response.text_blocks {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        emit(
+                            &events,
+                            AgentEvent::AssistantText {
+                                turn: turn + 1,
+                                text: trimmed.to_string(),
+                            },
+                        );
+                        final_text = trimmed.to_string();
+                    }
+                }
+                debug_log.event(
+                    "llm_response",
+                    json!({
+                        "turn": turn + 1,
+                        "forced_summary": true,
+                        "text": final_text,
+                        "usage": {
+                            "input_tokens": response.input_tokens,
+                            "output_tokens": response.output_tokens,
+                        },
+                    }),
+                );
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                warn!(turn = turn + 1, error = %msg, "forced summary error");
+                emit(
+                    &events,
+                    AgentEvent::ApiError {
+                        turn: turn + 1,
+                        message: msg.clone(),
+                    },
+                );
+                debug_log.api_error(turn + 1, &msg, true);
+            }
+        }
+    }
+
+    emit(
+        &events,
+        AgentEvent::Done {
+            run_id: run_id.clone(),
+            turns: turn,
+            final_text: final_text.clone(),
+        },
+    );
+
+    let enriched_report = report_with_artifacts(&final_text, Some(&run_state));
+    let _ = std::fs::write(run_dir.join("report.md"), &enriched_report);
+
+    let serialized_messages = serde_json::to_value(&messages).unwrap_or(Value::Null);
+    debug_log.write_conversation(&last_system, &serialized_messages);
+
+    let summary = json!({
+        "task": task,
+        "model": backend.label(),
+        "turns": turn,
+        "run_dir": run_dir.to_string_lossy(),
+        "input_tokens": total_input_tokens,
+        "output_tokens": total_output_tokens,
+        "reasoning_log_file": "reasoning_log.jsonl",
+        "conversation_file": "conversation.json",
+        "report_file": "report.md",
+        "tool_results_dir": "tool_results",
+    });
+    debug_log.write_agent_summary(&summary);
+    debug_log.event("task_end", json!({"turn": turn, "completed": completed}));
+
+    Ok(AgentOutcome {
+        run_id,
+        run_dir,
+        turns: turn,
+        final_text,
+        total_input_tokens,
+        total_output_tokens,
+    })
+}
+
+// ---------- small private helpers (not core logic, kept here for locality) ----------
+
+fn new_run_id() -> String {
+    use chrono::Utc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() % 1_000_000)
+        .unwrap_or(0);
+    format!("{}-{:06}", Utc::now().format("%Y%m%d-%H%M%S"), suffix)
+}
+
+fn ensure_dir(path: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path)?;
+    Ok(())
+}
+
+fn tool_schemas(tools: &[SharedTool], ctx: &ToolContext) -> Vec<ToolSchema> {
+    tools
+        .iter()
+        .filter(|t| t.is_available(ctx))
+        .map(|t| ToolSchema {
+            name: t.name().to_string(),
+            description: t.description().to_string(),
+            input_schema: t.input_schema(),
+        })
+        .collect()
+}
+
+fn find_tool<'a>(tools: &'a [SharedTool], name: &str) -> Option<&'a SharedTool> {
+    tools.iter().find(|t| t.name() == name)
+}
+
+fn emit(events: &broadcast::Sender<AgentEvent>, event: AgentEvent) {
+    let _ = events.send(event);
+}
+
+fn stop_reason_str(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::EndTurn => "end_turn",
+        StopReason::ToolUse => "tool_use",
+        StopReason::MaxTokens => "max_tokens",
+        StopReason::Other => "other",
+    }
+}
+
+async fn dispatch_tool(
+    tools: &[SharedTool],
+    name: &str,
+    input: &Value,
+    ctx: &ToolContext,
+) -> (ToolResult, Option<String>) {
+    match find_tool(tools, name) {
+        Some(tool) if tool.is_available(ctx) => match tool.call(input.clone(), ctx).await {
+            Ok(r) => (r, None),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                (
+                    ToolResult::text(format!("Error executing {name}: {msg}")),
+                    Some(msg),
+                )
+            }
+        },
+        Some(_) => {
+            let msg = format!("Tool '{name}' is not currently available");
+            (ToolResult::text(format!("Error: {msg}")), Some(msg))
+        }
+        None => {
+            let msg = format!("Unknown tool '{name}'");
+            (ToolResult::text(format!("Error: {msg}")), Some(msg))
+        }
+    }
+}
+
+fn tool_result_to_content(result: &ToolResult) -> Vec<ToolResultContent> {
+    result
+        .blocks
+        .iter()
+        .map(|b| match b {
+            ToolResultBlock::Text { text } => ToolResultContent::Text { text: text.clone() },
+            ToolResultBlock::Image { data, media_type } => ToolResultContent::Image {
+                data: data.clone(),
+                media_type: media_type.clone(),
+            },
+        })
+        .collect()
+}
+
+fn bound_content_for_history(content: &[ToolResultContent]) -> Vec<ToolResultContent> {
+    content
+        .iter()
+        .map(|c| match c {
+            ToolResultContent::Text { text } => ToolResultContent::Text {
+                text: compress_text_maybe_json(text, TOOL_RESULT_TEXT_MAX_CHARS),
+            },
+            other => other.clone(),
+        })
+        .collect()
+}
+
+/// Render tool-result content as a JSON value suitable for the
+/// `reasoning_log.jsonl` debug stream (images are mentioned but bodies
+/// omitted — same convention as `json_safe_for_log`).
+fn content_for_log(content: &[ToolResultContent]) -> Value {
+    let array: Vec<Value> = content
+        .iter()
+        .map(|c| match c {
+            ToolResultContent::Text { text } => json!({"type": "text", "text": text}),
+            ToolResultContent::Image { media_type, .. } => json!({
+                "type": "image",
+                "media_type": media_type,
+            }),
+        })
+        .collect();
+    Value::Array(array)
+}
+
+fn truncate_summary(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut s: String = text.chars().take(max_chars).collect();
+    s.push('…');
+    s
+}

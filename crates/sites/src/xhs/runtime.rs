@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -35,15 +35,28 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
 /// Site-aware XHS operations on top of a CDP `PageSession`.
 pub struct XhsSiteRuntime<'a> {
     page: &'a PageSession,
-    last_extracted_note_id: RefCell<String>,
+    last_extracted_note_id: Mutex<String>,
 }
 
 impl<'a> XhsSiteRuntime<'a> {
     pub fn new(page: &'a PageSession) -> Self {
         Self {
             page,
-            last_extracted_note_id: RefCell::new(String::new()),
+            last_extracted_note_id: Mutex::new(String::new()),
         }
+    }
+
+    fn set_last_note_id(&self, value: String) {
+        if let Ok(mut guard) = self.last_extracted_note_id.lock() {
+            *guard = value;
+        }
+    }
+
+    fn last_note_id(&self) -> String {
+        self.last_extracted_note_id
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// Inject `page_scripts.js` (the IIFE that defines `SocaiXhsPageScripts`)
@@ -262,7 +275,7 @@ impl<'a> XhsSiteRuntime<'a> {
             );
         }
 
-        self.last_extracted_note_id.borrow_mut().clear();
+        self.set_last_note_id(String::new());
         let per_attempt = (wait_seconds / 2.0).max(0.2);
         let click_target_kind = target
             .get("target")
@@ -319,7 +332,7 @@ impl<'a> XhsSiteRuntime<'a> {
     pub async fn close_note(&self, wait_seconds: f64) -> Result<Value> {
         let before = self.expect_object("noteOpen", None).await?;
         if !note_is_open(&before) {
-            self.last_extracted_note_id.borrow_mut().clear();
+            self.set_last_note_id(String::new());
             return Ok(json!({ "ok": true, "strategy": "already_closed", "state": before }));
         }
 
@@ -327,7 +340,7 @@ impl<'a> XhsSiteRuntime<'a> {
         self.page.press_key("Escape").await?;
         let state = self.wait_for_note_closed(per_attempt).await?;
         if !note_is_open(&state) {
-            self.last_extracted_note_id.borrow_mut().clear();
+            self.set_last_note_id(String::new());
             return Ok(
                 json!({ "ok": true, "strategy": "escape", "state": state, "url": self.current_url().await? }),
             );
@@ -339,7 +352,7 @@ impl<'a> XhsSiteRuntime<'a> {
             .await;
         let state = self.wait_for_note_closed(per_attempt).await?;
         if !note_is_open(&state) {
-            self.last_extracted_note_id.borrow_mut().clear();
+            self.set_last_note_id(String::new());
             return Ok(
                 json!({ "ok": true, "strategy": "escape_dispatch", "state": state, "url": self.current_url().await? }),
             );
@@ -356,7 +369,7 @@ impl<'a> XhsSiteRuntime<'a> {
                 .await?;
             let state = self.wait_for_note_closed(per_attempt).await?;
             if !note_is_open(&state) {
-                self.last_extracted_note_id.borrow_mut().clear();
+                self.set_last_note_id(String::new());
                 return Ok(json!({
                     "ok": true,
                     "strategy": "close_button",
@@ -445,14 +458,14 @@ impl<'a> XhsSiteRuntime<'a> {
         }
 
         if !note.note_id.is_empty() {
-            let mut last = self.last_extracted_note_id.borrow_mut();
-            if !last.is_empty() && *last == note.note_id {
+            let prev = self.last_note_id();
+            if !prev.is_empty() && prev == note.note_id {
                 note.stale_warning = Some(format!(
                     "This note (note_id={}) was already extracted in the previous read. The note modal may not have closed before opening the next card — call xhs_close_note to verify the modal is gone, then re-open the target card.",
                     note.note_id
                 ));
             }
-            *last = note.note_id.clone();
+            self.set_last_note_id(note.note_id.clone());
         }
 
         note.wait_meta = Some(json!({

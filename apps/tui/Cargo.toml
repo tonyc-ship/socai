@@ -9,7 +9,7 @@ name = "socai-tui"
 path = "src/main.rs"
 
 [dependencies]
-socai-core.workspace = true
+socai-agent.workspace = true
 socai-sites.workspace = true
 socai-runtime.workspace = true
 anyhow.workspace = true

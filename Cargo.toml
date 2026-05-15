@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "app/src-tauri",
-    "crates/core",
+    "crates/agent",
     "crates/browser",
     "crates/sites",
     "crates/runtime",
@@ -38,7 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 chromiumoxide = "0.7"
 
-socai-core = { path = "crates/core" }
+socai-agent = { path = "crates/agent" }
 socai-browser = { path = "crates/browser" }
 socai-sites = { path = "crates/sites" }
 socai-runtime = { path = "crates/runtime" }
