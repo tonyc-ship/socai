@@ -4038,9 +4038,12 @@ dependencies = [
 name = "socai_app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "serde",
  "serde_json",
+ "socai-agent",
  "socai-runtime",
+ "socai-sites",
  "tauri",
  "tauri-build",
  "tokio",

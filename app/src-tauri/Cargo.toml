@@ -16,4 +16,7 @@ tauri = { version = "2.11.1", features = [] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true }
+anyhow.workspace = true
 socai-runtime.workspace = true
+socai-agent.workspace = true
+socai-sites.workspace = true
