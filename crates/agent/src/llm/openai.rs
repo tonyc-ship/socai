@@ -29,8 +29,7 @@ impl OpenAICompatBackend {
         let cfg: &'static ProviderConfig = config_for(provider);
         let api_key = load_api_key(provider).ok_or_else(|| {
             anyhow::anyhow!(
-                "no {} API key found. Set {} or add {}.api_key to ~/.socai/auth.json \
-                 or ~/.flowlens/auth.json.",
+                "no {} API key found. Set {} or add {}.api_key to ~/.socai/auth.json.",
                 cfg.display_name,
                 cfg.env_keys.join(" or "),
                 provider.as_str(),
@@ -138,6 +137,7 @@ fn build_chat_messages(system: &str, messages: &[Message], preserve_reasoning: b
                 for block in blocks {
                     match block {
                         Block::Text { text } => text_parts.push(text),
+                        Block::Image { .. } => {}
                         Block::ReasoningContent { text } => {
                             reasoning = Some(text);
                         }
@@ -175,9 +175,18 @@ fn build_chat_messages(system: &str, messages: &[Message], preserve_reasoning: b
             }
             crate::llm::MessageRole::User => {
                 let mut user_text_parts: Vec<String> = Vec::new();
+                let mut user_image_parts: Vec<Value> = Vec::new();
                 for block in blocks {
                     match block {
                         Block::Text { text } => user_text_parts.push(text),
+                        Block::Image { data, media_type } => {
+                            user_image_parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{media_type};base64,{data}"),
+                                },
+                            }));
+                        }
                         Block::ToolResult {
                             tool_use_id,
                             content,
@@ -192,7 +201,14 @@ fn build_chat_messages(system: &str, messages: &[Message], preserve_reasoning: b
                     }
                 }
                 let joined = user_text_parts.join("\n").trim().to_string();
-                if !joined.is_empty() {
+                if !user_image_parts.is_empty() {
+                    let mut content = Vec::new();
+                    if !joined.is_empty() {
+                        content.push(json!({"type": "text", "text": joined}));
+                    }
+                    content.extend(user_image_parts);
+                    out.push(json!({"role": "user", "content": content}));
+                } else if !joined.is_empty() {
                     out.push(json!({"role": "user", "content": joined}));
                 }
             }

@@ -4,6 +4,7 @@ members = [
     "app/src-tauri",
     "crates/agent",
     "crates/browser",
+    "crates/media",
     "crates/sites",
     "crates/runtime",
     "apps/cli",
@@ -22,6 +23,7 @@ futures = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
@@ -42,6 +44,7 @@ chromiumoxide = "0.7"
 
 socai-agent = { path = "crates/agent" }
 socai-browser = { path = "crates/browser" }
+socai-media = { path = "crates/media" }
 socai-sites = { path = "crates/sites" }
 socai-runtime = { path = "crates/runtime" }
 

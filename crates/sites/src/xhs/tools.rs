@@ -9,14 +9,22 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use socai_agent::{Tool, ToolContext, ToolResult};
+use socai_agent::{Backend as LlmProvider, Tool, ToolContext, ToolResult};
 use socai_browser::PageSession;
+use socai_media::{timing_delta, MediaProcessor, TimingSnapshot};
 
-use crate::xhs::{XhsNoteCard, XhsSiteRuntime};
+use crate::xhs::{ReadNoteOptions, XhsNoteCard, XhsSiteRuntime};
 
 /// All XHS tools constructed against the same page. Convenience helper for
 /// the CLI / agent host — just register everything.
 pub fn xhs_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
+    xhs_tools_with_llm_provider(page, None)
+}
+
+pub fn xhs_tools_with_llm_provider(
+    page: Arc<PageSession>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
+) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(SearchNotesTool { page: page.clone() }) as Arc<dyn Tool>,
         Arc::new(ExtractSearchCardsTool { page: page.clone() }),
@@ -24,13 +32,22 @@ pub fn xhs_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
         Arc::new(ClickSearchTabTool { page: page.clone() }),
         Arc::new(OpenNoteTool { page: page.clone() }),
         Arc::new(CloseNoteTool { page: page.clone() }),
-        Arc::new(ReadNoteTool { page: page.clone() }),
-        Arc::new(ExtractNoteTool { page: page.clone() }),
+        Arc::new(ReadNoteTool {
+            page: page.clone(),
+            llm_provider: llm_provider.clone(),
+        }),
+        Arc::new(ExtractNoteTool {
+            page: page.clone(),
+            llm_provider: llm_provider.clone(),
+        }),
         Arc::new(ExtractCommentsTool { page: page.clone() }),
         Arc::new(ScrollInNoteTool { page: page.clone() }),
         Arc::new(CollectCarouselImagesTool { page: page.clone() }),
         Arc::new(ExtractProfileTool { page: page.clone() }),
-        Arc::new(TopicScanTool { page: page.clone() }),
+        Arc::new(TopicScanTool {
+            page: page.clone(),
+            llm_provider,
+        }),
         Arc::new(PageStateTool { page }),
     ]
 }
@@ -50,6 +67,34 @@ fn get_i64(input: &Value, key: &str, default: i64) -> i64 {
 
 fn get_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input.get(key).and_then(Value::as_str)
+}
+
+fn get_bool(input: &Value, key: &str, default: bool) -> bool {
+    input.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn read_note_options(input: &Value) -> ReadNoteOptions {
+    ReadNoteOptions {
+        level: get_str(input, "level").unwrap_or("lite").to_string(),
+        include_media: get_bool(input, "include_media", false),
+        max_images: get_i64(input, "max_images", 12).max(1) as usize,
+        max_video_frames: get_i64(input, "max_video_frames", 4).max(1) as usize,
+    }
+}
+
+fn media_for(
+    ctx: &ToolContext,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
+    include_media: bool,
+) -> anyhow::Result<Option<MediaProcessor>> {
+    if include_media {
+        Ok(Some(MediaProcessor::for_run_dir(
+            &ctx.run_dir,
+            llm_provider,
+        )?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// search_notes(query, wait_seconds) -> {query, cards: [...]}
@@ -171,9 +216,10 @@ impl Tool for CloseNoteTool {
     }
 }
 
-/// read_note(note_id?, index?, wait_seconds?) -> full XhsNote
+/// read_note(note_id?, index?, wait_seconds?, include_media?) -> full XhsNote
 pub struct ReadNoteTool {
     page: Arc<PageSession>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 #[async_trait]
@@ -195,21 +241,34 @@ impl Tool for ReadNoteTool {
             "properties": {
                 "note_id": { "type": "string" },
                 "index": { "type": "integer", "minimum": 0 },
-                "wait_seconds": { "type": "number", "default": 6.0 }
+                "wait_seconds": { "type": "number", "default": 6.0 },
+                "level": { "type": "string", "enum": ["card", "lite", "deep"], "default": "lite" },
+                "include_media": { "type": "boolean", "default": false },
+                "max_images": { "type": "integer", "default": 12, "minimum": 1 },
+                "max_video_frames": { "type": "integer", "default": 4, "minimum": 1 }
             }
         })
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let note_id = get_str(&input, "note_id").map(str::to_string);
         let index = input
             .get("index")
             .and_then(Value::as_i64)
             .and_then(|i| usize::try_from(i).ok());
         let wait_seconds = get_f64(&input, "wait_seconds", 6.0);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let options = read_note_options(&input);
+        let xhs = XhsSiteRuntime::new_with_media(
+            &self.page,
+            media_for(ctx, self.llm_provider.clone(), options.include_media)?,
+        );
         let value = xhs
-            .read_note(note_id.as_deref().unwrap_or(""), index, wait_seconds)
+            .read_note_with_options(
+                note_id.as_deref().unwrap_or(""),
+                index,
+                wait_seconds,
+                options,
+            )
             .await?;
         Ok(json_result(&value))
     }
@@ -218,6 +277,7 @@ impl Tool for ReadNoteTool {
 /// extract_note(wait_seconds?) -> XhsNote
 pub struct ExtractNoteTool {
     page: Arc<PageSession>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 #[async_trait]
@@ -235,15 +295,23 @@ impl Tool for ExtractNoteTool {
         json!({
             "type": "object",
             "properties": {
-                "wait_seconds": { "type": "number", "default": 8.0 }
+                "wait_seconds": { "type": "number", "default": 8.0 },
+                "level": { "type": "string", "enum": ["card", "lite", "deep"], "default": "lite" },
+                "include_media": { "type": "boolean", "default": false },
+                "max_images": { "type": "integer", "default": 12, "minimum": 1 },
+                "max_video_frames": { "type": "integer", "default": 4, "minimum": 1 }
             }
         })
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let wait_seconds = get_f64(&input, "wait_seconds", 8.0);
-        let xhs = XhsSiteRuntime::new(&self.page);
-        let note = xhs.extract_note(wait_seconds).await?;
+        let options = read_note_options(&input);
+        let xhs = XhsSiteRuntime::new_with_media(
+            &self.page,
+            media_for(ctx, self.llm_provider.clone(), options.include_media)?,
+        );
+        let note = xhs.extract_note_with_options(wait_seconds, options).await?;
         let value = serde_json::to_value(&note)?;
         Ok(json_result(&value))
     }
@@ -523,6 +591,7 @@ impl Tool for ExtractProfileTool {
 /// one tool call, so the agent doesn't have to chain 10+ tools by hand.
 pub struct TopicScanTool {
     page: Arc<PageSession>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 struct ScanProfile {
@@ -602,7 +671,9 @@ impl Tool for TopicScanTool {
         let tab_label = get_str(&input, "tab_label").unwrap_or("").to_string();
         let profile = scan_profile_for(&depth);
 
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let media = media_for(ctx, self.llm_provider.clone(), profile.include_media)?;
+        let media_baseline: Option<TimingSnapshot> = media.as_ref().map(|m| m.timing().snapshot());
+        let xhs = XhsSiteRuntime::new_with_media(&self.page, media.clone());
         let search = xhs.search_notes(&query, 2.0).await?;
 
         // Optional tab switch + re-extract cards.
@@ -653,8 +724,19 @@ impl Tool for TopicScanTool {
                 }));
                 continue;
             }
-
-            let read_result = xhs.read_note(&card.note_id, None, 6.0).await;
+            let read_result = xhs
+                .read_note_with_options(
+                    &card.note_id,
+                    None,
+                    6.0,
+                    ReadNoteOptions {
+                        level: level.to_string(),
+                        include_media: requested_media,
+                        max_images: 12,
+                        max_video_frames: 4,
+                    },
+                )
+                .await;
             let mut entry = match read_result {
                 Ok(payload) => {
                     let entity = payload.get("entity").cloned().unwrap_or(Value::Null);
@@ -693,6 +775,11 @@ impl Tool for TopicScanTool {
             let _ = xhs.close_note(0.6).await;
         }
 
+        let media_timing = match (&media, &media_baseline) {
+            (Some(media), Some(before)) => timing_delta(before, &media.timing().snapshot()),
+            _ => json!({}),
+        };
+
         let payload = json!({
             "ok": search.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "query": query,
@@ -708,6 +795,9 @@ impl Tool for TopicScanTool {
                 "max_lite_notes": profile.lite,
                 "depth": depth,
                 "include_media": profile.include_media,
+            },
+            "timing": {
+                "media": media_timing,
             }
         });
 

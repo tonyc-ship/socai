@@ -35,7 +35,7 @@ impl AnthropicBackend {
         let api_key = load_api_key(Provider::Anthropic).ok_or_else(|| {
             anyhow::anyhow!(
                 "no Anthropic API key found. Set ANTHROPIC_API_KEY or add anthropic.api_key \
-                 to ~/.socai/auth.json or ~/.flowlens/auth.json."
+                 to ~/.socai/auth.json."
             )
         })?;
         let model = model.into();
@@ -64,6 +64,14 @@ impl AnthropicBackend {
 fn block_to_wire(block: &Block) -> Option<Value> {
     match block {
         Block::Text { text } => Some(json!({"type": "text", "text": text})),
+        Block::Image { data, media_type } => Some(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data,
+            },
+        })),
         Block::ReasoningContent { .. } => {
             // Anthropic's "thinking" block has a different shape (signed
             // signature etc.) — and we don't currently surface it from the

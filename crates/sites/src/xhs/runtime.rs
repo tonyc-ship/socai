@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 use socai_browser::PageSession;
+use socai_media::MediaProcessor;
 
 use crate::xhs::entities::{normalize_url, XhsNote, XhsNoteCard};
 
@@ -32,9 +33,29 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "profileCards",
 ];
 
+#[derive(Debug, Clone)]
+pub struct ReadNoteOptions {
+    pub level: String,
+    pub include_media: bool,
+    pub max_images: usize,
+    pub max_video_frames: usize,
+}
+
+impl Default for ReadNoteOptions {
+    fn default() -> Self {
+        Self {
+            level: "lite".into(),
+            include_media: false,
+            max_images: 12,
+            max_video_frames: 4,
+        }
+    }
+}
+
 /// Site-aware XHS operations on top of a CDP `PageSession`.
 pub struct XhsSiteRuntime<'a> {
     page: &'a PageSession,
+    media: Option<MediaProcessor>,
     last_extracted_note_id: Mutex<String>,
 }
 
@@ -42,6 +63,15 @@ impl<'a> XhsSiteRuntime<'a> {
     pub fn new(page: &'a PageSession) -> Self {
         Self {
             page,
+            media: None,
+            last_extracted_note_id: Mutex::new(String::new()),
+        }
+    }
+
+    pub fn new_with_media(page: &'a PageSession, media: Option<MediaProcessor>) -> Self {
+        Self {
+            page,
+            media,
             last_extracted_note_id: Mutex::new(String::new()),
         }
     }
@@ -418,6 +448,17 @@ impl<'a> XhsSiteRuntime<'a> {
         index: Option<usize>,
         wait_seconds: f64,
     ) -> Result<Value> {
+        self.read_note_with_options(note_id, index, wait_seconds, ReadNoteOptions::default())
+            .await
+    }
+
+    pub async fn read_note_with_options(
+        &self,
+        note_id: &str,
+        index: Option<usize>,
+        wait_seconds: f64,
+        options: ReadNoteOptions,
+    ) -> Result<Value> {
         let mut open = None;
         if !note_id.is_empty() || index.is_some() {
             let opened = self.open_note(note_id, index, wait_seconds).await?;
@@ -428,11 +469,15 @@ impl<'a> XhsSiteRuntime<'a> {
             }
             open = Some(opened);
         }
-        let note = self.extract_note(wait_seconds).await?;
+        let note = self
+            .extract_note_with_options(wait_seconds, options.clone())
+            .await?;
         if !note_id.is_empty() && !note.note_id.is_empty() && note.note_id != note_id {
             if let Some(link) = tokenized_open_link(&open, note_id) {
                 self.page.navigate_with_timeout(&link, 60.0).await?;
-                let note = self.extract_note(wait_seconds).await?;
+                let note = self
+                    .extract_note_with_options(wait_seconds, options)
+                    .await?;
                 if note.note_id == note_id {
                     return Ok(json!({
                         "ok": true,
@@ -655,6 +700,15 @@ impl<'a> XhsSiteRuntime<'a> {
     /// side polls via `noteWithWait` until content hydrates, so the caller
     /// doesn't need a separate readiness check.
     pub async fn extract_note(&self, wait_seconds: f64) -> Result<XhsNote> {
+        self.extract_note_with_options(wait_seconds, ReadNoteOptions::default())
+            .await
+    }
+
+    pub async fn extract_note_with_options(
+        &self,
+        wait_seconds: f64,
+        options: ReadNoteOptions,
+    ) -> Result<XhsNote> {
         let timeout_ms = (wait_seconds.max(0.5) * 1000.0) as i64;
         let raw = self
             .run_script("noteWithWait", Some(&json!({ "timeout_ms": timeout_ms })))
@@ -666,7 +720,7 @@ impl<'a> XhsSiteRuntime<'a> {
             .filter(Value::is_object)
             .unwrap_or_else(|| Value::Object(Map::new()));
 
-        let mut note = parse_note(&body, "lite");
+        let mut note = parse_note(&body, &options.level);
 
         // Python falls back to the live page URL when the JS payload didn't
         // populate body.url. Mirror that — one extra evaluate is cheap and
@@ -697,7 +751,79 @@ impl<'a> XhsSiteRuntime<'a> {
             "attempts": raw.get("attempts").and_then(Value::as_i64).unwrap_or(0),
         }));
 
+        if options.include_media {
+            self.enrich_note_media(&mut note, options.max_images, options.max_video_frames)
+                .await?;
+        }
+
         Ok(note)
+    }
+
+    async fn enrich_note_media(
+        &self,
+        note: &mut XhsNote,
+        max_images: usize,
+        max_video_frames: usize,
+    ) -> Result<()> {
+        let Some(media) = &self.media else {
+            if note.r#type == "video" {
+                insert_value_string(
+                    &mut note.video,
+                    "media_error",
+                    "media processor unavailable",
+                );
+            } else {
+                for image in &mut note.images {
+                    insert_value_string(image, "media_error", "media processor unavailable");
+                }
+            }
+            return Ok(());
+        };
+
+        if note.r#type == "video" {
+            note.video = media
+                .enrich_video(
+                    &note.video,
+                    &note.note_id,
+                    &note.title,
+                    &note.url,
+                    max_video_frames,
+                    true,
+                )
+                .await;
+            return Ok(());
+        }
+
+        if note.images.is_empty() {
+            let urls = self.collect_carousel_images(max_images as i64).await?;
+            note.images = urls
+                .into_iter()
+                .take(max_images)
+                .enumerate()
+                .map(|(index, url)| json!({ "url": url, "index": index as i64 }))
+                .collect();
+            note.image_count = note.images.len() as i64;
+        }
+
+        let images: Vec<Value> = note.images.iter().take(max_images).cloned().collect();
+        note.images = media
+            .enrich_images(
+                &images,
+                &note.url,
+                if note.note_id.is_empty() {
+                    if note.title.is_empty() {
+                        "xhs_note"
+                    } else {
+                        &note.title
+                    }
+                } else {
+                    &note.note_id
+                },
+                true,
+            )
+            .await;
+        note.image_count = note.images.len() as i64;
+        Ok(())
     }
 
     async fn expect_object(&self, name: &str, arg: Option<&Value>) -> Result<Value> {
@@ -865,6 +991,15 @@ fn select_card(cards: &[XhsNoteCard], note_id: &str, index: Option<usize>) -> Op
         }
     }
     index.and_then(|idx| cards.get(idx).cloned())
+}
+
+fn insert_value_string(value: &mut Value, key: &str, text: &str) {
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+    if let Some(map) = value.as_object_mut() {
+        map.insert(key.to_string(), Value::String(text.to_string()));
+    }
 }
 
 fn search_transition_ok(state: &Value, query: &str) -> bool {

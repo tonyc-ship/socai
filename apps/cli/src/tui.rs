@@ -22,7 +22,7 @@ use socai_agent::{
     Provider, Tool, PROVIDERS,
 };
 use socai_runtime::{BrowserStatus, SocaiRuntime};
-use socai_sites::xhs::{xhs_tools, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
+use socai_sites::xhs::{xhs_tools_with_llm_provider, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
 use tokio::time::{sleep, Instant};
 
 const DEFAULT_MAX_TURNS: u32 = 30;
@@ -417,9 +417,9 @@ fn active_model(state: &AppState) -> Result<String> {
 }
 
 async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>) -> Result<()> {
-    let backend = build_backend(model).await?;
+    let llm_provider = build_backend(model).await?;
     println!();
-    println!("[socai] using {}", backend.label());
+    println!("[socai] using {}", llm_provider.label());
     println!("[socai] connecting browser...");
 
     connect_runtime(runtime).await?;
@@ -427,7 +427,8 @@ async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>)
     page.navigate_with_timeout(XHS_HOME_URL, 60.0).await?;
     XhsSiteRuntime::new(&page).ensure_xhs(false).await?;
     let page = Arc::new(page);
-    let tools: Vec<Arc<dyn Tool>> = xhs_tools(page.clone());
+    let tools: Vec<Arc<dyn Tool>> =
+        xhs_tools_with_llm_provider(page.clone(), Some(llm_provider.clone()));
 
     let options = AgentOptions {
         max_turns: DEFAULT_MAX_TURNS,
@@ -446,7 +447,7 @@ async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>)
         }
     });
 
-    let outcome = socai_agent::run_agent_with_events(task, backend, tools, options, tx).await;
+    let outcome = socai_agent::run_agent_with_events(task, llm_provider, tools, options, tx).await;
     let _ = printer.await;
 
     let close_result = match Arc::try_unwrap(page) {

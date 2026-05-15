@@ -3995,6 +3995,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "socai-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "socai-agent",
+ "tokio",
+]
+
+[[package]]
 name = "socai-runtime"
 version = "0.1.0"
 dependencies = [
@@ -4013,6 +4027,7 @@ dependencies = [
  "serde_json",
  "socai-agent",
  "socai-browser",
+ "socai-media",
  "tokio",
  "tracing",
  "tracing-subscriber",

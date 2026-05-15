@@ -39,6 +39,10 @@ pub enum Block {
     Text {
         text: String,
     },
+    Image {
+        data: String,
+        media_type: String,
+    },
     /// Reasoning trace surfaced by Kimi K2.6 / Qwen / o1-style models.
     /// Echoed back to those providers on subsequent turns when tool_calls
     /// are present (some providers reject the request otherwise).

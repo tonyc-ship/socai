@@ -17,7 +17,7 @@ use socai_agent::{
     OpenAICompatBackend, Provider, Tool,
 };
 use socai_runtime::SocaiRuntime;
-use socai_sites::xhs::{xhs_tools, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
+use socai_sites::xhs::{xhs_tools_with_llm_provider, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
 
 #[derive(Debug, Parser)]
 #[command(name = "socai-dev")]
@@ -177,8 +177,8 @@ async fn run_agent_cmd(
     no_browser: bool,
     task: String,
 ) -> anyhow::Result<()> {
-    let backend = build_backend(provider.as_deref(), model.as_deref())?;
-    println!("// using {}", backend.label());
+    let llm_provider = build_backend(provider.as_deref(), model.as_deref())?;
+    println!("// using {}", llm_provider.label());
 
     let runtime = SocaiRuntime::new();
     let (tools, page_to_close, extra_instructions) = if no_browser {
@@ -191,7 +191,7 @@ async fn run_agent_cmd(
         let _ = page.navigate_with_timeout(XHS_HOME_URL, 60.0).await;
         let _ = XhsSiteRuntime::new(&page).ensure_xhs(false).await;
         let page = Arc::new(page);
-        let tools = xhs_tools(page.clone());
+        let tools = xhs_tools_with_llm_provider(page.clone(), Some(llm_provider.clone()));
         (tools, Some(page), XHS_AGENT_HINT.to_string())
     };
 
@@ -216,7 +216,7 @@ async fn run_agent_cmd(
         }
     });
 
-    let outcome = run_agent_with_events(&task, backend, tools, options, tx).await?;
+    let outcome = run_agent_with_events(&task, llm_provider, tools, options, tx).await?;
     let _ = printer.await;
 
     if let Some(page) = page_to_close {
