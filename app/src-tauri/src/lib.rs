@@ -1,6 +1,6 @@
 mod commands;
 
-use socai_runtime::{RuntimeBrowserEvent, SocaiRuntime};
+use socai_core::runtime::{RuntimeBrowserEvent, SocaiRuntime};
 use tauri::{Emitter, Manager};
 
 pub fn run() {

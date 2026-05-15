@@ -3942,40 +3942,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "socai-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "dirs 5.0.1",
- "futures",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "socai-browser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chromiumoxide",
- "futures",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "socai-cli"
 version = "0.1.0"
 dependencies = [
@@ -3986,49 +3952,26 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
- "socai-agent",
- "socai-browser",
- "socai-runtime",
- "socai-sites",
+ "socai-core",
  "tokio",
  "tracing-subscriber",
 ]
 
 [[package]]
-name = "socai-media"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "futures",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "socai-agent",
- "tokio",
-]
-
-[[package]]
-name = "socai-runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "socai-agent",
- "socai-browser",
- "tokio",
-]
-
-[[package]]
-name = "socai-sites"
+name = "socai-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
+ "chromiumoxide",
+ "chrono",
+ "dirs 5.0.1",
+ "futures",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
- "socai-agent",
- "socai-browser",
- "socai-media",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4041,9 +3984,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "socai-agent",
- "socai-runtime",
- "socai-sites",
+ "socai-core",
  "tauri",
  "tauri-build",
  "tokio",

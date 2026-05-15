@@ -1,0 +1,26 @@
+[package]
+name = "socai-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+futures.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+chromiumoxide.workspace = true
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

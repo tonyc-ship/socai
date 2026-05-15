@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde_json::Value;
-use socai_agent::{configured_default_model_for, load_api_key, AgentEvent, Provider};
-use socai_runtime::{
+use socai_core::agent::{configured_default_model_for, load_api_key, AgentEvent, Provider};
+use socai_core::runtime::{
     create_llm_provider, ensure_llm_provider_configured, run_agent_task as run_agent_with_tools,
     AgentRunConfig, BrowserStatus, BrowserTargetInfo, RuntimePageSession, SocaiRuntime,
 };
-use socai_sites::xhs::{
+use socai_core::sites::xhs::{
     extract_note_command, search_notes_command, topic_scan_command, xhs_agent_instructions,
     xhs_agent_tools, XHS_HOME_URL,
 };
@@ -122,7 +122,7 @@ async fn require_connected(runtime: &SocaiRuntime) -> Result<(), String> {
     }
 }
 
-// ── Agent run (TUI parity) ─────────────────────────────────────────────────
+// ── Agent run ──────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 struct AgentEventPayload {
@@ -144,14 +144,14 @@ pub struct AgentRunOutcome {
 pub async fn agent_save_api_key(provider: String, api_key: String) -> Result<(), String> {
     let provider_enum = Provider::from_name(provider.trim())
         .ok_or_else(|| format!("unknown provider: {provider}"))?;
-    socai_agent::save_api_key(provider_enum, api_key.trim())
+    socai_core::agent::save_api_key(provider_enum, api_key.trim())
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub async fn agent_list_models() -> Result<Vec<Value>, String> {
-    use socai_agent::PROVIDERS;
+    use socai_core::agent::PROVIDERS;
     let mut out = Vec::new();
     for cfg in PROVIDERS {
         out.push(serde_json::json!({

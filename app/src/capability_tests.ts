@@ -247,7 +247,7 @@ export namespace toolsPanel {
   }
 }
 
-// ── Agent task (TUI parity) ───────────────────────────────────────────────
+// ── Agent task ─────────────────────────────────────────────────────────────
 
 export namespace agentPanel {
   let task = "";
