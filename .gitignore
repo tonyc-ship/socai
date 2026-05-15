@@ -4,8 +4,20 @@ __pycache__/
 .venv/
 .socai/
 
+# macOS
+.DS_Store
+**/.DS_Store
+
 # Tauri / frontend
 app/node_modules/
 app/dist/
 app/src-tauri/target/
 app/src-tauri/gen/
+
+# Rust workspace
+target/
+
+# Parity scratch runs (commit fixtures intentionally, not ad-hoc smoke runs)
+parity/phase1_smoke/
+parity/extract_note/
+parity/_screenshots/

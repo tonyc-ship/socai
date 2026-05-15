@@ -16,7 +16,10 @@ from .entities import XhsAuthorProfile, XhsNote, XhsNoteCard, parse_count_text
 
 
 XHS_HOME_URL = "https://www.xiaohongshu.com/explore"
-XHS_PAGE_SCRIPTS_JS = Path(__file__).with_name("page_scripts.js")
+# Source of truth lives in the Rust sites crate so both implementations read
+# the same file. Path is computed relative to the repo root so editable
+# installs and direct source runs both work.
+XHS_PAGE_SCRIPTS_JS = Path(__file__).parents[3] / "crates" / "sites" / "src" / "xhs" / "page_scripts.js"
 XHS_PAGE_SCRIPT_FUNCTIONS = {
     "note",
     "noteWithWait",

@@ -58,7 +58,13 @@ const SocaiXhsPageScripts = (() => {
   }
 
   // ── search input / state / cards ─────────────────────────────
+  // 2026-05: the homepage search widget switched from <input> to a
+  // <textarea class="textarea"> living inside #search-input-in-feeds
+  // (a chat-style composer with an AI helper "问点点" below). The
+  // legacy <input> selectors are kept as fallback in case XHS rolls
+  // the old UI back to some users.
   const SEARCH_INPUT_SELECTORS = [
+    'textarea[placeholder*="搜索"]',
     'input#search-input',
     'input[type="search"]',
     'input[placeholder*="搜索"]',
@@ -67,9 +73,13 @@ const SocaiXhsPageScripts = (() => {
   ];
 
   function findSearchInput() {
-    return SEARCH_INPUT_SELECTORS
-      .map((sel) => $(sel))
-      .find((el) => el instanceof HTMLElement && el.getBoundingClientRect().width >= 120);
+    for (const sel of SEARCH_INPUT_SELECTORS) {
+      for (const el of $$(sel)) {
+        if (!(el instanceof HTMLElement)) continue;
+        if (el.getBoundingClientRect().width >= 120) return el;
+      }
+    }
+    return undefined;
   }
 
   function setSearchInput(arg) {
@@ -108,49 +118,42 @@ const SocaiXhsPageScripts = (() => {
     };
   }
 
+  // Selectors for the search-submit affordance, tried in priority order.
+  // The 2026-05 chat composer has explicit class names; legacy UIs used a
+  // <form> with type=submit or an .icon-search SVG sibling. We don't try
+  // to score arbitrary clickable elements anymore — if none of these
+  // match, Rust falls back to pressing Enter, which works in practice.
+  const SEARCH_SUBMIT_SELECTORS = [
+    '.bottom-box-right-submit-button',
+    '.submit-button-wrapper',
+    'button[type="submit"]',
+    '.search-icon',
+    '.search-btn',
+    '.icon-search',
+  ];
+
   function searchInput() {
     const input = findSearchInput();
     if (!input) return { ok: false, error: 'search_input_not_found' };
     const inputRect = input.getBoundingClientRect();
-    const root = input.closest('form, header, .search-input, .search-container, .search-bar, .search-box') || document;
-    const inputCenterY = inputRect.top + inputRect.height / 2;
-    const candidates = [
-      ...root.querySelectorAll('button, [role="button"], a, div, span, svg, .search-icon, .search-btn, .icon-search'),
-      ...document.querySelectorAll('button, [role="button"], a, div, span, svg, .search-icon, .search-btn, .icon-search'),
-    ];
-    const ordered = [...new Set(candidates)]
-      .filter((el) => el instanceof HTMLElement || el instanceof SVGElement)
-      .map((el) => {
-        const clickable = el.closest?.('button, [role="button"], a, div, span') || el;
-        const rect = clickable.getBoundingClientRect();
-        const meta = [
-          clickable.getAttribute?.('aria-label') || '',
-          clickable.getAttribute?.('title') || '',
-          clickable.className || '',
-        ].join(' ').toLowerCase();
-        let score = 0;
-        if (/search|搜索|find|query/.test(meta)) score += 100;
-        if (/clear|close|cancel|remove|delete|清除|关闭|取消/.test(meta)) score -= 120;
-        const centerY = rect.top + rect.height / 2;
-        score -= Math.abs(rect.left - inputRect.right);
-        score -= Math.abs(centerY - inputCenterY) * 0.6;
-        if (rect.left >= inputRect.right - 8) score += 18;
-        if (rect.left < inputRect.left - 24) score -= 60;
-        if (root.contains(clickable)) score += 18;
-        if (rect.left >= inputRect.left && rect.right <= inputRect.right) score -= 20;
-        return { rect, score };
-      })
-      .filter(({ rect, score }) => (
-        rect.width >= 12 && rect.height >= 12
-        && rect.right >= inputRect.left && rect.left <= inputRect.right + 180
-        && score > -140
-      ))
-      .sort((a, b) => b.score - a.score);
-    const submit = ordered[0] || null;
+    const root = input.closest(
+      'form, header, .search-input, .search-container, .search-bar, .search-box, .wendian-wrapper'
+    ) || document;
+
+    let submit = null;
+    for (const sel of SEARCH_SUBMIT_SELECTORS) {
+      const el = root.querySelector(sel) || document.querySelector(sel);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 12 || r.height < 12) continue;
+      submit = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      break;
+    }
+
     return {
       ok: true,
       input: { x: Math.round(inputRect.left + inputRect.width / 2), y: Math.round(inputRect.top + inputRect.height / 2) },
-      submit: submit ? { x: Math.round(submit.rect.left + submit.rect.width / 2), y: Math.round(submit.rect.top + submit.rect.height / 2) } : null,
+      submit,
     };
   }
 
@@ -386,7 +389,9 @@ const SocaiXhsPageScripts = (() => {
     const value = absUrl(url || '');
     if (!value || value.startsWith('data:') || value.startsWith('blob:')) return '';
     if (NON_NOTE_IMAGE_PATTERNS.some((re) => re.test(value))) return '';
-    return value.replace(/imageView2\/\d\/w\/\d+\/format\/[^/?#]+/i, '');
+    return value
+      .replace(/^http:\/\//i, 'https://')
+      .replace(/imageView2\/\d\/w\/\d+\/format\/[^/?#]+/i, '');
   }
 
   const NOTE_IMAGE_SELECTORS = [
@@ -418,6 +423,21 @@ const SocaiXhsPageScripts = (() => {
       }
     }
     return urls;
+  }
+
+  function cleanLocationText(value) {
+    const cleaned = norm(value);
+    if (!cleaned) return '';
+    const lines = cleaned.split(/\n+/).map(norm).filter(Boolean);
+    if (!lines.length) return '';
+    // iPhone Live Photo badges render as visible overlay text in the media
+    // area; they are not note locations/POIs.
+    if (lines.every((line) => /^live$/i.test(line))) return '';
+    if (/^live(?:\s+live)+$/i.test(lines.join(' '))) return '';
+    // Real note locations are compact labels like "北京"; multi-line blobs
+    // here are almost always media overlay or layout noise.
+    if (lines.length > 1 || cleaned.length > 40) return '';
+    return cleaned;
   }
 
   function collectVideoInfo(root) {
@@ -523,7 +543,9 @@ const SocaiXhsPageScripts = (() => {
     const rootText = norm(text(root));
     const date = (rootText.match(/\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}-\d{1,2}\b/) || [''])[0];
     const ipLocation = (rootText.match(/IP属地[:：]?\s*([\u4e00-\u9fffA-Za-z0-9_-]+)/) || [])[1] || '';
-    const locationText = firstVisibleText(['.location, .poi, [class*="location"], [class*="poi"]'], root, { excludeComments: true });
+    const locationText = cleanLocationText(
+      firstVisibleText(['.location, .poi, [class*="location"], [class*="poi"]'], root, { excludeComments: true })
+    );
     const type = detectNoteType(root);
     const imageUrls = collectImageUrls(root);
     const video = type === 'video' ? collectVideoInfo(root) : null;

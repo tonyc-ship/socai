@@ -1,7 +1,24 @@
 # socai agent notes
 
-The repo has two halves: a Python agent package (`socai/`) and a Tauri 2
-desktop app (`app/`). The desktop app surfaces the agent to users.
+The repo has a legacy Python agent package (`socai/`), a Rust core (`core/`),
+a Rust CLI (`cli/`), and a Tauri 2 desktop app (`app/`). The Rust core is the
+active shared implementation for CLI/TUI/Tauri.
+
+## Rust core — `core/`
+
+- `core/src/agent/`: generic agent loop, LLM providers, run state, tool trait.
+- `core/src/cdp/`: CDP endpoint discovery, connection lifecycle, tab sessions,
+  and page factories.
+- `core/src/media/`: optional media enrichment helpers.
+- `core/src/runtime/`: shared in-process runtime handle used by each entrypoint.
+- `core/src/sites/xhs/`: Xiaohongshu entities, JS extractors, page runtime,
+  and site tools.
+
+## Rust CLI — `cli/`
+
+Entry point package for the `socai` binary. It depends
+on `socai-core`; keep CLI daemon/socket plumbing thin and keep browser/session
+ownership inside the core runtime.
 
 ## Python package — `socai/`
 

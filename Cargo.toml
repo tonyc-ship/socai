@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "app/src-tauri",
+    "core",
+    "cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tonyc-ship/socai"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.28"
+crossterm = "0.28"
+rustyline = "14"
+inquire = "0.7"
+
+thiserror = "2"
+anyhow = "1"
+libc = "0.2"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+chromiumoxide = "0.7"
+
+socai-core = { path = "core" }
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
