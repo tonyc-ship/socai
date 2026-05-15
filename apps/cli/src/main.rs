@@ -1,37 +1,51 @@
-use clap::{Parser, Subcommand};
-use socai_runtime::SocaiRuntime;
-use socai_sites::xhs::XhsSiteRuntime;
+mod daemon;
 
-#[derive(Debug, Parser)]
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use serde_json::Value;
+
+#[derive(Parser, Debug)]
 #[command(name = "socai")]
-#[command(about = "socai CLI — Xiaohongshu research agent")]
+#[command(about = "socai rust cli")]
 struct Args {
     #[command(subcommand)]
     command: Command,
 }
 
-/// Subcommands here mirror the Python CLI in `socai/cli/commands.py`.
-/// Smoke tests for LLM backends and the agent loop live in the
-/// `socai-dev` binary (apps/cli/src/bin/socai-dev.rs) so this surface
-/// stays small.
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
-    /// Search Xiaohongshu and print the visible note cards as JSON.
+    /// Search Xiaohongshu and print visible note cards as JSON.
+    #[command(name = "search_notes")]
     SearchNotes {
         query: String,
-        #[arg(long, default_value_t = 2.0)]
-        wait_seconds: f64,
+        #[arg(long)]
+        pretty: bool,
     },
-    /// Open a Xiaohongshu note URL and print the parsed note body as JSON.
+    /// Run the default-depth Xiaohongshu topic scan.
+    #[command(name = "topic_scan")]
+    TopicScan {
+        query: String,
+        #[arg(long)]
+        tab: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Open a note from the current search/topic page and print the parsed note.
+    #[command(name = "extract_note")]
     ExtractNote {
-        url: String,
-        #[arg(long, default_value_t = 8.0)]
-        wait_seconds: f64,
+        #[arg(long = "note-id")]
+        note_id: String,
+        #[arg(long)]
+        pretty: bool,
     },
+    /// Stop the background socai rust daemon.
+    Stop,
+    #[command(name = "__daemon", hide = true)]
+    Daemon,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -40,34 +54,61 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let runtime = SocaiRuntime::new();
-    runtime.connect_browser();
-    runtime.wait_browser_connected().await?;
-
     match args.command {
-        Command::SearchNotes {
-            query,
-            wait_seconds,
-        } => {
-            let page = runtime.create_task("about:blank").await?;
-            let result = XhsSiteRuntime::new(&page)
-                .search_notes(&query, wait_seconds)
-                .await;
-            let close = page.close().await;
-            let result = result?;
-            close?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+        Command::SearchNotes { query, pretty } => {
+            let result = daemon::send_or_spawn(
+                "search_notes",
+                serde_json::json!({ "query": query }),
+                daemon::DEFAULT_COMMAND_TIMEOUT,
+            )
+            .await?;
+            print_command_result(&result, pretty)?;
         }
-        Command::ExtractNote { url, wait_seconds } => {
-            let page = runtime.create_task("about:blank").await?;
-            page.navigate_with_timeout(&url, 60.0).await?;
-            let note = XhsSiteRuntime::new(&page).extract_note(wait_seconds).await;
-            let close = page.close().await;
-            let note = note?;
-            close?;
-            println!("{}", serde_json::to_string_pretty(&note)?);
+        Command::TopicScan { query, tab, pretty } => {
+            let mut input = serde_json::json!({
+                "query": query,
+                "depth": "standard"
+            });
+            if let Some(tab) = tab {
+                input["tab_label"] = Value::String(tab);
+            }
+
+            let result =
+                daemon::send_or_spawn("topic_scan", input, daemon::LONG_COMMAND_TIMEOUT).await?;
+            print_command_result(&result, pretty)?;
         }
+        Command::ExtractNote { note_id, pretty } => {
+            let result = daemon::send_or_spawn(
+                "extract_note",
+                serde_json::json!({ "note_id": note_id }),
+                daemon::DEFAULT_COMMAND_TIMEOUT,
+            )
+            .await?;
+            print_command_result(&result, pretty)?;
+        }
+        Command::Stop => {
+            if daemon::stop_daemon().await? {
+                eprintln!("socai rust daemon stopped");
+            } else {
+                eprintln!("socai rust daemon is not running");
+            }
+        }
+        Command::Daemon => daemon::run_daemon().await?,
     }
 
+    Ok(())
+}
+
+fn print_command_result(result: &Value, pretty: bool) -> Result<()> {
+    if let Some(run_dir) = result.get("run_dir").and_then(Value::as_str) {
+        eprintln!("run_dir: {run_dir}");
+    }
+
+    let data = result.get("data").unwrap_or(result);
+    if pretty {
+        println!("{}", serde_json::to_string_pretty(data)?);
+    } else {
+        println!("{}", serde_json::to_string(data)?);
+    }
     Ok(())
 }

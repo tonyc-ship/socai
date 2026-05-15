@@ -32,6 +32,7 @@ crossterm = "0.28"
 
 thiserror = "2"
 anyhow = "1"
+libc = "0.2"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

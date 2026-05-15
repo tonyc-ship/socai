@@ -282,6 +282,7 @@ impl<'a> XhsSiteRuntime<'a> {
             .and_then(Value::as_str)
             .unwrap_or("cover");
 
+        sleep_ms(180).await;
         self.page
             .click(number(&target, "x"), number(&target, "y"))
             .await?;
@@ -300,6 +301,7 @@ impl<'a> XhsSiteRuntime<'a> {
             .expect_object("clickCard", Some(&Value::Object(click_arg)))
             .await?;
         if retry.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            sleep_ms(180).await;
             self.page
                 .click(number(&retry, "x"), number(&retry, "y"))
                 .await?;
@@ -380,6 +382,27 @@ impl<'a> XhsSiteRuntime<'a> {
             }
         }
 
+        if before
+            .get("on_detail_route")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let _ = self
+                .page
+                .evaluate_json("history.back(); return {ok: true};")
+                .await;
+            let state = self.wait_for_note_closed(per_attempt.max(1.5)).await?;
+            if !note_is_open(&state) {
+                self.set_last_note_id(String::new());
+                return Ok(json!({
+                    "ok": true,
+                    "strategy": "history_back",
+                    "state": state,
+                    "url": self.current_url().await?,
+                }));
+            }
+        }
+
         Ok(json!({
             "ok": false,
             "strategy": "close_failed",
@@ -407,6 +430,21 @@ impl<'a> XhsSiteRuntime<'a> {
         }
         let note = self.extract_note(wait_seconds).await?;
         if !note_id.is_empty() && !note.note_id.is_empty() && note.note_id != note_id {
+            if let Some(link) = tokenized_open_link(&open, note_id) {
+                self.page.navigate_with_timeout(&link, 60.0).await?;
+                let note = self.extract_note(wait_seconds).await?;
+                if note.note_id == note_id {
+                    return Ok(json!({
+                        "ok": true,
+                        "entity": note,
+                        "open": open,
+                        "fallback": {
+                            "strategy": "tokenized_link_navigation",
+                            "url": link,
+                        },
+                    }));
+                }
+            }
             return Ok(json!({
                 "ok": false,
                 "entity": note,
@@ -891,6 +929,21 @@ fn normalize_image_url(value: &str) -> String {
         return String::new();
     }
     trimmed.replacen("http://", "https://", 1)
+}
+
+fn tokenized_open_link(open: &Option<Value>, note_id: &str) -> Option<String> {
+    let link = open
+        .as_ref()?
+        .get("target")?
+        .get("link")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if link.contains(note_id) {
+        Some(link)
+    } else {
+        None
+    }
 }
 
 fn note_is_open(state: &Value) -> bool {
