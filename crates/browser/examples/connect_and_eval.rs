@@ -9,7 +9,7 @@
 
 use std::env;
 
-use socai_browser::{Cdp, TaskSessionManager};
+use socai_browser::{Cdp, PageSessionManager};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,8 +36,8 @@ async fn main() -> anyhow::Result<()> {
     cdp.wait_connected().await?;
     println!("connected → {:?}", cdp.status().await);
 
-    let tasks = TaskSessionManager::new(cdp.clone());
-    let page = tasks.create_task("about:blank").await?;
+    let tasks = PageSessionManager::new(cdp.clone());
+    let page = tasks.create_page("about:blank").await?;
     println!("opened tab → target_id={}", page.target_id());
 
     page.navigate(&url).await?;

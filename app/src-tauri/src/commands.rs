@@ -50,9 +50,9 @@ pub async fn cdp_test_search(
     let url = format!("https://www.google.com/search?q={encoded}");
 
     let page = runtime
-        .create_task(&url)
+        .create_page(&url)
         .await
-        .map_err(|e| format!("create_task failed: {e}"))?;
+        .map_err(|e| format!("create_page failed: {e}"))?;
 
     let info = page
         .page_info()

@@ -5,22 +5,21 @@ use chromiumoxide::Browser;
 use crate::page::PageSession;
 use crate::state::{Cdp, CdpState};
 
-/// One CDP connection, one new tab per task. Mirrors Python's
-/// `BrowserTaskSessionManager` minimum surface: caller creates tasks; the
-/// returned `PageSession` is closed by the caller when the task ends.
-pub struct TaskSessionManager {
+/// Thin page factory over one CDP connection. Higher-level runtime code can
+/// decide whether a page belongs to a tool session, an agent run, or a debug
+/// command.
+pub struct PageSessionManager {
     cdp: Cdp,
 }
 
-impl TaskSessionManager {
+impl PageSessionManager {
     pub fn new(cdp: Cdp) -> Self {
         Self { cdp }
     }
 
     /// Open a new tab navigated to `start_url`. Errors if the CDP connection
-    /// is not in `Connected` state — callers should `cdp.wait_connected()`
-    /// first (or surface the error to the user).
-    pub async fn create_task(&self, start_url: &str) -> anyhow::Result<PageSession> {
+    /// is not in `Connected` state.
+    pub async fn create_page(&self, start_url: &str) -> anyhow::Result<PageSession> {
         let browser = self.browser().await?;
         let page = browser.new_page(start_url).await?;
         Ok(PageSession::new(page))

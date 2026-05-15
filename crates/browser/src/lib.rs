@@ -10,4 +10,4 @@ pub use endpoint::{
 };
 pub use page::PageSession;
 pub use state::{BrowserEvent, Cdp, CdpState, StatusPayload, TargetInfo};
-pub use task::TaskSessionManager;
+pub use task::PageSessionManager;

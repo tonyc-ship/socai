@@ -4013,6 +4013,7 @@ name = "socai-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "socai-agent",
  "socai-browser",
  "tokio",
 ]

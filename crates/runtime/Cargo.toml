@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 socai-browser.workspace = true
+socai-agent.workspace = true
 tokio = { workspace = true }
 anyhow.workspace = true
 

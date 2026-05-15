@@ -53,13 +53,13 @@ impl Default for ReadNoteOptions {
 }
 
 /// Site-aware XHS operations on top of a CDP `PageSession`.
-pub struct XhsSiteRuntime<'a> {
+pub struct XhsPageRuntime<'a> {
     page: &'a PageSession,
     media: Option<MediaProcessor>,
     last_extracted_note_id: Mutex<String>,
 }
 
-impl<'a> XhsSiteRuntime<'a> {
+impl<'a> XhsPageRuntime<'a> {
     pub fn new(page: &'a PageSession) -> Self {
         Self {
             page,
@@ -940,7 +940,7 @@ fn parse_note(body: &Value, level: &str) -> XhsNote {
 }
 
 async fn wait_for_note_state(
-    runtime: &XhsSiteRuntime<'_>,
+    runtime: &XhsPageRuntime<'_>,
     timeout_s: f64,
     want_open: bool,
 ) -> Result<Value> {

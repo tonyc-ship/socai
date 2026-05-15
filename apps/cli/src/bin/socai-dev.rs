@@ -17,7 +17,7 @@ use socai_agent::{
     OpenAICompatBackend, Provider, Tool,
 };
 use socai_runtime::SocaiRuntime;
-use socai_sites::xhs::{xhs_tools_with_llm_provider, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
+use socai_sites::xhs::{xhs_tools_with_llm_provider, XhsPageRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
 
 #[derive(Debug, Parser)]
 #[command(name = "socai-dev")]
@@ -187,9 +187,9 @@ async fn run_agent_cmd(
     } else {
         runtime.connect_browser();
         runtime.wait_browser_connected().await?;
-        let page = runtime.create_task("about:blank").await?;
+        let page = runtime.create_page("about:blank").await?;
         let _ = page.navigate_with_timeout(XHS_HOME_URL, 60.0).await;
-        let _ = XhsSiteRuntime::new(&page).ensure_xhs(false).await;
+        let _ = XhsPageRuntime::new(&page).ensure_xhs(false).await;
         let page = Arc::new(page);
         let tools = xhs_tools_with_llm_provider(page.clone(), Some(llm_provider.clone()));
         (tools, Some(page), XHS_AGENT_HINT.to_string())
@@ -310,9 +310,9 @@ async fn run_page_state(url: String) -> anyhow::Result<()> {
     let runtime = SocaiRuntime::new();
     runtime.connect_browser();
     runtime.wait_browser_connected().await?;
-    let page = runtime.create_task("about:blank").await?;
+    let page = runtime.create_page("about:blank").await?;
     page.navigate(&url).await?;
-    let result = XhsSiteRuntime::new(&page).detect_state().await;
+    let result = XhsPageRuntime::new(&page).detect_state().await;
     let close = page.close().await;
     let result = result?;
     close?;

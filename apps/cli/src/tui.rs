@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 use std::io::{self, IsTerminal};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use inquire::{Select, Text};
@@ -18,16 +17,13 @@ use rustyline::validate::Validator;
 use rustyline::{Cmd, CompletionType, Config, Editor, EventHandler, Helper, KeyEvent, Modifiers};
 use socai_agent::{
     config_for, configured_default_model_for, load_api_key, resolve_provider, save_api_key,
-    save_default_model, AgentEvent, AgentOptions, AnthropicBackend, Backend, OpenAICompatBackend,
-    Provider, Tool, PROVIDERS,
+    save_default_model, AgentEvent, Backend, Provider, PROVIDERS,
 };
-use socai_runtime::{BrowserStatus, SocaiRuntime};
-use socai_sites::xhs::{xhs_tools_with_llm_provider, XhsSiteRuntime, XHS_AGENT_HINT, XHS_HOME_URL};
-use tokio::time::{sleep, Instant};
+use socai_runtime::{
+    create_llm_provider, run_agent_task as run_agent_with_tools, AgentRunConfig, SocaiRuntime,
+};
+use socai_sites::xhs::{xhs_agent_instructions, xhs_agent_tools, XHS_HOME_URL};
 
-const DEFAULT_MAX_TURNS: u32 = 30;
-const DEFAULT_MAX_TOKENS: u32 = 4096;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
 const PROVIDER_ORDER: &[Provider] = &[
     Provider::Kimi,
     Provider::Qwen,
@@ -40,12 +36,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("exit", "Exit the TUI"),
 ];
 
-const TUI_AGENT_INSTRUCTIONS: &str = "You are running inside the Socai TUI. \
-The browser is locked to Xiaohongshu (xiaohongshu.com / 小红书); every task is \
-an XHS task. Do not navigate to other websites. Use the XHS tools to search, \
-scan topics, read notes, and inspect page state. Prefer topic_scan for broad \
-research tasks. Reply in the same language as the user's task and ground your \
-answer in tool output.";
+const TUI_AGENT_PREAMBLE: &str = "You are running inside the Socai TUI.";
 
 #[derive(Default)]
 struct AppState {
@@ -162,6 +153,7 @@ pub async fn run() -> Result<()> {
         }
     }
 
+    let _ = runtime.close_site_session("xhs").await;
     runtime.disconnect_browser().await;
     Ok(())
 }
@@ -417,28 +409,12 @@ fn active_model(state: &AppState) -> Result<String> {
 }
 
 async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>) -> Result<()> {
-    let llm_provider = build_backend(model).await?;
+    let llm_provider = build_llm_provider(model).await?;
     println!();
     println!("[socai] using {}", llm_provider.label());
     println!("[socai] connecting browser...");
-
-    connect_runtime(runtime).await?;
-    let page = runtime.create_task("about:blank").await?;
-    page.navigate_with_timeout(XHS_HOME_URL, 60.0).await?;
-    XhsSiteRuntime::new(&page).ensure_xhs(false).await?;
-    let page = Arc::new(page);
-    let tools: Vec<Arc<dyn Tool>> =
-        xhs_tools_with_llm_provider(page.clone(), Some(llm_provider.clone()));
-
-    let options = AgentOptions {
-        max_turns: DEFAULT_MAX_TURNS,
-        max_tokens: DEFAULT_MAX_TOKENS,
-        extra_instructions: format!("{TUI_AGENT_INSTRUCTIONS}\n\n{XHS_AGENT_HINT}"),
-        run_dir: None,
-        enabled_sites: vec!["xhs".to_string()],
-        keep_recent_messages: 12,
-        memory_max_chars: 6000,
-    };
+    let page = runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+    let tools = xhs_agent_tools(page, llm_provider.clone()).await?;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel::<AgentEvent>(256);
     let printer = tokio::spawn(async move {
@@ -447,16 +423,14 @@ async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>)
         }
     });
 
-    let outcome = socai_agent::run_agent_with_events(task, llm_provider, tools, options, tx).await;
-    let _ = printer.await;
-
-    let close_result = match Arc::try_unwrap(page) {
-        Ok(page) => page.close().await,
-        Err(_) => Ok(()),
+    let config = AgentRunConfig {
+        extra_instructions: xhs_agent_instructions(TUI_AGENT_PREAMBLE),
+        enabled_sites: vec!["xhs".to_string()],
+        ..AgentRunConfig::default()
     };
-
-    let outcome = outcome?;
-    close_result.context("close task tab")?;
+    let outcome = run_agent_with_tools(task, llm_provider, tools, config, tx).await;
+    let _ = printer.await;
+    let outcome = outcome.context("agent loop failed")?;
 
     println!();
     println!("{}", outcome.final_text.trim());
@@ -470,19 +444,19 @@ async fn run_agent_task(runtime: &SocaiRuntime, task: &str, model: Option<&str>)
     Ok(())
 }
 
-async fn build_backend(model: Option<&str>) -> Result<Arc<dyn Backend>> {
-    let provider = resolve_provider(None, model)?;
-    let effective = model
+async fn build_llm_provider(model: Option<&str>) -> Result<Arc<dyn Backend>> {
+    let model_or_env = model
         .map(str::to_string)
         .filter(|m| !m.trim().is_empty())
-        .or_else(env_model)
-        .unwrap_or_else(|| configured_default_model_for(provider));
-    ensure_model_key(&effective).await?;
-    let backend: Arc<dyn Backend> = match provider {
-        Provider::Anthropic => Arc::new(AnthropicBackend::new(effective)?),
-        other => Arc::new(OpenAICompatBackend::new(other, effective)?),
+        .or_else(env_model);
+    let effective = if let Some(model) = model_or_env.as_deref() {
+        model.to_string()
+    } else {
+        let provider = resolve_provider(None, None)?;
+        configured_default_model_for(provider)
     };
-    Ok(backend)
+    ensure_model_key(&effective).await?;
+    create_llm_provider(model_or_env.as_deref())
 }
 
 fn env_model() -> Option<String> {
@@ -490,27 +464,6 @@ fn env_model() -> Option<String> {
         .ok()
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
-}
-
-async fn connect_runtime(runtime: &SocaiRuntime) -> Result<()> {
-    runtime.connect_browser();
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
-    loop {
-        match runtime.browser_status().await {
-            BrowserStatus::Connected { .. } => return Ok(()),
-            BrowserStatus::Disconnected { reason } if reason != "not_yet_connected" => {
-                return Err(anyhow::anyhow!("CDP disconnected: {reason}"));
-            }
-            BrowserStatus::Disconnected { .. } | BrowserStatus::Connecting { .. } => {}
-        }
-        if Instant::now() >= deadline {
-            return Err(anyhow::anyhow!(
-                "CDP did not connect within {:?}",
-                CONNECT_TIMEOUT
-            ));
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
 }
 
 // ---------- event rendering (matches Python prefix style) ------------------

@@ -1,4 +1,4 @@
-//! Agent-callable tool wrappers around [`XhsSiteRuntime`].
+//! Agent-callable tool wrappers around [`XhsPageRuntime`].
 //!
 //! Each wrapper owns an `Arc<PageSession>` — the same tab is reused across
 //! tool calls so the agent's actions accumulate state (search results
@@ -9,11 +9,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use socai_agent::{Backend as LlmProvider, Tool, ToolContext, ToolResult};
+use socai_agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, ToolResult};
 use socai_browser::PageSession;
 use socai_media::{timing_delta, MediaProcessor, TimingSnapshot};
 
-use crate::xhs::{ReadNoteOptions, XhsNoteCard, XhsSiteRuntime};
+use crate::xhs::{ReadNoteOptions, XhsNoteCard, XhsPageRuntime};
+
+pub const XHS_BROWSER_LOCK_PROMPT: &str = "The browser is locked to Xiaohongshu \
+(xiaohongshu.com / 小红书); every task is an XHS task. Do not navigate to other \
+websites. Use the XHS tools to search, scan topics, read notes, and inspect \
+page state. Prefer topic_scan for broad research tasks. Reply in the same \
+language as the user's task and ground your answer in tool output.";
 
 /// All XHS tools constructed against the same page. Convenience helper for
 /// the CLI / agent host — just register everything.
@@ -50,6 +56,224 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(PageStateTool { page }),
     ]
+}
+
+pub async fn xhs_agent_tools(
+    page: Arc<PageSession>,
+    llm_provider: Arc<dyn LlmProvider>,
+) -> anyhow::Result<Vec<Arc<dyn Tool>>> {
+    XhsPageRuntime::new(&page).ensure_xhs(false).await.ok();
+    Ok(xhs_tools_with_llm_provider(page, Some(llm_provider)))
+}
+
+pub fn xhs_agent_instructions(extra: &str) -> String {
+    let base = format!("{XHS_BROWSER_LOCK_PROMPT}\n\n{XHS_AGENT_HINT}");
+    let extra = extra.trim();
+    if extra.is_empty() {
+        base
+    } else {
+        format!("{extra}\n\n{base}")
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CommandPageAction {
+    None,
+    SearchReady,
+    CloseOpenNote,
+}
+
+#[derive(Clone, Copy)]
+struct XhsCommandSpec {
+    command_name: &'static str,
+    tool_name: &'static str,
+    before: CommandPageAction,
+    after: CommandPageAction,
+}
+
+const SEARCH_NOTES_COMMAND: XhsCommandSpec = XhsCommandSpec {
+    command_name: "search_notes",
+    tool_name: "search_notes",
+    before: CommandPageAction::SearchReady,
+    after: CommandPageAction::None,
+};
+
+const TOPIC_SCAN_COMMAND: XhsCommandSpec = XhsCommandSpec {
+    command_name: "topic_scan",
+    tool_name: "topic_scan",
+    before: CommandPageAction::SearchReady,
+    after: CommandPageAction::None,
+};
+
+const EXTRACT_NOTE_COMMAND: XhsCommandSpec = XhsCommandSpec {
+    command_name: "extract_note",
+    tool_name: "read_note",
+    before: CommandPageAction::CloseOpenNote,
+    after: CommandPageAction::CloseOpenNote,
+};
+
+pub async fn search_notes_command(page: Arc<PageSession>, query: &str) -> anyhow::Result<Value> {
+    run_xhs_tool_command(page, SEARCH_NOTES_COMMAND, search_notes_input(query)?).await
+}
+
+pub async fn topic_scan_command(
+    page: Arc<PageSession>,
+    query: &str,
+    depth: &str,
+    tab_label: Option<&str>,
+) -> anyhow::Result<Value> {
+    run_xhs_tool_command(
+        page,
+        TOPIC_SCAN_COMMAND,
+        topic_scan_input(query, depth, tab_label)?,
+    )
+    .await
+}
+
+pub async fn extract_note_command(page: Arc<PageSession>, note_id: &str) -> anyhow::Result<Value> {
+    run_xhs_tool_command(page, EXTRACT_NOTE_COMMAND, extract_note_input(note_id)?).await
+}
+
+fn search_notes_input(query: &str) -> anyhow::Result<Value> {
+    Ok(json!({
+        "query": trimmed_required(query, "query")?,
+        "wait_seconds": 2.0,
+    }))
+}
+
+fn topic_scan_input(query: &str, depth: &str, tab_label: Option<&str>) -> anyhow::Result<Value> {
+    let mut input = json!({
+        "query": trimmed_required(query, "query")?,
+        "depth": defaulted_str(depth, "standard"),
+    });
+    insert_optional_str(&mut input, "tab_label", tab_label);
+    Ok(input)
+}
+
+fn extract_note_input(note_id: &str) -> anyhow::Result<Value> {
+    Ok(json!({
+        "note_id": trimmed_required(note_id, "note_id")?,
+        "wait_seconds": 6.0,
+    }))
+}
+
+async fn run_xhs_tool_command(
+    page: Arc<PageSession>,
+    spec: XhsCommandSpec,
+    input: Value,
+) -> anyhow::Result<Value> {
+    apply_command_page_action(spec.before, &page).await?;
+    let (run_dir, ctx) = command_context(spec.command_name);
+    let data = call_xhs_tool(page.clone(), spec.tool_name, input, &ctx).await?;
+    apply_command_page_action(spec.after, &page).await?;
+    Ok(json!({
+        "command": spec.command_name,
+        "run_dir": run_dir,
+        "data": data,
+    }))
+}
+
+async fn apply_command_page_action(
+    action: CommandPageAction,
+    page: &PageSession,
+) -> anyhow::Result<()> {
+    match action {
+        CommandPageAction::None => Ok(()),
+        CommandPageAction::SearchReady => ensure_search_ready(page).await,
+        CommandPageAction::CloseOpenNote => {
+            close_open_note(page).await;
+            Ok(())
+        }
+    }
+}
+
+pub async fn ensure_search_ready(page: &PageSession) -> anyhow::Result<()> {
+    close_open_note(page).await;
+    let runtime = XhsPageRuntime::new(page);
+    let state = runtime.detect_state().await.ok();
+    let state_name = state
+        .as_ref()
+        .and_then(|state| state.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let current_url = runtime.current_url().await.unwrap_or_default();
+    if !current_url.contains("xiaohongshu.com") || state_name == "note_detail" {
+        page.navigate_with_timeout(crate::xhs::XHS_HOME_URL, 60.0)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn close_open_note(page: &PageSession) {
+    let runtime = XhsPageRuntime::new(page);
+    let state = runtime.detect_state().await.ok();
+    let note_open = state
+        .as_ref()
+        .and_then(|state| state.get("note_open"))
+        .and_then(|open| open.get("open"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let state_name = state
+        .as_ref()
+        .and_then(|state| state.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if note_open || state_name == "note_detail" {
+        let _ = runtime.close_note(0.8).await;
+    }
+}
+
+async fn call_xhs_tool(
+    page: Arc<PageSession>,
+    tool_name: &str,
+    input: Value,
+    ctx: &ToolContext,
+) -> anyhow::Result<Value> {
+    let tool = xhs_tools(page)
+        .into_iter()
+        .find(|tool| tool.name() == tool_name)
+        .ok_or_else(|| anyhow::anyhow!("xhs tool not found: {tool_name}"))?;
+    let result = tool.call(input, ctx).await?;
+    let text = result.flat_text();
+    serde_json::from_str(text.trim()).or_else(|_| Ok(json!({ "raw_reply": text })))
+}
+
+fn command_context(label: &str) -> (String, ToolContext) {
+    let run_dir = make_run_dir(label);
+    let run_id = run_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(label)
+        .to_string();
+    let ctx = ToolContext::new(run_id, run_dir.clone());
+    ctx.enable_site("xhs");
+    (run_dir.display().to_string(), ctx)
+}
+
+fn trimmed_required(value: &str, label: &str) -> anyhow::Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{label} is empty");
+    }
+    Ok(trimmed.to_string())
+}
+
+fn defaulted_str<'a>(value: &'a str, default: &'a str) -> &'a str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        default
+    } else {
+        trimmed
+    }
+}
+
+fn insert_optional_str(input: &mut Value, key: &str, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if let Some(obj) = input.as_object_mut() {
+        obj.insert(key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 fn json_result(value: &Value) -> ToolResult {
@@ -134,7 +358,7 @@ impl Tool for SearchNotesTool {
             .ok_or_else(|| anyhow::anyhow!("missing query"))?
             .to_string();
         let wait_seconds = get_f64(&input, "wait_seconds", 2.0);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs.search_notes(&query, wait_seconds).await?;
         Ok(json_result(&value))
     }
@@ -175,7 +399,7 @@ impl Tool for OpenNoteTool {
             .and_then(Value::as_i64)
             .and_then(|i| usize::try_from(i).ok());
         let wait_seconds = get_f64(&input, "wait_seconds", 4.0);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs
             .open_note(note_id.as_deref().unwrap_or(""), index, wait_seconds)
             .await?;
@@ -210,7 +434,7 @@ impl Tool for CloseNoteTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs.close_note(wait_seconds).await?;
         Ok(json_result(&value))
     }
@@ -258,7 +482,7 @@ impl Tool for ReadNoteTool {
             .and_then(|i| usize::try_from(i).ok());
         let wait_seconds = get_f64(&input, "wait_seconds", 6.0);
         let options = read_note_options(&input);
-        let xhs = XhsSiteRuntime::new_with_media(
+        let xhs = XhsPageRuntime::new_with_media(
             &self.page,
             media_for(ctx, self.llm_provider.clone(), options.include_media)?,
         );
@@ -307,7 +531,7 @@ impl Tool for ExtractNoteTool {
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let wait_seconds = get_f64(&input, "wait_seconds", 8.0);
         let options = read_note_options(&input);
-        let xhs = XhsSiteRuntime::new_with_media(
+        let xhs = XhsPageRuntime::new_with_media(
             &self.page,
             media_for(ctx, self.llm_provider.clone(), options.include_media)?,
         );
@@ -344,7 +568,7 @@ impl Tool for ExtractCommentsTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let max = get_i64(&input, "max_comments", 20);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs.extract_comments(max).await?;
         Ok(json_result(&Value::Array(value)))
     }
@@ -372,7 +596,7 @@ impl Tool for PageStateTool {
     }
 
     async fn call(&self, _input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         // ensure we're on XHS first, but don't navigate if we're not — just
         // report whatever the current page is.
         let value = xhs.detect_state().await?;
@@ -403,7 +627,7 @@ impl Tool for ExtractSearchCardsTool {
     }
 
     async fn call(&self, _input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let cards = xhs.extract_search_cards().await?;
         let value = serde_json::to_value(&cards)?;
         Ok(json_result(&value))
@@ -432,7 +656,7 @@ impl Tool for ListSearchTabsTool {
     }
 
     async fn call(&self, _input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let tabs = xhs.list_search_tabs().await?;
         Ok(json_result(&Value::Array(tabs)))
     }
@@ -472,7 +696,7 @@ impl Tool for ClickSearchTabTool {
             .ok_or_else(|| anyhow::anyhow!("missing label"))?
             .to_string();
         let wait_seconds = get_f64(&input, "wait_seconds", 1.5);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs.click_search_tab(&label, wait_seconds).await?;
         Ok(json_result(&value))
     }
@@ -506,7 +730,7 @@ impl Tool for ScrollInNoteTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let pixels = get_i64(&input, "pixels", 400);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let value = xhs.scroll_in_note(pixels).await?;
         Ok(json_result(&value))
     }
@@ -539,7 +763,7 @@ impl Tool for CollectCarouselImagesTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let max_images = get_i64(&input, "max_images", 12);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let urls = xhs.collect_carousel_images(max_images).await?;
         Ok(json_result(&serde_json::to_value(&urls)?))
     }
@@ -576,7 +800,7 @@ impl Tool for ExtractProfileTool {
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let max_notes = get_i64(&input, "max_notes", 20);
         let scroll_rounds = get_i64(&input, "scroll_rounds", 6);
-        let xhs = XhsSiteRuntime::new(&self.page);
+        let xhs = XhsPageRuntime::new(&self.page);
         let profile = xhs.extract_profile(max_notes, scroll_rounds).await?;
         Ok(json_result(&profile.to_value()))
     }
@@ -673,7 +897,7 @@ impl Tool for TopicScanTool {
 
         let media = media_for(ctx, self.llm_provider.clone(), profile.include_media)?;
         let media_baseline: Option<TimingSnapshot> = media.as_ref().map(|m| m.timing().snapshot());
-        let xhs = XhsSiteRuntime::new_with_media(&self.page, media.clone());
+        let xhs = XhsPageRuntime::new_with_media(&self.page, media.clone());
         let search = xhs.search_notes(&query, 2.0).await?;
 
         // Optional tab switch + re-extract cards.

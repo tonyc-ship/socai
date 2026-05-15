@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use socai_agent::{make_run_dir, ToolContext};
-use socai_browser::PageSession;
-use socai_runtime::{BrowserStatus, SocaiRuntime};
-use socai_sites::xhs::{xhs_tools, XhsSiteRuntime, XHS_HOME_URL};
+use socai_runtime::SocaiRuntime;
+use socai_sites::xhs::{
+    extract_note_command, search_notes_command, topic_scan_command, XHS_HOME_URL,
+};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -53,7 +53,6 @@ struct DaemonPaths {
 
 struct DaemonState {
     runtime: SocaiRuntime,
-    page: Option<Arc<PageSession>>,
     last_activity: Instant,
 }
 
@@ -70,9 +69,9 @@ pub async fn run_daemon() -> Result<()> {
         .with_context(|| format!("bind daemon socket {}", paths.socket.display()))?;
     fs::write(&paths.pid, std::process::id().to_string()).await?;
 
+    let runtime = SocaiRuntime::new();
     let state = Arc::new(Mutex::new(DaemonState {
-        runtime: SocaiRuntime::new(),
-        page: None,
+        runtime,
         last_activity: Instant::now(),
     }));
     let stop = Arc::new(Notify::new());
@@ -190,170 +189,31 @@ async fn handle_request(
 impl DaemonState {
     async fn search_notes(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
-        let page = self.ensure_page().await?;
-        ensure_search_ready(&page).await?;
-        let (run_dir, ctx) = command_context("search_notes")?;
-        let data = call_xhs_tool(
-            page,
-            "search_notes",
-            json!({ "query": query, "wait_seconds": 2.0 }),
-            &ctx,
-        )
-        .await?;
-
-        Ok(json!({
-            "command": "search_notes",
-            "run_dir": run_dir,
-            "data": data
-        }))
+        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+        search_notes_command(page, &query).await
     }
 
     async fn topic_scan(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
-        let page = self.ensure_page().await?;
-        ensure_search_ready(&page).await?;
-        let (run_dir, ctx) = command_context("topic_scan")?;
-        let mut input = json!({
-            "query": query,
-            "depth": args.get("depth").and_then(Value::as_str).unwrap_or("standard")
-        });
-        if let Some(tab_label) = args.get("tab_label").and_then(Value::as_str) {
-            input["tab_label"] = Value::String(tab_label.to_string());
-        }
-
-        let data = call_xhs_tool(page, "topic_scan", input, &ctx).await?;
-        Ok(json!({
-            "command": "topic_scan",
-            "run_dir": run_dir,
-            "data": data
-        }))
+        let depth = args
+            .get("depth")
+            .and_then(Value::as_str)
+            .unwrap_or("standard");
+        let tab_label = args.get("tab_label").and_then(Value::as_str);
+        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+        topic_scan_command(page, &query, depth, tab_label).await
     }
 
     async fn extract_note(&mut self, args: Value) -> Result<Value> {
         let note_id = required_string(&args, "note_id")?;
-        let page = self.ensure_page().await?;
-        close_open_note(&page).await;
-        let (run_dir, ctx) = command_context("extract_note")?;
-        let data = call_xhs_tool(
-            page.clone(),
-            "read_note",
-            json!({ "note_id": note_id, "wait_seconds": 6.0 }),
-            &ctx,
-        )
-        .await?;
-        close_open_note(&page).await;
-
-        Ok(json!({
-            "command": "extract_note",
-            "run_dir": run_dir,
-            "data": data
-        }))
-    }
-
-    async fn ensure_page(&mut self) -> Result<Arc<PageSession>> {
-        if let Some(page) = &self.page {
-            if page.page_info().await.is_ok() {
-                return Ok(page.clone());
-            }
-            self.page = None;
-        }
-
-        connect_runtime(&self.runtime).await?;
-        let page = Arc::new(self.runtime.create_task("about:blank").await?);
-        page.navigate_with_timeout(XHS_HOME_URL, 60.0).await?;
-        self.page = Some(page.clone());
-        Ok(page)
+        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+        extract_note_command(page, &note_id).await
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        if let Some(page) = self.page.take() {
-            if let Ok(page) = Arc::try_unwrap(page) {
-                let _ = page.close().await;
-            }
-        }
+        let _ = self.runtime.close_site_session("xhs").await;
         self.runtime.disconnect_browser().await;
         Ok(())
-    }
-}
-
-async fn connect_runtime(runtime: &SocaiRuntime) -> Result<()> {
-    runtime.connect_browser();
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
-    loop {
-        match runtime.browser_status().await {
-            BrowserStatus::Connected { .. } => return Ok(()),
-            BrowserStatus::Disconnected { reason } if reason != "not_yet_connected" => {
-                return Err(anyhow!("CDP disconnected: {reason}"));
-            }
-            BrowserStatus::Disconnected { .. } | BrowserStatus::Connecting { .. } => {}
-        }
-        if Instant::now() >= deadline {
-            return Err(anyhow!("CDP did not connect within {:?}", STARTUP_TIMEOUT));
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-}
-
-async fn call_xhs_tool(
-    page: Arc<PageSession>,
-    tool_name: &str,
-    input: Value,
-    ctx: &ToolContext,
-) -> Result<Value> {
-    let tool = xhs_tools(page)
-        .into_iter()
-        .find(|tool| tool.name() == tool_name)
-        .ok_or_else(|| anyhow!("xhs tool not found: {tool_name}"))?;
-    let result = tool.call(input, ctx).await?;
-    let text = result.flat_text();
-    serde_json::from_str(text.trim()).or_else(|_| Ok(json!({ "raw_reply": text })))
-}
-
-fn command_context(label: &str) -> Result<(String, ToolContext)> {
-    let run_dir = make_run_dir(label);
-    let run_id = run_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(label)
-        .to_string();
-    let ctx = ToolContext::new(run_id, run_dir.clone());
-    ctx.enable_site("xhs");
-    Ok((run_dir.display().to_string(), ctx))
-}
-
-async fn ensure_search_ready(page: &PageSession) -> Result<()> {
-    close_open_note(page).await;
-    let runtime = XhsSiteRuntime::new(page);
-    let state = runtime.detect_state().await.ok();
-    let state_name = state
-        .as_ref()
-        .and_then(|state| state.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let current_url = runtime.current_url().await.unwrap_or_default();
-    if !current_url.contains("xiaohongshu.com") || state_name == "note_detail" {
-        page.navigate_with_timeout(XHS_HOME_URL, 60.0).await?;
-    }
-    Ok(())
-}
-
-async fn close_open_note(page: &PageSession) {
-    let runtime = XhsSiteRuntime::new(page);
-    let state = runtime.detect_state().await.ok();
-    let note_open = state
-        .as_ref()
-        .and_then(|state| state.get("note_open"))
-        .and_then(|open| open.get("open"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let state_name = state
-        .as_ref()
-        .and_then(|state| state.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    if note_open || state_name == "note_detail" {
-        let _ = runtime.close_note(0.8).await;
     }
 }
 

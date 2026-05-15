@@ -8,8 +8,8 @@
 
 use std::env;
 
-use socai_browser::{Cdp, TaskSessionManager};
-use socai_sites::xhs::XhsSiteRuntime;
+use socai_browser::{Cdp, PageSessionManager};
+use socai_sites::xhs::XhsPageRuntime;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,11 +28,11 @@ async fn main() -> anyhow::Result<()> {
     cdp.connect();
     cdp.wait_connected().await?;
 
-    let tasks = TaskSessionManager::new(cdp.clone());
-    let page = tasks.create_task("about:blank").await?;
+    let tasks = PageSessionManager::new(cdp.clone());
+    let page = tasks.create_page("about:blank").await?;
     page.navigate_with_timeout(&url, 60.0).await?;
 
-    let runtime = XhsSiteRuntime::new(&page);
+    let runtime = XhsPageRuntime::new(&page);
     let note = runtime.extract_note(8.0).await?;
 
     println!("{}", serde_json::to_string_pretty(&note)?);

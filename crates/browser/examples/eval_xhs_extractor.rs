@@ -16,7 +16,7 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
-use socai_browser::{Cdp, PageSession, TaskSessionManager};
+use socai_browser::{Cdp, PageSession, PageSessionManager};
 
 const SCRIPTS_RELATIVE_PATH: &str = "crates/sites/src/xhs/page_scripts.js";
 
@@ -42,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
     cdp.connect();
     cdp.wait_connected().await?;
 
-    let tasks = TaskSessionManager::new(cdp.clone());
-    let page = tasks.create_task("about:blank").await?;
+    let tasks = PageSessionManager::new(cdp.clone());
+    let page = tasks.create_page("about:blank").await?;
     page.navigate_with_timeout(&url, 20.0).await?;
 
     let value = eval_xhs_function(&page, &scripts, &function, &arg_json).await?;
