@@ -1,4 +1,4 @@
-use crate::tasks::{now_ms, AgentTaskRegistry, AgentTaskSnapshot};
+use crate::tasks::{now_ms, AgentTaskEventPayload, AgentTaskRegistry, AgentTaskSnapshot};
 use anyhow::Result;
 use serde_json::{json, Value};
 use socai_core::agent::{
@@ -183,14 +183,6 @@ fn title_safe(value: &str) -> String {
 // ── Agent tasks ────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
-struct AgentTaskEventPayload {
-    task_id: String,
-    kind: String,
-    text: String,
-    snapshot: Option<AgentTaskSnapshot>,
-}
-
-#[derive(serde::Serialize, Clone)]
 pub struct AgentRunOutcome {
     run_id: String,
     run_dir: String,
@@ -299,6 +291,17 @@ pub async fn agent_task_get(
 ) -> Result<AgentTaskSnapshot, String> {
     tasks
         .get(&task_id)
+        .await
+        .ok_or_else(|| format!("unknown task: {task_id}"))
+}
+
+#[tauri::command]
+pub async fn agent_task_events(
+    tasks: State<'_, AgentTaskRegistry>,
+    task_id: String,
+) -> Result<Vec<AgentTaskEventPayload>, String> {
+    tasks
+        .events(&task_id)
         .await
         .ok_or_else(|| format!("unknown task: {task_id}"))
 }
@@ -418,7 +421,8 @@ async fn run_agent_task_background(
                     snapshot.finished_at = Some(now_ms());
                     snapshot.run_id = Some(outcome.run_id.clone());
                     snapshot.run_dir = Some(outcome.run_dir.clone());
-                    snapshot.final_text = Some(outcome.final_text.clone());
+                    // Final answer is hydrated from run_dir/report.md; tasks.json stays an index.
+                    snapshot.final_text = None;
                     snapshot.error = None;
                     snapshot.turns = Some(outcome.turns);
                     snapshot.input_tokens = Some(outcome.input_tokens);
@@ -451,6 +455,7 @@ async fn run_agent_task_background(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_task_on_fresh_page(
     app: AppHandle,
     task_id: String,
@@ -543,15 +548,15 @@ pub(crate) fn emit_task_event(
     text: String,
     snapshot: Option<AgentTaskSnapshot>,
 ) {
-    let _ = app.emit(
-        "agent_task:event",
-        AgentTaskEventPayload {
-            task_id: task_id.to_string(),
-            kind: kind.to_string(),
-            text,
-            snapshot,
-        },
-    );
+    let payload = AgentTaskEventPayload {
+        task_id: task_id.to_string(),
+        kind: kind.to_string(),
+        text,
+        snapshot,
+        sequence: 0,
+        created_at: now_ms(),
+    };
+    let _ = app.emit("agent_task:event", payload);
 }
 
 fn event_to_payload(task_id: &str, event: &AgentEvent) -> AgentTaskEventPayload {
@@ -611,5 +616,7 @@ fn event_to_payload(task_id: &str, event: &AgentEvent) -> AgentTaskEventPayload 
         kind: kind.to_string(),
         text,
         snapshot: None,
+        sequence: 0,
+        created_at: now_ms(),
     }
 }

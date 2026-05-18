@@ -62,6 +62,7 @@ pub fn run() {
             commands::agent_task_start,
             commands::agent_task_list,
             commands::agent_task_get,
+            commands::agent_task_events,
             commands::agent_task_cancel,
             commands::agent_run,
         ])

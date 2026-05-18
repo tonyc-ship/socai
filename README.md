@@ -13,6 +13,10 @@
 uv sync
 ```
 
+## Documentation
+
+- [Data model](docs/data-model.md) — run artifacts, desktop task index, and timeline replay.
+
 ## Desktop App
 
 ```bash
