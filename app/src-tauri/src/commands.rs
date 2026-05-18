@@ -250,19 +250,18 @@ pub async fn agent_task_start(
         )
         .await;
     let task_id = snapshot.task_id.clone();
-    emit_task_event(
-        &app,
-        &task_id,
-        "queued",
-        "task queued".into(),
-        Some(snapshot.clone()),
-    );
     let runtime = runtime.inner().clone();
     let task_id_for_spawn = task_id.clone();
+    let app_for_task = app.clone();
+    let registry_for_task = registry.clone();
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let join = tokio::spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
         run_agent_task_background(
-            app,
-            registry,
+            app_for_task,
+            registry_for_task,
             runtime,
             task_id_for_spawn,
             task_text,
@@ -271,7 +270,18 @@ pub async fn agent_task_start(
         )
         .await;
     });
-    tasks.set_abort_handle(&task_id, join.abort_handle()).await;
+    if let Some(handle) = tasks.set_abort_handle(&task_id, join.abort_handle()).await {
+        handle.abort();
+    } else {
+        emit_task_event(
+            &app,
+            &task_id,
+            "queued",
+            "task queued".into(),
+            Some(snapshot.clone()),
+        );
+        let _ = start_tx.send(());
+    }
     Ok(snapshot)
 }
 

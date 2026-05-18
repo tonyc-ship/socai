@@ -101,12 +101,28 @@ impl AgentTaskRegistry {
         self.runner_permits.clone().acquire_owned().await.ok()
     }
 
-    pub(crate) async fn set_abort_handle(&self, task_id: &str, handle: AbortHandle) {
-        self.inner
-            .lock()
-            .await
-            .abort_handles
-            .insert(task_id.to_string(), handle);
+    /// Register the task abort handle. Returns the handle back to the caller
+    /// if the task is already terminal (for example, cancelled by another
+    /// window after task creation but before handle registration).
+    pub(crate) async fn set_abort_handle(
+        &self,
+        task_id: &str,
+        handle: AbortHandle,
+    ) -> Option<AbortHandle> {
+        let mut guard = self.inner.lock().await;
+        let active = guard
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .map(|task| matches!(task.status.as_str(), "queued" | "running"))
+            .unwrap_or(false);
+        if !active {
+            return Some(handle);
+        }
+        if let Some(previous) = guard.abort_handles.insert(task_id.to_string(), handle) {
+            previous.abort();
+        }
+        None
     }
 
     pub(crate) async fn remove_abort_handle(&self, task_id: &str) -> Option<AbortHandle> {

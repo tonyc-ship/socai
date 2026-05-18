@@ -326,6 +326,7 @@ export namespace agentPanel {
       });
       upsertTask(snapshot);
       selectedTaskId = snapshot.task_id;
+      page = "history";
       draft = "";
     } catch (err) {
       submitError = `${err}`;
