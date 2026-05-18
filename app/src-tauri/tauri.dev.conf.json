@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "socai dev",
+  "identifier": "com.socai.app.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "socai dev",
+        "hiddenTitle": true,
+        "width": 1180,
+        "height": 860,
+        "minWidth": 980,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "icon": [
+      "icons-dev/32x32.png",
+      "icons-dev/128x128.png",
+      "icons-dev/128x128@2x.png",
+      "icons-dev/icon.icns",
+      "icons-dev/icon.ico"
+    ]
+  }
+}

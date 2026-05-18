@@ -1,0 +1,33 @@
+<!-- macos app icon source for socai dev.
+     use this variant for local tauri development so it is visually distinct
+     from installed release builds while staying monochrome.
+
+     regenerate raster + tauri dev icon set by running, from app/:
+
+         rsvg-convert branding/app-icon-dev.svg -w 1024 -h 1024 -o branding/app-icon-dev.png
+         pnpm exec tauri icon branding/app-icon-dev.png -o src-tauri/icons-dev
+
+     geometry: the visible squircle is inset 80px on each side. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>socai dev</title>
+
+  <g transform="translate(80 80) scale(0.84375)">
+    <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#fafaf9"/>
+
+    <rect x="188" y="188" width="648" height="648" rx="72" ry="72"
+          fill="none" stroke="#000000" stroke-width="38"/>
+
+    <rect x="512" y="512" width="240" height="240" rx="29" ry="29"
+          fill="#000000"/>
+
+    <rect x="564" y="778" width="320" height="124" rx="62" ry="62"
+          fill="#000000"/>
+    <text x="724" y="858"
+          text-anchor="middle"
+          font-family="Arial, Helvetica, sans-serif"
+          font-size="68"
+          font-weight="700"
+          letter-spacing="3"
+          fill="#fafaf9">dev</text>
+  </g>
+</svg>

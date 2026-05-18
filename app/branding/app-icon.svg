@@ -1,22 +1,23 @@
-<!-- macOS app-icon source for socai.
-     1024x1024 canvas, warm-white squircle background, brand mark scaled to ~75% fill.
-     Regenerate raster + Tauri icon set by running, from app/:
+<!-- macos app icon source for socai.
+     1024x1024 canvas with transparent safety padding so the dock footprint
+     matches normal mac app icons.
+
+     regenerate raster + tauri icon set by running, from app/:
 
          rsvg-convert branding/app-icon.svg -w 1024 -h 1024 -o branding/app-icon.png
          pnpm exec tauri icon branding/app-icon.png
 
-     Geometry: mark scaled 24x from its 32-unit viewBox, then centred (128px margin). -->
+     geometry: the visible squircle is inset 80px on each side. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <title>socai</title>
 
-  <!-- Warm canvas squircle. rx=230 ≈ 22.4% — Apple-style corner radius. -->
-  <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#fafaf9"/>
+  <g transform="translate(80 80) scale(0.84375)">
+    <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#fafaf9"/>
 
-  <!-- Mark · outer stroked rounded rect -->
-  <rect x="188" y="188" width="648" height="648" rx="72" ry="72"
-        fill="none" stroke="#000000" stroke-width="38"/>
+    <rect x="188" y="188" width="648" height="648" rx="72" ry="72"
+          fill="none" stroke="#000000" stroke-width="38"/>
 
-  <!-- Mark · inner filled disc (offset lower-right) -->
-  <rect x="512" y="512" width="240" height="240" rx="29" ry="29"
-        fill="#000000"/>
+    <rect x="512" y="512" width="240" height="240" rx="29" ry="29"
+          fill="#000000"/>
+  </g>
 </svg>
