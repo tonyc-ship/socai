@@ -488,7 +488,8 @@ export namespace agentPanel {
   }
 
   function appendUniqueEvent(task: AgentTaskView, payload: AgentTaskEventPayload): boolean {
-    if (task.events.some((event) => eventKey(event) === eventKey(payload))) return false;
+    const key = stableEventKey(payload);
+    if (key && task.events.some((event) => stableEventKey(event) === key)) return false;
     task.events = [...task.events, payload];
     return true;
   }
@@ -497,22 +498,34 @@ export namespace agentPanel {
     existing: AgentTaskEventPayload[],
     incoming: AgentTaskEventPayload[],
   ): AgentTaskEventPayload[] {
-    const byKey = new Map<string, AgentTaskEventPayload>();
+    const merged: AgentTaskEventPayload[] = [];
+    const stableIndexes = new Map<string, number>();
     for (const event of [...existing, ...incoming]) {
       if (!event.text.trim()) continue;
-      byKey.set(eventKey(event), event);
+      const key = stableEventKey(event);
+      if (!key) {
+        merged.push(event);
+        continue;
+      }
+      const existingIndex = stableIndexes.get(key);
+      if (existingIndex === undefined) {
+        stableIndexes.set(key, merged.length);
+        merged.push(event);
+      } else {
+        merged[existingIndex] = event;
+      }
     }
-    return [...byKey.values()].sort(compareEvents);
+    return merged.sort(compareEvents);
   }
 
-  function eventKey(event: AgentTaskEventPayload): string {
-    return `${event.task_id}:${event.kind}:${event.text}`;
+  function stableEventKey(event: AgentTaskEventPayload): string | null {
+    return event.sequence > 0 ? `${event.task_id}:sequence:${event.sequence}` : null;
   }
 
   function compareEvents(a: AgentTaskEventPayload, b: AgentTaskEventPayload): number {
     if (a.sequence > 0 && b.sequence > 0 && a.sequence !== b.sequence) return a.sequence - b.sequence;
     if (a.created_at !== b.created_at) return a.created_at - b.created_at;
-    return eventKey(a).localeCompare(eventKey(b));
+    return 0;
   }
 
   function selectedTask(): AgentTaskView | undefined {
