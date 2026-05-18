@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: macos-app-release
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
-      release_sha: ${{ steps.commit.outputs.release_sha }}
+      base_sha: ${{ steps.base.outputs.base_sha }}
 
     steps:
       - name: checkout
@@ -46,13 +46,22 @@ jobs:
             exit 1
           fi
 
+      - name: record release base commit
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD)"
+          echo "base_sha=${base_sha}"
+          echo "base_sha=${base_sha}" >> "${GITHUB_OUTPUT}"
+
       - name: calculate next version
         id: version
         shell: bash
         run: |
           set -euo pipefail
 
-          latest_tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          latest_tag="$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
 
           if [ -n "${latest_tag}" ]; then
             base_version="${latest_tag#v}"
@@ -67,7 +76,14 @@ jobs:
             previous_tag=""
           fi
 
-          IFS=. read -r major minor patch <<< "${base_version}"
+          if [[ ! "${base_version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "base version must be strict MAJOR.MINOR.PATCH semver, got: ${base_version}" >&2
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
 
           case "${{ inputs.release_type }}" in
             major)
@@ -105,77 +121,6 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "previous_tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: update version files
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ['VERSION']
-
-          for file_name in ['app/package.json', 'app/src-tauri/tauri.conf.json']:
-              path = Path(file_name)
-              data = json.loads(path.read_text())
-              data['version'] = version
-              path.write_text(json.dumps(data, indent=2) + '\n')
-
-          cargo_toml = Path('app/src-tauri/Cargo.toml')
-          cargo_text = cargo_toml.read_text()
-          cargo_text, cargo_count = re.subn(
-              r'(?m)^version = "[^"]+"',
-              f'version = "{version}"',
-              cargo_text,
-              count=1,
-          )
-          if cargo_count != 1:
-              raise SystemExit('expected exactly one package version in app/src-tauri/Cargo.toml')
-          cargo_toml.write_text(cargo_text)
-
-          cargo_lock = Path('Cargo.lock')
-          if cargo_lock.exists():
-              lock_text = cargo_lock.read_text()
-              lock_text, lock_count = re.subn(
-                  r'(name = "socai_app"\nversion = ")[^"]+("\n)',
-                  rf'\g<1>{version}\2',
-                  lock_text,
-                  count=1,
-              )
-              if lock_count != 1:
-                  raise SystemExit('expected exactly one socai_app package entry in Cargo.lock')
-              cargo_lock.write_text(lock_text)
-          PY
-
-      - name: commit release version
-        id: commit
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
-
-          if git diff --cached --quiet; then
-            echo "version files already up to date"
-          else
-            git commit -m "chore: release socai v${VERSION}"
-            git push origin HEAD:main
-          fi
-
-          release_sha="$(git rev-parse HEAD)"
-          echo "release_sha=${release_sha}"
-          echo "release_sha=${release_sha}" >> "${GITHUB_OUTPUT}"
-
   build:
     name: build ${{ matrix.label }}
     needs: prepare
@@ -194,10 +139,15 @@ jobs:
             runner: macos-13
 
     steps:
-      - name: checkout release commit
+      - name: checkout release base commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.base_sha }}
+
+      - name: apply release version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python3 .github/scripts/set-app-version.py "${VERSION}"
 
       - name: set up pnpm
         uses: pnpm/action-setup@v4
@@ -279,10 +229,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: checkout release commit
+      - name: checkout main
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
+          ref: main
           fetch-depth: 0
 
       - name: download build artifacts
@@ -292,18 +242,62 @@ jobs:
           merge-multiple: true
           path: dist-artifacts
 
-      - name: create release notes
+      - name: publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
           PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
 
-          args=(-f "tag_name=${TAG}" -f "target_commitish=${RELEASE_SHA}")
+          current_main_sha="$(git rev-parse HEAD)"
+          if [ "${current_main_sha}" != "${BASE_SHA}" ]; then
+            echo "main moved while the release was building" >&2
+            echo "expected ${BASE_SHA}, got ${current_main_sha}" >&2
+            echo "rerun the release workflow from the latest main" >&2
+            exit 1
+          fi
+
+          if [ "$(find dist-artifacts -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')" -eq 0 ]; then
+            echo "no dmg release artifacts were downloaded" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          python3 .github/scripts/set-app-version.py "${VERSION}"
+
+          git add app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo "version files already up to date"
+          else
+            git commit -m "chore: release socai v${VERSION}"
+          fi
+
+          release_sha="$(git rev-parse HEAD)"
+          main_pushed=false
+          remote_tag_pushed=false
+          draft_release_created=false
+
+          cleanup() {
+            if [ "${main_pushed}" = "true" ]; then
+              echo "main was already updated; leaving release state for manual inspection" >&2
+              return
+            fi
+
+            if [ "${draft_release_created}" = "true" ]; then
+              gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes || true
+            elif [ "${remote_tag_pushed}" = "true" ]; then
+              git push origin ":refs/tags/${TAG}" || true
+            fi
+          }
+          trap cleanup ERR
+
+          args=(-f "tag_name=${TAG}" -f "target_commitish=${BASE_SHA}")
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(-f "previous_tag_name=${PREVIOUS_TAG}")
           fi
@@ -323,22 +317,22 @@ jobs:
           EOF
           cat generated-notes.md >> release-notes.md
 
-          cat release-notes.md
-
-      - name: publish release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
-        run: |
-          set -euo pipefail
-
-          ls -lah dist-artifacts
+          git tag "${TAG}" "${release_sha}"
+          git push origin "refs/tags/${TAG}"
+          remote_tag_pushed=true
 
           gh release create "${TAG}" dist-artifacts/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --target "${RELEASE_SHA}" \
+            --verify-tag \
+            --draft \
             --title "socai ${VERSION}" \
             --notes-file release-notes.md
+          draft_release_created=true
+
+          git push origin HEAD:main
+          main_pushed=true
+
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
+
+          trap - ERR
+          cat release-notes.md
