@@ -58,6 +58,8 @@ export interface AgentTaskEventPayload {
     | "interrupted";
   text: string;
   snapshot: AgentTaskSnapshot | null;
+  sequence: number;
+  created_at: number;
 }
 
 export interface ShellState {
@@ -217,26 +219,6 @@ function eventPathHasClass(event: Event, className: string): boolean {
 }
 
 async function main(): Promise<void> {
-  try {
-    status = await invoke<Status>("cdp_status");
-  } catch (e) {
-    console.error("initial cdp_status failed:", e);
-  }
-  try {
-    const models = await invoke<ModelInfo[]>("agent_list_models");
-    agentPanel.setModels(models);
-  } catch (e) {
-    console.error("agent_list_models failed:", e);
-  }
-  try {
-    const tasks = await invoke<AgentTaskSnapshot[]>("agent_task_list");
-    agentPanel.setTasks(tasks);
-  } catch (e) {
-    console.error("agent_task_list failed:", e);
-  }
-  render();
-  bindGlobalDismiss();
-
   await listen<Status>("cdp:status_changed", (event) => {
     status = event.payload;
     if (status.state !== "connected") connectionDetailsOpen = false;
@@ -250,6 +232,28 @@ async function main(): Promise<void> {
     if (agentPanel.appendTaskEvent(event.payload)) render();
   });
 
+  let initialTasks: AgentTaskSnapshot[] = [];
+  try {
+    status = await invoke<Status>("cdp_status");
+  } catch (e) {
+    console.error("initial cdp_status failed:", e);
+  }
+  try {
+    const models = await invoke<ModelInfo[]>("agent_list_models");
+    agentPanel.setModels(models);
+  } catch (e) {
+    console.error("agent_list_models failed:", e);
+  }
+  try {
+    initialTasks = await invoke<AgentTaskSnapshot[]>("agent_task_list");
+    agentPanel.setTasks(initialTasks);
+  } catch (e) {
+    console.error("agent_task_list failed:", e);
+  }
+  render();
+  bindGlobalDismiss();
+  void hydrateTaskEvents(initialTasks);
+
   const refresh = (): void => {
     invoke("cdp_refresh").catch((e) => console.error("cdp_refresh failed:", e));
   };
@@ -257,6 +261,21 @@ async function main(): Promise<void> {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") refresh();
   });
+}
+
+async function hydrateTaskEvents(tasks: AgentTaskSnapshot[]): Promise<void> {
+  let changed = false;
+  await Promise.all(
+    tasks.map(async (task) => {
+      try {
+        const events = await invoke<AgentTaskEventPayload[]>("agent_task_events", { taskId: task.task_id });
+        if (agentPanel.setTaskEvents(task.task_id, events)) changed = true;
+      } catch (e) {
+        console.error("agent_task_events failed:", e);
+      }
+    }),
+  );
+  if (changed) render();
 }
 
 main();

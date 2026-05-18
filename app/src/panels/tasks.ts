@@ -33,6 +33,7 @@ export namespace agentPanel {
   let toolError = "";
   let submitError = "";
   let tasks: AgentTaskView[] = [];
+  let pendingEvents = new Map<string, AgentTaskEventPayload[]>();
   let selectedTaskId: string | null = null;
   let modelsCache: ModelInfo[] = [];
 
@@ -51,11 +52,32 @@ export namespace agentPanel {
   }
 
   export function setTasks(snapshots: AgentTaskSnapshot[]): void {
-    const eventsById = new Map(tasks.map((task) => [task.task_id, task.events]));
-    tasks = snapshots.map((snapshot) => ({ ...snapshot, events: eventsById.get(snapshot.task_id) ?? [] }));
+    const existingById = new Map(tasks.map((task) => [task.task_id, task]));
+    const snapshotIds = new Set(snapshots.map((snapshot) => snapshot.task_id));
+    const hydrated = snapshots.map((snapshot) => {
+      const existing = existingById.get(snapshot.task_id);
+      const pending = pendingEvents.get(snapshot.task_id) ?? [];
+      pendingEvents.delete(snapshot.task_id);
+      const merged = existing ? mergeSnapshot(existing, snapshot) : snapshot;
+      return { ...merged, events: mergeEvents(existing?.events ?? [], pending) };
+    });
+    const liveOnly = tasks.filter((task) => !snapshotIds.has(task.task_id));
+    tasks = [...hydrated, ...liveOnly];
     if (!selectedTaskId && tasks.length > 0) {
       selectedTaskId = newestTask(tasks)?.task_id ?? null;
     }
+  }
+
+  export function setTaskEvents(taskId: string, events: AgentTaskEventPayload[]): boolean {
+    if (events.length === 0) return false;
+    const task = tasks.find((item) => item.task_id === taskId);
+    if (!task) {
+      pendingEvents.set(taskId, mergeEvents(pendingEvents.get(taskId) ?? [], events));
+      return false;
+    }
+    const before = task.events.length;
+    task.events = mergeEvents(task.events, events);
+    return task.events.length !== before && taskId === selectedTaskId;
   }
 
   export function renderHeader(): string {
@@ -184,15 +206,15 @@ export namespace agentPanel {
   export function appendTaskEvent(payload: AgentTaskEventPayload): boolean {
     if (payload.snapshot) upsertTask(payload.snapshot);
 
-    let task = tasks.find((item) => item.task_id === payload.task_id);
-    if (!task && payload.snapshot) {
-      task = upsertTask(payload.snapshot);
+    const task = tasks.find((item) => item.task_id === payload.task_id);
+    if (!task) {
+      stashPendingEvent(payload);
+      return !!payload.snapshot;
     }
-    if (!task) return !!payload.snapshot;
 
     if (payload.text.trim()) {
-      task.events = [...task.events, payload];
-      appendEventRowIfSelected(payload);
+      const added = appendUniqueEvent(task, payload);
+      if (added) appendEventRowIfSelected(payload);
     }
 
     return !!payload.snapshot;
@@ -361,12 +383,14 @@ export namespace agentPanel {
 
   function upsertTask(snapshot: AgentTaskSnapshot): AgentTaskView {
     const existing = tasks.find((task) => task.task_id === snapshot.task_id);
+    const pending = pendingEvents.get(snapshot.task_id) ?? [];
+    pendingEvents.delete(snapshot.task_id);
     if (existing) {
       const merged = mergeSnapshot(existing, snapshot);
-      Object.assign(existing, merged, { events: existing.events });
+      Object.assign(existing, merged, { events: mergeEvents(existing.events, pending) });
       return existing;
     }
-    const created = { ...snapshot, events: [] };
+    const created = { ...snapshot, events: mergeEvents([], pending) };
     tasks = [...tasks, created];
     if (!selectedTaskId) selectedTaskId = snapshot.task_id;
     return created;
@@ -400,6 +424,39 @@ export namespace agentPanel {
       case "cancelled": return 2;
       case "interrupted": return 2;
     }
+  }
+
+  function stashPendingEvent(payload: AgentTaskEventPayload): void {
+    if (!payload.text.trim()) return;
+    pendingEvents.set(payload.task_id, mergeEvents(pendingEvents.get(payload.task_id) ?? [], [payload]));
+  }
+
+  function appendUniqueEvent(task: AgentTaskView, payload: AgentTaskEventPayload): boolean {
+    if (task.events.some((event) => eventKey(event) === eventKey(payload))) return false;
+    task.events = [...task.events, payload];
+    return true;
+  }
+
+  function mergeEvents(
+    existing: AgentTaskEventPayload[],
+    incoming: AgentTaskEventPayload[],
+  ): AgentTaskEventPayload[] {
+    const byKey = new Map<string, AgentTaskEventPayload>();
+    for (const event of [...existing, ...incoming]) {
+      if (!event.text.trim()) continue;
+      byKey.set(eventKey(event), event);
+    }
+    return [...byKey.values()].sort(compareEvents);
+  }
+
+  function eventKey(event: AgentTaskEventPayload): string {
+    return `${event.task_id}:${event.kind}:${event.text}`;
+  }
+
+  function compareEvents(a: AgentTaskEventPayload, b: AgentTaskEventPayload): number {
+    if (a.sequence > 0 && b.sequence > 0 && a.sequence !== b.sequence) return a.sequence - b.sequence;
+    if (a.created_at !== b.created_at) return a.created_at - b.created_at;
+    return eventKey(a).localeCompare(eventKey(b));
   }
 
   function selectedTask(): AgentTaskView | undefined {
