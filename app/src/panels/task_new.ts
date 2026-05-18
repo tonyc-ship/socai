@@ -1,4 +1,4 @@
-import type { ModelInfo, ShellState } from "../main";
+import type { ModelInfo, Status, ShellState } from "../main";
 import { esc } from "../lib/html";
 import type { AgentTaskView, TaskMode, ToolCommand } from "./tasks";
 
@@ -14,6 +14,9 @@ export interface NewTaskPageProps {
   submitError: string;
   tasks: AgentTaskView[];
   selectedModel: ModelInfo | undefined;
+  overlayKeyDraft: string;
+  overlayKeySaving: boolean;
+  overlayKeyError: string;
 }
 
 export function renderNewTaskPage(props: NewTaskPageProps): string {
@@ -22,21 +25,28 @@ export function renderNewTaskPage(props: NewTaskPageProps): string {
   const agentMode = props.mode === "agent";
   const running = agentMode ? props.submittingTask : props.toolInFlight;
   const runDisabled = running || !props.draft.trim() || !connected || (agentMode && !modelReady);
-  const guard = renderTaskGuard(props.mode, connected, props.selectedModel);
+  const needsKey = connected && agentMode && !!props.selectedModel && !props.selectedModel.has_key;
+  const gated = !connected || needsKey;
 
   return `
     <div class="new-task-page">
       <div class="new-task-compose">
         <div class="new-task-copy">
-          <p class="t-eyebrow">new task</p>
           <h2 class="t-h2">what should socai research?</h2>
           <p class="t-small subtle">start a one-shot browser task. socai opens a temporary chrome tab, runs the agent, saves the result, then closes the tab.</p>
         </div>
-        ${renderTaskForm(props, agentMode, running, runDisabled)}
-        ${guard}
-        ${props.submitError ? `<pre class="result-pre result-error">${esc(props.submitError)}</pre>` : ""}
-        ${agentMode ? "" : renderToolResult(props)}
+        <div class="compose-form-stack ${gated ? "is-masked" : ""}">
+          <div class="compose-form-inner" aria-hidden="${gated ? "true" : "false"}">
+            ${renderTaskForm(props, agentMode, running, runDisabled)}
+            ${renderInlineGuard(props.mode, props.toolCommand, props.selectedModel)}
+            ${props.submitError ? `<pre class="result-pre result-error">${esc(props.submitError)}</pre>` : ""}
+            ${agentMode ? "" : renderToolResult(props)}
+          </div>
+          ${!connected ? renderConnectOverlay(props.shell.status) : ""}
+          ${connected && needsKey ? renderApiKeyOverlay(props.selectedModel!, props) : ""}
+        </div>
       </div>
+      ${renderRunningChip(props.tasks)}
       ${renderTaskGlance(props.tasks)}
     </div>
   `;
@@ -72,12 +82,10 @@ function renderTaskForm(
   `;
 }
 
-function renderTaskGuard(mode: TaskMode, connected: boolean, selected: ModelInfo | undefined): string {
-  if (!connected) return `<p class="t-small subtle">connect chrome first.</p>`;
-  if (mode !== "agent") return renderToolHint(mode);
+function renderInlineGuard(mode: TaskMode, toolCommand: ToolCommand, selected: ModelInfo | undefined): string {
+  if (mode !== "agent") return renderToolHint(toolCommand);
   if (!selected) return `<p class="t-small subtle">loading agent models…</p>`;
-  if (!selected.has_key) return `<p class="t-small subtle">configure the agent in the header first.</p>`;
-  return `<p class="t-small subtle">each task gets its own temporary chrome tab and closes it when finished.</p>`;
+  return "";
 }
 
 function renderAgentSummary(selected: ModelInfo | undefined): string {
@@ -104,12 +112,17 @@ function renderToolPicker(toolCommand: ToolCommand): string {
   `;
 }
 
-function renderToolHint(_mode: TaskMode): string {
-  return `<p class="t-small subtle">test tools on a fresh temporary xiaohongshu tab.</p>`;
+function renderToolHint(toolCommand: ToolCommand): string {
+  const hint = {
+    search_notes: "test search_notes on a fresh temporary xiaohongshu tab.",
+    topic_scan: "test topic_scan on a fresh temporary xiaohongshu tab.",
+    extract_note: "paste a note id or url; socai opens a fresh temporary page and extracts it.",
+  }[toolCommand];
+  return `<p class="t-small subtle">${hint}</p>`;
 }
 
 function taskPlaceholder(mode: TaskMode, toolCommand: ToolCommand): string {
-  if (mode === "agent") return "tell socai what you want researched…";
+  if (mode === "agent") return "tell socai what you want researched…\neach task opens its own temporary chrome tab.";
   switch (toolCommand) {
     case "search_notes": return "search query…";
     case "topic_scan": return "topic to scan…";
@@ -117,11 +130,106 @@ function taskPlaceholder(mode: TaskMode, toolCommand: ToolCommand): string {
   }
 }
 
-function renderTaskGlance(tasks: AgentTaskView[]): string {
+function renderConnectOverlay(status: Status): string {
+  const connecting = status.state === "connecting";
+  const label = connecting
+    ? `chrome · connecting · ${(status as Extract<Status, { state: "connecting" }>).attempt}/3`
+    : "chrome · disconnected";
+  const heading = connecting ? "looking for chrome…" : "connect chrome to start";
+  const cta = connecting ? "connecting…" : "connect chrome →";
+  const dotClass = connecting ? "badge-dot-ink badge-dot-pulse" : "badge-dot-hollow";
+  return `
+    <div class="connect-overlay" role="dialog" aria-label="chrome required">
+      <span class="connect-overlay-pill">
+        <i class="badge-dot ${dotClass}" aria-hidden="true"></i>${label}
+      </span>
+      <h3 class="connect-overlay-head">${heading}</h3>
+      <button
+        id="overlay-chrome-connect"
+        type="button"
+        class="btn-primary connect-overlay-cta"
+        ${connecting ? "disabled" : ""}
+      >${cta}</button>
+      <a
+        class="connect-overlay-link t-small"
+        href="https://developer.chrome.com/docs/devtools/remote-debugging"
+        target="_blank"
+        rel="noopener noreferrer"
+      >how do i enable remote debugging? ↗</a>
+    </div>
+  `;
+}
+
+function renderApiKeyOverlay(selected: ModelInfo, props: NewTaskPageProps): string {
+  const placeholder = {
+    anthropic: "sk-ant-...",
+    openai: "sk-...",
+  }[selected.provider] ?? "paste api key";
+  const saving = props.overlayKeySaving;
+  const cta = saving ? "saving…" : "save & continue →";
+  const disableSubmit = saving || !props.overlayKeyDraft.trim();
+  return `
+    <form
+      id="overlay-key-form"
+      class="connect-overlay"
+      role="dialog"
+      aria-label="api key required"
+      data-provider="${esc(selected.provider)}"
+    >
+      <span class="connect-overlay-pill">
+        <i class="badge-dot badge-dot-hollow" aria-hidden="true"></i>
+        agent · ${esc(selected.display_name)} · key needed
+      </span>
+      <h3 class="connect-overlay-head">
+        add your ${esc(selected.display_name.toLowerCase())} api key
+      </h3>
+      <input
+        id="overlay-key-input"
+        type="password"
+        class="input-field connect-overlay-input"
+        placeholder="${esc(placeholder)}"
+        autocomplete="off"
+        value="${esc(props.overlayKeyDraft)}"
+        ${saving ? "disabled" : ""}
+      />
+      <button
+        id="overlay-key-save"
+        type="submit"
+        class="btn-primary connect-overlay-cta"
+        ${disableSubmit ? "disabled" : ""}
+      >${cta}</button>
+      ${props.overlayKeyError ? `<p class="t-small result-error connect-overlay-error">${esc(props.overlayKeyError)}</p>` : ""}
+      <button
+        id="overlay-switch-tools"
+        type="button"
+        class="connect-overlay-link t-small"
+      >use tool tests (no key needed) →</button>
+    </form>
+  `;
+}
+
+function renderRunningChip(tasks: AgentTaskView[]): string {
   const running = [...tasks]
-    .filter((task) => task.status === "running" || task.status === "queued")
-    .sort((a, b) => b.created_at - a.created_at)
-    .slice(0, 4);
+    .filter((t) => t.status === "running" || t.status === "queued")
+    .sort((a, b) => b.created_at - a.created_at);
+  if (running.length === 0) return "";
+  const first = running[0];
+  const isOne = running.length === 1;
+  const count = isOne ? "1 task running" : `${running.length} tasks running`;
+  const taskLabel = isOne
+    ? `<span class="running-chip-dot" aria-hidden="true">·</span><span class="running-chip-task">${esc(first.task)}</span>`
+    : "";
+  return `
+    <button type="button" class="running-chip" data-task-id="${esc(first.task_id)}">
+      <i class="badge-dot badge-dot-ink badge-dot-pulse" aria-hidden="true"></i>
+      <span class="running-chip-count">${count}</span>
+      ${taskLabel}
+      <span class="running-chip-arrow" aria-hidden="true">→</span>
+    </button>
+  `;
+}
+
+function renderTaskGlance(tasks: AgentTaskView[]): string {
   const recent = [...tasks]
     .filter((task) => task.status !== "running" && task.status !== "queued")
     .sort((a, b) => b.created_at - a.created_at)
@@ -129,13 +237,6 @@ function renderTaskGlance(tasks: AgentTaskView[]): string {
 
   return `
     <div class="task-glance">
-      <section class="task-glance-card">
-        <div class="task-glance-head">
-          <p class="t-eyebrow result-label">running</p>
-          <span class="t-small subtle">${running.length}</span>
-        </div>
-        ${renderTaskSummaryRows(running, "no running tasks.")}
-      </section>
       <section class="task-glance-card">
         <div class="task-glance-head">
           <p class="t-eyebrow result-label">recent</p>

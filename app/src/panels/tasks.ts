@@ -42,6 +42,12 @@ export namespace agentPanel {
   let keyError = "";
   let configOpen = false;
 
+  // Overlay key-entry sub-state — used by the inline new-task gate when
+  // chrome is connected but the selected agent has no key.
+  let overlayKey = "";
+  let overlaySaving = false;
+  let overlayError = "";
+
   export function setModels(models: ModelInfo[]): void {
     modelsCache = models;
     if (!model || !models.some((m) => m.default_model === model)) {
@@ -215,6 +221,9 @@ export namespace agentPanel {
               submitError,
               tasks,
               selectedModel: selectedModel(),
+              overlayKeyDraft: overlayKey,
+              overlayKeySaving: overlaySaving,
+              overlayKeyError: overlayError,
             })
           : renderHistoryPage({ tasks, selectedTask: selectedTask(), selectedTaskId })}
       </div>
@@ -300,6 +309,53 @@ export namespace agentPanel {
       if (mode === "agent") await startAgentTask(shell);
       else await runDedicatedTool(shell);
     });
+
+    document.getElementById("overlay-chrome-connect")?.addEventListener("click", () => {
+      invoke("cdp_connect").catch((e) => console.error("cdp_connect failed:", e));
+    });
+
+    document.getElementById("overlay-switch-tools")?.addEventListener("click", () => {
+      mode = "tools";
+      submitError = "";
+      overlayKey = "";
+      overlayError = "";
+      shell.rerender();
+    });
+
+    const overlayKeyInput = document.getElementById("overlay-key-input") as HTMLInputElement | null;
+    overlayKeyInput?.addEventListener("input", () => {
+      overlayKey = overlayKeyInput.value;
+      const submit = document.getElementById("overlay-key-save") as HTMLButtonElement | null;
+      if (submit) submit.disabled = overlaySaving || !overlayKey.trim();
+    });
+    if (overlayKeyInput && document.activeElement === document.body) {
+      overlayKeyInput.focus();
+    }
+
+    document.getElementById("overlay-key-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await saveOverlayKey(shell);
+    });
+  }
+
+  async function saveOverlayKey(shell: ShellState): Promise<void> {
+    const form = document.getElementById("overlay-key-form") as HTMLFormElement | null;
+    const provider = form?.dataset.provider;
+    const key = overlayKey.trim();
+    if (!provider || !key || overlaySaving) return;
+    overlaySaving = true;
+    overlayError = "";
+    shell.rerender();
+    try {
+      await invoke("agent_save_api_key", { provider, apiKey: key });
+      setModels(await invoke<ModelInfo[]>("agent_list_models"));
+      overlayKey = "";
+    } catch (err) {
+      overlayError = `${err}`;
+    } finally {
+      overlaySaving = false;
+      shell.rerender();
+    }
   }
 
   function updateSubmitButton(shell: ShellState): void {
