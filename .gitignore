@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .socai/
+.claude/
 
 # macOS
 .DS_Store
