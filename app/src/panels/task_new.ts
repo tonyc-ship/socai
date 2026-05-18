@@ -199,6 +199,11 @@ function renderApiKeyOverlay(selected: ModelInfo, props: NewTaskPageProps): stri
         ${disableSubmit ? "disabled" : ""}
       >${cta}</button>
       ${props.overlayKeyError ? `<p class="t-small result-error connect-overlay-error">${esc(props.overlayKeyError)}</p>` : ""}
+      <button
+        id="overlay-switch-tools"
+        type="button"
+        class="connect-overlay-link t-small"
+      >use tool tests (no key needed) →</button>
     </form>
   `;
 }

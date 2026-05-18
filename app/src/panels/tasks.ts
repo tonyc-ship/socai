@@ -314,6 +314,14 @@ export namespace agentPanel {
       invoke("cdp_connect").catch((e) => console.error("cdp_connect failed:", e));
     });
 
+    document.getElementById("overlay-switch-tools")?.addEventListener("click", () => {
+      mode = "tools";
+      submitError = "";
+      overlayKey = "";
+      overlayError = "";
+      shell.rerender();
+    });
+
     const overlayKeyInput = document.getElementById("overlay-key-input") as HTMLInputElement | null;
     overlayKeyInput?.addEventListener("input", () => {
       overlayKey = overlayKeyInput.value;
