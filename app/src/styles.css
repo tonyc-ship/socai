@@ -410,7 +410,7 @@ body.has-paper > * { position: relative; z-index: 1; }
   width: min(100%, 840px);
   align-self: center;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-5);
   padding-top: var(--sp-1);
 }
@@ -523,7 +523,10 @@ body.has-paper > * { position: relative; z-index: 1; }
   line-height: 1.5;
   color: var(--fg-soft);
 }
-.task-row-glyph-running { color: var(--ink-0); }
+.task-row-glyph-running {
+  color: var(--ink-0);
+  animation: pulse 1.4s ease-in-out infinite;
+}
 .task-row-glyph-failed { color: var(--status-error-fg); }
 .task-row-main {
   display: flex;
@@ -789,3 +792,123 @@ code {
   color: var(--fg-soft);
   cursor: not-allowed;
 }
+
+/* ── Running-tasks chip (appears on new-task page when any task runs) ── */
+.running-chip {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: min(100%, 720px);
+  padding: 7px var(--sp-3);
+  border: var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-1);
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.running-chip:hover { border-color: var(--line-strong); }
+.running-chip:active { transform: scale(0.98); }
+.running-chip-count {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.running-chip-dot { color: var(--fg-soft); }
+.running-chip-task {
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.running-chip-arrow {
+  color: var(--fg-soft);
+  font-family: var(--font-mono);
+}
+.running-chip:hover .running-chip-arrow { color: var(--ink-0); }
+
+/* ── Connect overlay (shown on disconnected/connecting new-task) ──── */
+.compose-form-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.compose-form-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  transition: filter var(--t-base) var(--ease), opacity var(--t-base) var(--ease);
+}
+.compose-form-stack.is-masked .compose-form-inner {
+  pointer-events: none;
+  filter: saturate(0) blur(1.5px);
+  opacity: 0.55;
+  user-select: none;
+}
+.connect-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  width: min(360px, calc(100% - var(--sp-6)));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+  background: var(--surface);
+  border: var(--hairline);
+  border-radius: var(--r-4);
+  box-shadow: var(--shadow-pop);
+}
+.connect-overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: var(--hairline);
+  background: var(--canvas);
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-1);
+  white-space: nowrap;
+}
+.connect-overlay-head {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--ink-0);
+}
+.connect-overlay-cta {
+  align-self: stretch;
+  margin-top: var(--sp-1);
+  padding: 9px var(--sp-4);
+  font-size: 13px;
+  text-align: center;
+}
+.connect-overlay-input {
+  align-self: stretch;
+  font-family: var(--font-mono);
+}
+.connect-overlay-error {
+  margin: 0;
+  align-self: stretch;
+}
+.connect-overlay-link {
+  margin: 0;
+  color: var(--fg-soft);
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease);
+}
+.connect-overlay-link:hover { color: var(--ink-0); }
