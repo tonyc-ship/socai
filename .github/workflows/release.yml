@@ -130,23 +130,11 @@ jobs:
           echo "previous_tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
 
   build:
-    name: build ${{ matrix.label }}
+    name: build universal macos
     needs: prepare
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Use a current hosted macOS image for both targets; the Rust target
-          # triple controls the artifact architecture.
-          - label: apple silicon
-            arch: apple-silicon
-            target: aarch64-apple-darwin
-            runner: macos-14
-          - label: intel
-            arch: intel
-            target: x86_64-apple-darwin
-            runner: macos-14
+    runs-on: macos-14
+    env:
+      TARGET: universal-apple-darwin
 
     steps:
       - name: checkout release base commit
@@ -179,19 +167,17 @@ jobs:
       - name: set up rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: cache rust build outputs
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
-          key: ${{ matrix.target }}
+          key: universal-apple-darwin
 
       - name: clear stale bundle outputs
         shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           rm -rf "target/${TARGET}/release/bundle"
@@ -201,14 +187,12 @@ jobs:
         run: |
           pnpm exec tauri build \
             --ci \
-            --target "${{ matrix.target }}" \
+            --target "${TARGET}" \
             --bundles app,dmg \
             --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
 
       - name: verify app bundle and dmg
         shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
 
@@ -249,32 +233,20 @@ jobs:
 
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${mounted_app}/Contents/Info.plist")"
           binary="${mounted_app}/Contents/MacOS/${executable}"
-          actual_arch="$(lipo -archs "${binary}")"
+          actual_archs="$(lipo -archs "${binary}")"
+          echo "${binary} architectures: ${actual_archs}"
 
-          case "${TARGET}" in
-            aarch64-apple-darwin)
-              expected_arch="arm64"
-              ;;
-            x86_64-apple-darwin)
-              expected_arch="x86_64"
-              ;;
-            *)
-              echo "unsupported target for arch verification: ${TARGET}" >&2
+          for expected_arch in arm64 x86_64; do
+            if [[ " ${actual_archs} " != *" ${expected_arch} "* ]]; then
+              echo "expected ${binary} to include ${expected_arch}, got: ${actual_archs}" >&2
               exit 1
-              ;;
-          esac
-
-          if [ "${actual_arch}" != "${expected_arch}" ]; then
-            echo "expected ${binary} to be ${expected_arch}, got: ${actual_arch}" >&2
-            exit 1
-          fi
+            fi
+          done
 
       - name: collect distributable artifacts
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
 
@@ -289,14 +261,14 @@ jobs:
             exit 1
           fi
 
-          cp "${dmg}" "dist-artifacts/socai-${VERSION}-macos-${ARCH}.dmg"
+          cp "${dmg}" "dist-artifacts/socai-${VERSION}-macos-universal.dmg"
 
           ls -lah dist-artifacts
 
       - name: upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: socai-${{ needs.prepare.outputs.version }}-macos-${{ matrix.arch }}
+          name: socai-${{ needs.prepare.outputs.version }}-macos-universal
           path: dist-artifacts/*
           if-no-files-found: error
 
@@ -318,7 +290,7 @@ jobs:
       - name: download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: socai-${{ needs.prepare.outputs.version }}-macos-*
+          pattern: socai-${{ needs.prepare.outputs.version }}-macos-universal
           merge-multiple: true
           path: dist-artifacts
 
@@ -341,13 +313,11 @@ jobs:
             exit 1
           fi
 
-          for arch in apple-silicon intel; do
-            artifact="dist-artifacts/socai-${VERSION}-macos-${arch}.dmg"
-            if [ ! -f "${artifact}" ]; then
-              echo "missing release artifact: ${artifact}" >&2
-              exit 1
-            fi
-          done
+          artifact="dist-artifacts/socai-${VERSION}-macos-universal.dmg"
+          if [ ! -f "${artifact}" ]; then
+            echo "missing release artifact: ${artifact}" >&2
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -390,10 +360,9 @@ jobs:
           cat > release-notes.md <<EOF
           ## downloads
 
-          - [apple silicon mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-apple-silicon.dmg)
-          - [intel mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-intel.dmg)
+          - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
 
-          These macOS builds are ad-hoc signed but not notarized. Gatekeeper may require right-clicking the app and choosing **Open** on first launch.
+          This macOS build is ad-hoc signed but not notarized. Gatekeeper may require right-clicking the app and choosing **Open** on first launch.
 
           ## changes
 
