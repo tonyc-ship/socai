@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -36,15 +36,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: require main branch
+      - name: validate release ref
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "releases must be dispatched from main; current ref is ${GITHUB_REF}" >&2
-            exit 1
-          fi
+          case "${GITHUB_REF}" in
+            refs/heads/main)
+              echo "publishing release from main"
+              ;;
+            refs/heads/fix/release-*)
+              echo "test release run from ${GITHUB_REF}; publish job will be skipped"
+              ;;
+            *)
+              echo "releases must be dispatched from main or fix/release-*; current ref is ${GITHUB_REF}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: record release base commit
         id: base
@@ -294,6 +302,7 @@ jobs:
 
   release:
     name: publish github release
+    if: github.ref == 'refs/heads/main'
     needs:
       - prepare
       - build
