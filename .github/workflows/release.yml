@@ -182,14 +182,90 @@ jobs:
           set -euo pipefail
           rm -rf "target/${TARGET}/release/bundle"
 
+      - name: configure macos signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+
+          config_path="app/tauri.release-signing.conf.json"
+          cert_configured=false
+          notarization_configured=false
+
+          if [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            cert_configured=true
+          fi
+
+          if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+            notarization_configured=true
+          fi
+
+          if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY_P8:-}" ]; then
+            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY}.p8"
+            printf '%s' "${APPLE_API_KEY_P8}" > "${key_path}"
+            chmod 600 "${key_path}"
+            echo "APPLE_API_KEY_PATH=${key_path}" >> "${GITHUB_ENV}"
+            notarization_configured=true
+          fi
+
+          if [ "${cert_configured}" = "true" ] && [ "${notarization_configured}" = "true" ]; then
+            python3 - "${config_path}" "${APPLE_SIGNING_IDENTITY}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          signing_identity = sys.argv[2]
+          path.write_text(json.dumps({"bundle": {"macOS": {"signingIdentity": signing_identity}}}) + "\n")
+          PY
+            echo "MACOS_SIGNING_MODE=developer-id" >> "${GITHUB_ENV}"
+            echo "using Developer ID signing and notarization"
+          else
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              echo "main releases require Developer ID signing and notarization secrets" >&2
+              echo "required: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY" >&2
+              echo "and either APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID or APPLE_API_KEY + APPLE_API_ISSUER + APPLE_API_KEY_P8" >&2
+              exit 1
+            fi
+
+            python3 - "${config_path}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          path.write_text(json.dumps({"bundle": {"macOS": {"signingIdentity": "-"}}}) + "\n")
+          PY
+            echo "MACOS_SIGNING_MODE=ad-hoc" >> "${GITHUB_ENV}"
+            echo "using ad-hoc signing for branch test build; Gatekeeper will still warn"
+          fi
+
       - name: build app bundle and dmg
         working-directory: app
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           pnpm exec tauri build \
             --ci \
             --target "${TARGET}" \
             --bundles app,dmg \
-            --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+            --config tauri.release-signing.conf.json
 
       - name: verify app bundle and dmg
         shell: bash
@@ -212,6 +288,10 @@ jobs:
           fi
 
           codesign --verify --deep --strict --verbose=2 "${app_bundle}"
+          if [ "${MACOS_SIGNING_MODE}" = "developer-id" ]; then
+            spctl -a -vvv -t execute "${app_bundle}"
+            xcrun stapler validate "${app_bundle}"
+          fi
           hdiutil verify "${dmg}"
 
           mount_root="$(mktemp -d)"
@@ -230,6 +310,10 @@ jobs:
           mounted_app="${mount_point}/socai.app"
 
           codesign --verify --deep --strict --verbose=2 "${mounted_app}"
+          if [ "${MACOS_SIGNING_MODE}" = "developer-id" ]; then
+            spctl -a -vvv -t execute "${mounted_app}"
+            xcrun stapler validate "${mounted_app}"
+          fi
 
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${mounted_app}/Contents/Info.plist")"
           binary="${mounted_app}/Contents/MacOS/${executable}"
@@ -362,7 +446,7 @@ jobs:
 
           - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
 
-          This macOS build is ad-hoc signed but not notarized. Gatekeeper may require right-clicking the app and choosing **Open** on first launch.
+          This macOS build is signed and notarized.
 
           ## changes
 
