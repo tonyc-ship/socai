@@ -129,6 +129,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Use a current hosted macOS image for both targets; the Rust target
+          # triple controls the artifact architecture.
           - label: apple silicon
             arch: apple-silicon
             target: aarch64-apple-darwin
@@ -136,7 +138,7 @@ jobs:
           - label: intel
             arch: intel
             target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-14
 
     steps:
       - name: checkout release base commit
@@ -188,7 +190,76 @@ jobs:
 
       - name: build app bundle and dmg
         working-directory: app
-        run: pnpm exec tauri build --ci --no-sign --target "${{ matrix.target }}" --bundles app,dmg
+        run: |
+          pnpm exec tauri build \
+            --ci \
+            --target "${{ matrix.target }}" \
+            --bundles app,dmg \
+            --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+
+      - name: verify app bundle and dmg
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          bundle_dir="target/${TARGET}/release/bundle"
+          app_bundle="${bundle_dir}/macos/socai.app"
+          dmg_dir="${bundle_dir}/dmg"
+          dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+
+          if [ ! -d "${app_bundle}" ]; then
+            echo "no app bundle found at ${app_bundle}" >&2
+            exit 1
+          fi
+
+          if [ -z "${dmg}" ]; then
+            echo "no dmg found in ${dmg_dir}" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "${app_bundle}"
+          hdiutil verify "${dmg}"
+
+          mount_root="$(mktemp -d)"
+          mount_point=""
+          cleanup() {
+            if [ -n "${mount_point}" ]; then
+              hdiutil detach "${mount_point}" || true
+            fi
+            rm -rf "${mount_root}"
+          }
+          trap cleanup EXIT
+
+          attach_output="$(hdiutil attach -nobrowse -readonly -mountroot "${mount_root}" "${dmg}")"
+          echo "${attach_output}"
+          mount_point="$(echo "${attach_output}" | awk 'END { print $NF }')"
+          mounted_app="${mount_point}/socai.app"
+
+          codesign --verify --deep --strict --verbose=2 "${mounted_app}"
+
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${mounted_app}/Contents/Info.plist")"
+          binary="${mounted_app}/Contents/MacOS/${executable}"
+          actual_arch="$(lipo -archs "${binary}")"
+
+          case "${TARGET}" in
+            aarch64-apple-darwin)
+              expected_arch="arm64"
+              ;;
+            x86_64-apple-darwin)
+              expected_arch="x86_64"
+              ;;
+            *)
+              echo "unsupported target for arch verification: ${TARGET}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "${actual_arch}" != "${expected_arch}" ]; then
+            echo "expected ${binary} to be ${expected_arch}, got: ${actual_arch}" >&2
+            exit 1
+          fi
 
       - name: collect distributable artifacts
         shell: bash
@@ -203,7 +274,7 @@ jobs:
           dmg_dir="${bundle_dir}/dmg"
           mkdir -p dist-artifacts
 
-          dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print | head -n 1)"
+          dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
 
           if [ -z "${dmg}" ]; then
             echo "no dmg found in ${dmg_dir}" >&2
@@ -261,10 +332,13 @@ jobs:
             exit 1
           fi
 
-          if [ "$(find dist-artifacts -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')" -eq 0 ]; then
-            echo "no dmg release artifacts were downloaded" >&2
-            exit 1
-          fi
+          for arch in apple-silicon intel; do
+            artifact="dist-artifacts/socai-${VERSION}-macos-${arch}.dmg"
+            if [ ! -f "${artifact}" ]; then
+              echo "missing release artifact: ${artifact}" >&2
+              exit 1
+            fi
+          done
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -310,7 +384,7 @@ jobs:
           - [apple silicon mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-apple-silicon.dmg)
           - [intel mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-intel.dmg)
 
-          These macOS builds are currently unsigned. Gatekeeper may require right-clicking the app and choosing **Open** on first launch.
+          These macOS builds are ad-hoc signed but not notarized. Gatekeeper may require right-clicking the app and choosing **Open** on first launch.
 
           ## changes
 

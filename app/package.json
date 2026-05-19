@@ -8,9 +8,9 @@
     "dev": "vite",
     "dev:desktop": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "build": "tsc && vite build",
-    "build:mac": "tauri build --ci --no-sign --bundles app,dmg",
-    "build:mac:apple-silicon": "tauri build --ci --no-sign --target aarch64-apple-darwin --bundles app,dmg",
-    "build:mac:intel": "tauri build --ci --no-sign --target x86_64-apple-darwin --bundles app,dmg",
+    "build:mac": "tauri build --ci --bundles app,dmg --config '{\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}'",
+    "build:mac:apple-silicon": "tauri build --ci --target aarch64-apple-darwin --bundles app,dmg --config '{\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}'",
+    "build:mac:intel": "tauri build --ci --target x86_64-apple-darwin --bundles app,dmg --config '{\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}'",
     "preview": "vite preview",
     "tauri": "tauri"
   },
