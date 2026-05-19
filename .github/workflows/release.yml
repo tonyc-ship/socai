@@ -200,24 +200,53 @@ jobs:
           config_path="app/tauri.release-signing.conf.json"
           cert_configured=false
           notarization_configured=false
+          apple_id_auth_configured=false
+          api_key_auth_configured=false
+          api_key_path=""
+
+          add_env() {
+            name="$1"
+            value="$2"
+            delimiter="EOF_$(uuidgen | tr -d '-')"
+            {
+              echo "${name}<<${delimiter}"
+              printf '%s\n' "${value}"
+              echo "${delimiter}"
+            } >> "${GITHUB_ENV}"
+          }
 
           if [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
             cert_configured=true
           fi
 
           if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+            apple_id_auth_configured=true
             notarization_configured=true
           fi
 
           if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY_P8:-}" ]; then
-            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY}.p8"
-            printf '%s' "${APPLE_API_KEY_P8}" > "${key_path}"
-            chmod 600 "${key_path}"
-            echo "APPLE_API_KEY_PATH=${key_path}" >> "${GITHUB_ENV}"
+            api_key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY}.p8"
+            printf '%s' "${APPLE_API_KEY_P8}" > "${api_key_path}"
+            chmod 600 "${api_key_path}"
+            api_key_auth_configured=true
             notarization_configured=true
           fi
 
           if [ "${cert_configured}" = "true" ] && [ "${notarization_configured}" = "true" ]; then
+            add_env APPLE_CERTIFICATE "${APPLE_CERTIFICATE}"
+            add_env APPLE_CERTIFICATE_PASSWORD "${APPLE_CERTIFICATE_PASSWORD}"
+            add_env APPLE_SIGNING_IDENTITY "${APPLE_SIGNING_IDENTITY}"
+
+            if [ "${apple_id_auth_configured}" = "true" ]; then
+              add_env APPLE_ID "${APPLE_ID}"
+              add_env APPLE_PASSWORD "${APPLE_PASSWORD}"
+              add_env APPLE_TEAM_ID "${APPLE_TEAM_ID}"
+            elif [ "${api_key_auth_configured}" = "true" ]; then
+              add_env APPLE_API_KEY "${APPLE_API_KEY}"
+              add_env APPLE_API_ISSUER "${APPLE_API_ISSUER}"
+              add_env APPLE_API_KEY_PATH "${api_key_path}"
+            fi
+
             python3 - "${config_path}" "${APPLE_SIGNING_IDENTITY}" <<'PY'
           import json
           import sys
@@ -251,15 +280,6 @@ jobs:
 
       - name: build app bundle and dmg
         working-directory: app
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           pnpm exec tauri build \
             --ci \
