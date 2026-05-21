@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "dev:desktop": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "dev:desktop:local": "SOCAI_HOME=\"$(cd .. && pwd)/.socai\" SOCAI_RUNS_DIR=\"$(cd .. && pwd)/.socai/runs\" tauri dev --config src-tauri/tauri.dev.conf.json",
     "build": "tsc && vite build",
     "build:mac": "tauri build --ci --target universal-apple-darwin --bundles app,dmg --config '{\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}'",
     "build:mac:universal": "tauri build --ci --target universal-apple-darwin --bundles app,dmg --config '{\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}'",

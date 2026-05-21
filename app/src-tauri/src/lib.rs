@@ -1,5 +1,6 @@
 mod commands;
 mod tasks;
+mod timeline;
 
 use std::collections::HashSet;
 
@@ -37,11 +38,13 @@ pub fn run() {
                                 let task_id = snapshot.task_id.clone();
                                 commands::emit_task_event(
                                     &handle,
+                                    &tasks,
                                     &task_id,
                                     "interrupted",
                                     "chrome tab was closed".into(),
                                     Some(snapshot),
-                                );
+                                )
+                                .await;
                             }
                         }
                     }

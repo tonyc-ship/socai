@@ -37,6 +37,11 @@ export interface AgentTaskSnapshot {
   output_tokens: number | null;
 }
 
+export interface TimelineEntity {
+  type: string;
+  data: unknown;
+}
+
 export interface AgentTaskEventPayload {
   task_id: string;
   kind:
@@ -57,9 +62,26 @@ export interface AgentTaskEventPayload {
     | "cancelled"
     | "interrupted";
   text: string;
-  snapshot: AgentTaskSnapshot | null;
+  snapshot?: AgentTaskSnapshot | null;
   sequence: number;
   created_at: number;
+  turn?: number;
+  id?: string;
+  sequence_in_turn?: number;
+  name?: string;
+  label?: string;
+  args?: unknown;
+  repeat_count?: number;
+  ok?: boolean;
+  summary?: string;
+  duration_ms?: number;
+  entities?: TimelineEntity[];
+  error?: string | null;
+  result_file?: string | null;
+  run_id?: string | null;
+  model?: string;
+  task?: string;
+  target_id?: string | null;
 }
 
 export interface ShellState {

@@ -25,6 +25,21 @@ pnpm install
 pnpm exec tauri dev
 ```
 
+For local development with app state and run artifacts written under the repo
+instead of `~/.socai`, use:
+
+```bash
+cd app
+pnpm run dev:desktop:local
+```
+
+This writes to:
+
+```text
+.socai/app/tasks.json
+.socai/runs/<run-dir>/
+```
+
 ## TUI
 
 ```bash

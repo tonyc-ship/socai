@@ -72,7 +72,8 @@ Each agent run writes files under `run_dir`.
 | Path | Purpose | Notes |
 | --- | --- | --- |
 | `report.md` | Final answer shown by the desktop app | Source of truth for completed task output. May include appended artifact markdown. |
-| `reasoning_log.jsonl` | Append-only debug/event log | Primary source for historical timeline replay. |
+| `timeline.jsonl` | Canonical typed task timeline | Source of truth for live and historical desktop timeline rows for new runs. |
+| `reasoning_log.jsonl` | Append-only debug/event log | Debug log and legacy fallback source for historical timeline replay. |
 | `conversation.json` | Final system prompt and message history snapshot | Useful for debugging/model replay. |
 | `agent_log.json` | Run summary | Includes task, model, turns, token counts, paths to run files. |
 | `tool_results/<turn>_<seq>_<tool>.json` | Full tool result bodies | `reasoning_log.jsonl` only stores compact summaries. |
@@ -88,14 +89,16 @@ One JSON object per line. Current important event types include:
 
 - `task_start`
 - `llm_response`
+- `reasoning`
 - `tool_call_start`
 - `tool_result`
 - `api_error`
 - `turn_end`
 - `task_end`
 
-The desktop app replays timeline rows from this file first. If it is absent or
-empty, the app falls back to `run_state/events.jsonl`.
+For new runs, the desktop app replays timeline rows from `timeline.jsonl` first.
+If `timeline.jsonl` is absent or empty, the app falls back to this file and then
+to `run_state/events.jsonl` for legacy runs.
 
 ## Desktop task index: `tasks.json`
 
@@ -135,34 +138,64 @@ Rules:
 
 ## Desktop timeline state
 
-Live event rows are held in frontend memory while a task is running. They are
-streamed over Tauri's `agent_task:event` event as:
+New task timeline rows are appended to `<run_dir>/timeline.jsonl` before they are
+emitted to the webview. The Tauri `agent_task:event` stream is a live delivery
+mechanism for already-persisted rows; frontend memory is only a view cache.
+
+Timeline rows use a typed discriminated shape with `kind` at the top level. For
+example:
 
 ```json
 {
   "task_id": "task-1790000000000-1",
   "kind": "tool_call",
+  "id": "toolu_123",
+  "turn": 1,
+  "sequence_in_turn": 1,
+  "name": "search_notes",
+  "label": "searched xiaohongshu",
+  "args": { "query": "..." },
+  "repeat_count": 1,
   "text": "search_notes({\"query\":\"...\"})",
-  "snapshot": null,
-  "sequence": 0,
+  "sequence": 4,
   "created_at": 1790000005000
 }
 ```
 
+Tool results can additionally carry normalized inline entities:
+
+```json
+{
+  "task_id": "task-1790000000000-1",
+  "kind": "tool_result",
+  "id": "toolu_123",
+  "name": "search_notes",
+  "label": "searched xiaohongshu",
+  "ok": true,
+  "duration_ms": 1400,
+  "entities": [{ "type": "xhs_note_card_grid", "data": [] }],
+  "text": "search_notes (1400ms): ...",
+  "sequence": 5,
+  "created_at": 1790000006500
+}
+```
+
 After restart or webview reload, the app does not read a separate app event
-cache. Instead, `agent_task_events(task_id)` reconstructs rows from the task's
+cache. Instead, `agent_task_events(task_id)` reads rows from the task's
 `run_dir`:
 
-1. `<run_dir>/reasoning_log.jsonl`
-2. fallback: `<run_dir>/run_state/events.jsonl`
-3. terminal status metadata from `tasks.json` when applicable
+1. `<run_dir>/timeline.jsonl`
+2. legacy fallback: `<run_dir>/reasoning_log.jsonl` plus `tool_results/*.json`
+3. legacy fallback: `<run_dir>/run_state/events.jsonl`
+4. terminal status metadata from `tasks.json` when applicable
 
 This keeps timeline and final answer data rooted in the run directory.
 
-## Realtime event stream vs `reasoning_log.jsonl`
+## Realtime event stream vs `timeline.jsonl` / `reasoning_log.jsonl`
 
-`reasoning_log.jsonl` is not an exact byte-for-byte copy of what the user sees
-in realtime.
+For new runs, `timeline.jsonl` is the canonical source for both realtime and
+historical timeline rows. The live UI receives rows only after they have been
+written to that file.
 
 The live UI receives two classes of events:
 
@@ -171,25 +204,25 @@ The live UI receives two classes of events:
 2. Core agent events emitted by `socai-core`: `started`, `turn`, `assistant`,
    `reasoning`, `tool_call`, `tool_result`, `tool_error`, `api_error`, `done`.
 
-`reasoning_log.jsonl` is a persistent core debug log with enough structured data
-to replay the important run timeline, but some live rows are represented
-differently or not present.
+`reasoning_log.jsonl` remains a persistent core debug log and legacy replay
+fallback. It is not an exact byte-for-byte copy of what the user sees in
+realtime.
 
-| UI row | Live source | `reasoning_log.jsonl` source | Replay behavior |
+| UI row | New-run source | Legacy fallback source | Replay behavior |
 | --- | --- | --- | --- |
-| `queued` | Tauri | Not logged | Not replayed after restart. |
-| `running` | Tauri | Not logged | Not replayed after restart. |
-| `tab` | Tauri | Not logged | Not replayed after restart. |
-| `started` | `AgentEvent::Started` | `task_start` | Replayed. |
-| `turn` | `AgentEvent::Turn` | No standalone row; inferred from `turn` fields | Reconstructed. |
-| `assistant` | `AgentEvent::AssistantText` | `llm_response.text` | Replayed. |
-| `reasoning` | `AgentEvent::Reasoning` | Not currently logged | Not replayed today. |
-| `tool_call` | `AgentEvent::ToolCall` | `tool_call_start` | Replayed. |
-| `tool_result` / `tool_error` | `AgentEvent::ToolResult` | `tool_result` | Replayed from summary/error. |
-| `api_error` | `AgentEvent::ApiError` | `api_error` | Replayed. |
-| `done` | `AgentEvent::Done` | `task_end` | Replayed. |
-| terminal app status | Tauri snapshot update | `tasks.json` status metadata | Reconstructed from task status. |
+| `queued` | `timeline.jsonl` | Not logged | Replayed for new runs. |
+| `running` | `timeline.jsonl` | Not logged | Replayed for new runs. |
+| `tab` | `timeline.jsonl` | Not logged | Replayed for new runs. |
+| `started` | `timeline.jsonl` | `task_start` | Replayed. |
+| `turn` | `timeline.jsonl` | inferred from `turn` fields | Replayed/reconstructed. |
+| `assistant` | `timeline.jsonl` | `llm_response.text` | Replayed. |
+| `reasoning` | `timeline.jsonl` | `reasoning` when present | Replayed for new runs. |
+| `tool_call` | `timeline.jsonl` | `tool_call_start` | Replayed. |
+| `tool_result` / `tool_error` | `timeline.jsonl` | `tool_result` + `tool_results/*.json` | Replayed with normalized entities when possible. |
+| `api_error` | `timeline.jsonl` | `api_error` | Replayed. |
+| `done` | `timeline.jsonl` | `task_end` | Replayed. |
+| terminal app status | `timeline.jsonl` | `tasks.json` status metadata | Replayed/reconstructed. |
 
-If we ever need perfect historical replay, the better foundation would be to
-make the core agent event stream serializable and persist that stream in the run
-directory. It should still live under `run_dir`, not under the app index.
+New runs persist the typed desktop timeline directly in `timeline.jsonl` under
+`run_dir`. `tasks.json` remains an index and must not grow a duplicate timeline
+cache.

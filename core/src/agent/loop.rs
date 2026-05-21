@@ -58,14 +58,20 @@ pub enum AgentEvent {
         text: String,
     },
     ToolCall {
+        id: String,
         turn: u32,
+        sequence: u32,
         name: String,
         input: Value,
         repeat_count: u32,
     },
     ToolResult {
+        id: String,
         turn: u32,
+        sequence: u32,
         name: String,
+        input: Value,
+        content: Value,
         summary: String,
         duration_ms: u64,
         error: Option<String>,
@@ -234,15 +240,21 @@ pub async fn run_agent_with_events(
                     text: response.reasoning_content.clone(),
                 },
             );
+            debug_log.event(
+                "reasoning",
+                json!({"turn": turn, "text": response.reasoning_content.clone()}),
+            );
         }
         if !thinking_texts.is_empty() {
+            let thinking_text = thinking_texts.join("\n");
             emit(
                 &events,
                 AgentEvent::Reasoning {
                     turn,
-                    text: thinking_texts.join("\n"),
+                    text: thinking_text.clone(),
                 },
             );
+            debug_log.event("reasoning", json!({"turn": turn, "text": thinking_text}));
         }
 
         // Build the assistant block list manually instead of using
@@ -299,10 +311,13 @@ pub async fn run_agent_with_events(
             history.push(turn);
             let repeat_count = history.len() as u32;
 
+            let sequence = (idx + 1) as u32;
             emit(
                 &events,
                 AgentEvent::ToolCall {
+                    id: id.clone(),
                     turn,
+                    sequence,
                     name: name.clone(),
                     input: input.clone(),
                     repeat_count,
@@ -313,7 +328,8 @@ pub async fn run_agent_with_events(
                 "tool_call_start",
                 json!({
                     "turn": turn,
-                    "sequence": idx + 1,
+                    "sequence": sequence,
+                    "tool_use_id": id,
                     "tool": name,
                     "input": input,
                     "repeat_count": repeat_count,
@@ -326,13 +342,18 @@ pub async fn run_agent_with_events(
             let duration_s = (duration_ms as f64) / 1000.0;
 
             let result_content = tool_result_to_content(&result);
+            let content = content_for_log(&result_content);
             let flat = result.flat_text();
             let summary = truncate_summary(&flat, 240);
             emit(
                 &events,
                 AgentEvent::ToolResult {
+                    id: id.clone(),
                     turn,
+                    sequence,
                     name: name.clone(),
+                    input: input.clone(),
+                    content: content.clone(),
                     summary: summary.clone(),
                     duration_ms,
                     error: error.clone(),
@@ -341,10 +362,11 @@ pub async fn run_agent_with_events(
             run_state.note_tool_result(turn, name, input, &summary, duration_s);
             debug_log.tool_result(
                 turn,
-                (idx + 1) as u32,
+                sequence,
+                id,
                 name,
                 input,
-                &content_for_log(&result_content),
+                &content,
                 duration_s,
                 &summary,
                 repeat_count,

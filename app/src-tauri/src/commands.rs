@@ -1,4 +1,5 @@
-use crate::tasks::{now_ms, AgentTaskEventPayload, AgentTaskRegistry, AgentTaskSnapshot};
+use crate::tasks::{now_ms, AgentTaskRegistry, AgentTaskSnapshot};
+use crate::timeline::{agent_event_to_timeline, AgentTaskEventKind, AgentTaskEventPayload};
 use anyhow::Result;
 use serde_json::{json, Value};
 use socai_core::agent::{
@@ -267,11 +268,13 @@ pub async fn agent_task_start(
     } else {
         emit_task_event(
             &app,
+            tasks.inner(),
             &task_id,
             "queued",
             "task queued".into(),
             Some(snapshot.clone()),
-        );
+        )
+        .await;
         let _ = start_tx.send(());
     }
     Ok(snapshot)
@@ -326,11 +329,13 @@ pub async fn agent_task_cancel(
     if changed {
         emit_task_event(
             &app,
+            tasks.inner(),
             &task_id,
             "cancelled",
             "task cancelled".into(),
             Some(snapshot.clone()),
-        );
+        )
+        .await;
     }
     Ok(snapshot)
 }
@@ -378,7 +383,7 @@ async fn run_agent_task_background(
             })
             .await
         {
-            emit_task_event(&app, &task_id, "failed", error, Some(snapshot));
+            emit_task_event(&app, &registry, &task_id, "failed", error, Some(snapshot)).await;
         }
         return;
     };
@@ -392,11 +397,13 @@ async fn run_agent_task_background(
     {
         emit_task_event(
             &app,
+            &registry,
             &task_id,
             "running",
             "task started".into(),
             Some(snapshot),
-        );
+        )
+        .await;
     }
 
     let result = run_agent_task_on_fresh_page(
@@ -432,11 +439,13 @@ async fn run_agent_task_background(
             {
                 emit_task_event(
                     &app,
+                    &registry,
                     &task_id,
                     "completed",
                     "task completed".into(),
                     Some(snapshot),
-                );
+                )
+                .await;
             }
         }
         Err(err) => {
@@ -449,7 +458,7 @@ async fn run_agent_task_background(
                 })
                 .await
             {
-                emit_task_event(&app, &task_id, "failed", error, Some(snapshot));
+                emit_task_event(&app, &registry, &task_id, "failed", error, Some(snapshot)).await;
             }
         }
     }
@@ -485,17 +494,19 @@ async fn run_agent_task_on_fresh_page(
         {
             emit_task_event(
                 &app,
+                registry,
                 &task_id,
                 "tab",
                 "chrome tab marked as controlled by socai".into(),
                 Some(snapshot),
-            );
+            )
+            .await;
         }
     }
     let outcome = async {
         let tools = xhs_agent_tools(page.clone(), llm_provider.clone()).await?;
         let (tx, rx) = tokio::sync::broadcast::channel::<AgentEvent>(256);
-        let pump = pump_agent_task_events(app, task_id.clone(), rx);
+        let pump = pump_agent_task_events(app, registry.clone(), task_id.clone(), rx);
 
         let config = AgentRunConfig {
             extra_instructions: xhs_agent_instructions(TAURI_AGENT_PREAMBLE),
@@ -530,93 +541,51 @@ async fn run_agent_task_on_fresh_page(
 
 fn pump_agent_task_events(
     app: AppHandle,
+    registry: Option<AgentTaskRegistry>,
     task_id: String,
     mut rx: tokio::sync::broadcast::Receiver<AgentEvent>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
-            let payload = event_to_payload(&task_id, &event);
-            let _ = app.emit("agent_task:event", payload);
+            let payload = agent_event_to_timeline(&event);
+            emit_timeline_payload(&app, registry.as_ref(), &task_id, payload, None).await;
         }
     })
 }
 
-pub(crate) fn emit_task_event(
+pub(crate) async fn emit_task_event(
     app: &AppHandle,
+    registry: &AgentTaskRegistry,
     task_id: &str,
     kind: &str,
     text: String,
     snapshot: Option<AgentTaskSnapshot>,
 ) {
-    let payload = AgentTaskEventPayload {
-        task_id: task_id.to_string(),
-        kind: kind.to_string(),
-        text,
-        snapshot,
-        sequence: 0,
-        created_at: now_ms(),
-    };
-    let _ = app.emit("agent_task:event", payload);
+    let payload = AgentTaskEventKind::from_kind_text(kind, text);
+    emit_timeline_payload(app, Some(registry), task_id, payload, snapshot).await;
 }
 
-fn event_to_payload(task_id: &str, event: &AgentEvent) -> AgentTaskEventPayload {
-    let (kind, text) = match event {
-        AgentEvent::Started {
-            run_id,
-            task,
-            model,
-        } => (
-            "started",
-            format!("task: {task}\nrun {run_id} · model {model}"),
-        ),
-        AgentEvent::Turn { turn } => ("turn", format!("turn {turn}")),
-        AgentEvent::AssistantText { text, .. } => ("assistant", text.clone()),
-        AgentEvent::Reasoning { text, .. } => ("reasoning", text.clone()),
-        AgentEvent::ToolCall {
-            name,
-            input,
-            repeat_count,
-            ..
-        } => {
-            let preview = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-            let text = if *repeat_count > 1 {
-                format!("{name}({preview}) repeat={repeat_count}")
-            } else {
-                format!("{name}({preview})")
-            };
-            ("tool_call", text)
+async fn emit_timeline_payload(
+    app: &AppHandle,
+    registry: Option<&AgentTaskRegistry>,
+    task_id: &str,
+    payload: AgentTaskEventKind,
+    snapshot: Option<AgentTaskSnapshot>,
+) {
+    let event = if let Some(registry) = registry {
+        match registry
+            .append_timeline_event(task_id, payload.clone(), snapshot.clone())
+            .await
+        {
+            Some(Ok(event)) => event,
+            Some(Err(err)) => {
+                eprintln!("failed to persist timeline event for {task_id}: {err:#}");
+                return;
+            }
+            None => AgentTaskEventPayload::ephemeral(task_id, payload, snapshot),
         }
-        AgentEvent::ToolResult {
-            name,
-            summary,
-            duration_ms,
-            error,
-            ..
-        } => {
-            let first = summary.lines().next().unwrap_or("");
-            let text = match error {
-                Some(err) => format!("{name} ({duration_ms}ms): {err}"),
-                None => format!("{name} ({duration_ms}ms): {first}"),
-            };
-            (
-                if error.is_some() {
-                    "tool_error"
-                } else {
-                    "tool_result"
-                },
-                text,
-            )
-        }
-        AgentEvent::ApiError { turn, message } => ("api_error", format!("turn {turn}: {message}")),
-        AgentEvent::Done { turns, .. } => ("done", format!("done in {turns} turns")),
+    } else {
+        AgentTaskEventPayload::ephemeral(task_id, payload, snapshot)
     };
-
-    AgentTaskEventPayload {
-        task_id: task_id.to_string(),
-        kind: kind.to_string(),
-        text,
-        snapshot: None,
-        sequence: 0,
-        created_at: now_ms(),
-    }
+    let _ = app.emit("agent_task:event", event);
 }

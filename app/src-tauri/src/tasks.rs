@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,8 +7,9 @@ use serde_json::Value;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::AbortHandle;
 
+use crate::timeline::{self, AgentTaskEventKind, AgentTaskEventPayload};
+
 const MAX_CONCURRENT_AGENT_TASKS: usize = 1;
-const MAX_EVENT_TEXT_CHARS: usize = 8_000;
 
 #[derive(Clone)]
 pub struct AgentTaskRegistry {
@@ -41,19 +42,6 @@ pub struct AgentTaskSnapshot {
     pub(crate) turns: Option<u32>,
     pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct AgentTaskEventPayload {
-    pub(crate) task_id: String,
-    pub(crate) kind: String,
-    pub(crate) text: String,
-    #[serde(default)]
-    pub(crate) snapshot: Option<AgentTaskSnapshot>,
-    #[serde(default)]
-    pub(crate) sequence: u64,
-    #[serde(default)]
-    pub(crate) created_at: u64,
 }
 
 impl Default for AgentTaskRegistry {
@@ -232,7 +220,26 @@ impl AgentTaskRegistry {
 
     pub(crate) async fn events(&self, task_id: &str) -> Option<Vec<AgentTaskEventPayload>> {
         let snapshot = self.get(task_id).await?;
-        Some(load_task_events(&snapshot))
+        Some(timeline::load_task_events(&snapshot))
+    }
+
+    pub(crate) async fn append_timeline_event(
+        &self,
+        task_id: &str,
+        payload: AgentTaskEventKind,
+        snapshot_for_emit: Option<AgentTaskSnapshot>,
+    ) -> Option<anyhow::Result<AgentTaskEventPayload>> {
+        let guard = self.inner.lock().await;
+        let snapshot = guard
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)?
+            .clone();
+        Some(timeline::append_timeline_event(
+            &snapshot,
+            payload,
+            snapshot_for_emit,
+        ))
     }
 
     pub(crate) async fn update<F>(&self, task_id: &str, f: F) -> Option<AgentTaskSnapshot>
@@ -333,354 +340,4 @@ fn persist_task_index(tasks: &[AgentTaskSnapshot]) {
     if let Ok(text) = serde_json::to_string_pretty(&records) {
         let _ = std::fs::write(path, text);
     }
-}
-
-fn load_task_events(snapshot: &AgentTaskSnapshot) -> Vec<AgentTaskEventPayload> {
-    let mut events = replay_task_events(snapshot);
-    append_terminal_snapshot_events(snapshot, &mut events);
-    events
-}
-
-fn replay_task_events(snapshot: &AgentTaskSnapshot) -> Vec<AgentTaskEventPayload> {
-    let Some(run_dir) = snapshot
-        .run_dir
-        .as_ref()
-        .filter(|dir| !dir.trim().is_empty())
-    else {
-        return Vec::new();
-    };
-    let run_dir = PathBuf::from(run_dir);
-    let mut events = replay_reasoning_log(snapshot, &run_dir.join("reasoning_log.jsonl"));
-    if events.is_empty() {
-        events = replay_run_state_events(snapshot, &run_dir.join("run_state/events.jsonl"));
-    }
-    if !events.is_empty() {
-        ensure_started_event(snapshot, &mut events);
-        reindex_replay_events(snapshot, &mut events);
-    }
-    events
-}
-
-fn replay_reasoning_log(snapshot: &AgentTaskSnapshot, path: &Path) -> Vec<AgentTaskEventPayload> {
-    let mut events = Vec::new();
-    let mut last_turn = None;
-    for value in read_jsonl_values(path) {
-        let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-        match event_type {
-            "task_start" => {
-                let task = value.get("task").and_then(Value::as_str);
-                let model = value.get("model").and_then(Value::as_str);
-                events.push(replay_event(
-                    snapshot,
-                    "started",
-                    started_event_text(snapshot, task, model),
-                ));
-            }
-            "llm_response" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let text = value
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim();
-                if !text.is_empty() {
-                    events.push(replay_event(snapshot, "assistant", text.to_string()));
-                }
-            }
-            "tool_call_start" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let tool = value.get("tool").and_then(Value::as_str).unwrap_or("tool");
-                let input = value.get("input").unwrap_or(&Value::Null);
-                let repeat_count = number_field(&value, "repeat_count");
-                events.push(replay_event(
-                    snapshot,
-                    "tool_call",
-                    format_tool_call_text(tool, input, repeat_count),
-                ));
-            }
-            "tool_result" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let tool = value.get("tool").and_then(Value::as_str).unwrap_or("tool");
-                let summary = value
-                    .get("result_summary")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let error = value.get("error").and_then(Value::as_str).unwrap_or("");
-                let duration_ms = duration_ms(&value);
-                let (kind, text) = format_tool_result_text(tool, summary, duration_ms, error);
-                events.push(replay_event(snapshot, kind, text));
-            }
-            "api_error" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let message = value
-                    .get("error")
-                    .or_else(|| value.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("api error");
-                events.push(replay_event(
-                    snapshot,
-                    "api_error",
-                    format!("turn {turn}: {message}"),
-                ));
-            }
-            "task_end" => {
-                let turn = number_field(&value, "turn");
-                if turn > 0 {
-                    events.push(replay_event(
-                        snapshot,
-                        "done",
-                        format!("done in {turn} turns"),
-                    ));
-                } else {
-                    events.push(replay_event(snapshot, "done", "done".into()));
-                }
-            }
-            _ => {}
-        }
-    }
-    events
-}
-
-fn replay_run_state_events(
-    snapshot: &AgentTaskSnapshot,
-    path: &Path,
-) -> Vec<AgentTaskEventPayload> {
-    let mut events = Vec::new();
-    let mut last_turn = None;
-    for value in read_jsonl_values(path) {
-        let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-        match event_type {
-            "assistant_turn" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let text = value
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim();
-                if !text.is_empty() {
-                    events.push(replay_event(snapshot, "assistant", text.to_string()));
-                }
-            }
-            "tool_call" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let tool = value.get("tool").and_then(Value::as_str).unwrap_or("tool");
-                let input = value.get("input").unwrap_or(&Value::Null);
-                events.push(replay_event(
-                    snapshot,
-                    "tool_call",
-                    format_tool_call_text(tool, input, 0),
-                ));
-            }
-            "tool_result" => {
-                let turn = number_field(&value, "turn");
-                push_turn_event(snapshot, &mut events, &mut last_turn, turn);
-                let tool = value.get("tool").and_then(Value::as_str).unwrap_or("tool");
-                let summary = value
-                    .get("result_summary")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let duration_ms = duration_ms(&value);
-                let (kind, text) = format_tool_result_text(tool, summary, duration_ms, "");
-                events.push(replay_event(snapshot, kind, text));
-            }
-            _ => {}
-        }
-    }
-    events
-}
-
-fn append_terminal_snapshot_events(
-    snapshot: &AgentTaskSnapshot,
-    events: &mut Vec<AgentTaskEventPayload>,
-) {
-    match snapshot.status.as_str() {
-        "completed" => {
-            if !events.iter().any(|event| event.kind == "done") {
-                let text = snapshot
-                    .turns
-                    .map(|turns| format!("done in {turns} turns"))
-                    .unwrap_or_else(|| "done".into());
-                push_snapshot_event(snapshot, events, "done", text);
-            }
-            if !events.iter().any(|event| event.kind == "completed") {
-                push_snapshot_event(snapshot, events, "completed", "task completed".into());
-            }
-        }
-        "failed" => {
-            if !events.iter().any(|event| event.kind == "failed") {
-                let text = snapshot
-                    .error
-                    .as_deref()
-                    .filter(|error| !error.trim().is_empty())
-                    .unwrap_or("task failed")
-                    .to_string();
-                push_snapshot_event(snapshot, events, "failed", text);
-            }
-        }
-        "cancelled" => {
-            if !events.iter().any(|event| event.kind == "cancelled") {
-                push_snapshot_event(snapshot, events, "cancelled", "task cancelled".into());
-            }
-        }
-        "interrupted" => {
-            if !events.iter().any(|event| event.kind == "interrupted") {
-                let text = snapshot
-                    .error
-                    .as_deref()
-                    .filter(|error| !error.trim().is_empty())
-                    .unwrap_or("task interrupted")
-                    .to_string();
-                push_snapshot_event(snapshot, events, "interrupted", text);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_snapshot_event(
-    snapshot: &AgentTaskSnapshot,
-    events: &mut Vec<AgentTaskEventPayload>,
-    kind: &str,
-    text: String,
-) {
-    let sequence = events.iter().map(|event| event.sequence).max().unwrap_or(0) + 1;
-    events.push(AgentTaskEventPayload {
-        task_id: snapshot.task_id.clone(),
-        kind: kind.into(),
-        text: truncate_event_text(&text),
-        snapshot: None,
-        sequence,
-        created_at: snapshot.finished_at.unwrap_or_else(now_ms),
-    });
-}
-
-fn ensure_started_event(snapshot: &AgentTaskSnapshot, events: &mut Vec<AgentTaskEventPayload>) {
-    if events.iter().any(|event| event.kind == "started") {
-        return;
-    }
-    events.insert(
-        0,
-        replay_event(
-            snapshot,
-            "started",
-            started_event_text(snapshot, None, None),
-        ),
-    );
-}
-
-fn reindex_replay_events(snapshot: &AgentTaskSnapshot, events: &mut [AgentTaskEventPayload]) {
-    let base = snapshot.started_at.unwrap_or(snapshot.created_at);
-    for (idx, event) in events.iter_mut().enumerate() {
-        event.sequence = idx as u64 + 1;
-        event.created_at = base.saturating_add(idx as u64 + 1);
-    }
-}
-
-fn replay_event(snapshot: &AgentTaskSnapshot, kind: &str, text: String) -> AgentTaskEventPayload {
-    AgentTaskEventPayload {
-        task_id: snapshot.task_id.clone(),
-        kind: kind.into(),
-        text: truncate_event_text(&text),
-        snapshot: None,
-        sequence: 0,
-        created_at: 0,
-    }
-}
-
-fn push_turn_event(
-    snapshot: &AgentTaskSnapshot,
-    events: &mut Vec<AgentTaskEventPayload>,
-    last_turn: &mut Option<u64>,
-    turn: u64,
-) {
-    if turn == 0 || *last_turn == Some(turn) {
-        return;
-    }
-    *last_turn = Some(turn);
-    events.push(replay_event(snapshot, "turn", format!("turn {turn}")));
-}
-
-fn started_event_text(
-    snapshot: &AgentTaskSnapshot,
-    task: Option<&str>,
-    model: Option<&str>,
-) -> String {
-    let task = task.unwrap_or(&snapshot.task);
-    let model = model
-        .or(snapshot.model.as_deref())
-        .unwrap_or("unknown model");
-    let run = snapshot
-        .run_id
-        .as_deref()
-        .map(|run_id| format!("run {run_id} · "))
-        .unwrap_or_default();
-    format!("task: {task}\n{run}model {model}")
-}
-
-fn format_tool_call_text(tool: &str, input: &Value, repeat_count: u64) -> String {
-    let preview = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-    if repeat_count > 1 {
-        format!("{tool}({preview}) repeat={repeat_count}")
-    } else {
-        format!("{tool}({preview})")
-    }
-}
-
-fn format_tool_result_text(
-    tool: &str,
-    summary: &str,
-    duration_ms: u64,
-    error: &str,
-) -> (&'static str, String) {
-    if !error.trim().is_empty() {
-        return ("tool_error", format!("{tool} ({duration_ms}ms): {error}"));
-    }
-    let first = summary.lines().next().unwrap_or("");
-    ("tool_result", format!("{tool} ({duration_ms}ms): {first}"))
-}
-
-fn duration_ms(value: &Value) -> u64 {
-    if let Some(ms) = value.get("duration_ms").and_then(Value::as_u64) {
-        return ms;
-    }
-    value
-        .get("duration_s")
-        .and_then(Value::as_f64)
-        .map(|seconds| (seconds * 1000.0).round().max(0.0) as u64)
-        .unwrap_or_default()
-}
-
-fn number_field(value: &Value, field: &str) -> u64 {
-    value
-        .get(field)
-        .and_then(|number| {
-            number
-                .as_u64()
-                .or_else(|| number.as_f64().map(|n| n as u64))
-        })
-        .unwrap_or_default()
-}
-
-fn read_jsonl_values(path: &Path) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect()
-}
-
-fn truncate_event_text(text: &str) -> String {
-    if text.chars().count() <= MAX_EVENT_TEXT_CHARS {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(MAX_EVENT_TEXT_CHARS).collect();
-    format!("{kept}\n... [truncated]")
 }

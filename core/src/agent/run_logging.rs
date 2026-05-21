@@ -7,9 +7,9 @@
 //! - `agent_log.json`            — run summary (turns, run_dir, durations, …)
 //! - `tool_results/<turn>_<seq>_<tool>.json` — full tool result body per call
 
-// tool_result takes 9 fields (turn, sequence, tool, input, content,
-// duration_s, result_summary, repeat_count, error). Plain function args
-// match the Python signature 1:1.
+// tool_result takes many fields (turn, sequence, tool_use_id, tool, input,
+// content, duration_s, result_summary, repeat_count, error). Plain function
+// args match the Python-style debug payload directly.
 #![allow(clippy::too_many_arguments)]
 
 use std::path::{Path, PathBuf};
@@ -189,6 +189,7 @@ impl RunDebugLogger {
         &self,
         turn: u32,
         sequence: u32,
+        tool_use_id: &str,
         tool_name: &str,
         tool_input: &Value,
         content: &Value,
@@ -209,6 +210,7 @@ impl RunDebugLogger {
             "timestamp": timestamp(),
             "turn": turn,
             "sequence": sequence,
+            "tool_use_id": tool_use_id,
             "tool": tool_name,
             "input": tool_input,
             "duration_s": duration_s,
@@ -226,6 +228,7 @@ impl RunDebugLogger {
             json!({
                 "turn": turn,
                 "sequence": sequence,
+                "tool_use_id": tool_use_id,
                 "tool": tool_name,
                 "input": tool_input,
                 "duration_s": duration_s,
