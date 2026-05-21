@@ -22,6 +22,8 @@ struct AgentTaskRegistryInner {
     next_seq: u64,
     tasks: Vec<AgentTaskSnapshot>,
     abort_handles: HashMap<String, AbortHandle>,
+    timeline_next_seq: HashMap<String, u64>,
+    timeline_locks: HashMap<String, Arc<Mutex<()>>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -65,6 +67,8 @@ impl Default for AgentTaskRegistry {
                 next_seq,
                 tasks,
                 abort_handles: HashMap::new(),
+                timeline_next_seq: HashMap::new(),
+                timeline_locks: HashMap::new(),
             })),
             runner_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_AGENT_TASKS)),
         }
@@ -229,17 +233,51 @@ impl AgentTaskRegistry {
         payload: AgentTaskEventKind,
         snapshot_for_emit: Option<AgentTaskSnapshot>,
     ) -> Option<anyhow::Result<AgentTaskEventPayload>> {
-        let guard = self.inner.lock().await;
-        let snapshot = guard
-            .tasks
-            .iter()
-            .find(|task| task.task_id == task_id)?
-            .clone();
+        let (snapshot, timeline_lock) = {
+            let mut guard = self.inner.lock().await;
+            let snapshot = guard
+                .tasks
+                .iter()
+                .find(|task| task.task_id == task_id)?
+                .clone();
+            let timeline_lock = guard
+                .timeline_locks
+                .entry(task_id.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone();
+            (snapshot, timeline_lock)
+        };
+
+        let _timeline_guard = timeline_lock.lock().await;
+        let sequence = self.next_timeline_sequence(task_id, &snapshot).await;
         Some(timeline::append_timeline_event(
             &snapshot,
             payload,
             snapshot_for_emit,
+            sequence,
         ))
+    }
+
+    async fn next_timeline_sequence(&self, task_id: &str, snapshot: &AgentTaskSnapshot) -> u64 {
+        {
+            let mut guard = self.inner.lock().await;
+            if let Some(next) = guard.timeline_next_seq.get_mut(task_id) {
+                let sequence = *next;
+                *next = sequence.saturating_add(1);
+                return sequence;
+            }
+        }
+
+        // First append for this task in the current process: scan once to pick
+        // up any existing rows, then cache the next sequence in memory. This
+        // avoids re-reading timeline.jsonl on every streamed event while still
+        // preserving append-after-replay correctness.
+        let sequence = timeline::next_timeline_sequence(snapshot);
+        let mut guard = self.inner.lock().await;
+        guard
+            .timeline_next_seq
+            .insert(task_id.to_string(), sequence.saturating_add(1));
+        sequence
     }
 
     pub(crate) async fn update<F>(&self, task_id: &str, f: F) -> Option<AgentTaskSnapshot>

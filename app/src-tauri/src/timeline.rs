@@ -260,9 +260,9 @@ pub(crate) fn append_timeline_event(
     snapshot: &AgentTaskSnapshot,
     payload: AgentTaskEventKind,
     snapshot_for_emit: Option<AgentTaskSnapshot>,
+    sequence: u64,
 ) -> anyhow::Result<AgentTaskEventPayload> {
     let path = timeline_path(snapshot).context("task has no run_dir for timeline")?;
-    let sequence = next_sequence(&path);
     let mut event = AgentTaskEventPayload {
         task_id: snapshot.task_id.clone(),
         payload,
@@ -391,10 +391,10 @@ fn append_jsonl(path: &Path, event: &AgentTaskEventPayload) -> std::io::Result<(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let line = serde_json::to_string(event).map_err(std::io::Error::other)?;
+    let mut line = serde_json::to_string(event).map_err(std::io::Error::other)?;
+    line.push('\n');
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")
+    file.write_all(line.as_bytes())
 }
 
 fn read_timeline_events(snapshot: &AgentTaskSnapshot) -> Vec<AgentTaskEventPayload> {
@@ -414,6 +414,12 @@ fn read_timeline_events(snapshot: &AgentTaskSnapshot) -> Vec<AgentTaskEventPaylo
         .collect();
     events.sort_by(compare_events);
     events
+}
+
+pub(crate) fn next_timeline_sequence(snapshot: &AgentTaskSnapshot) -> u64 {
+    timeline_path(snapshot)
+        .map(|path| next_sequence(&path))
+        .unwrap_or(1)
 }
 
 fn next_sequence(path: &Path) -> u64 {
