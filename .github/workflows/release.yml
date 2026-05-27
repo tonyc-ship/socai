@@ -365,7 +365,7 @@ jobs:
             exit 1
           fi
 
-          cp "${dmg}" "dist-artifacts/socai-${VERSION}-macos-universal.dmg"
+          cp "${dmg}" "dist-artifacts/socai-macos-universal.dmg"
 
           ls -lah dist-artifacts
 
@@ -417,7 +417,7 @@ jobs:
             exit 1
           fi
 
-          artifact="dist-artifacts/socai-${VERSION}-macos-universal.dmg"
+          artifact="dist-artifacts/socai-macos-universal.dmg"
           if [ ! -f "${artifact}" ]; then
             echo "missing release artifact: ${artifact}" >&2
             exit 1
@@ -464,7 +464,7 @@ jobs:
           cat > release-notes.md <<EOF
           ## downloads
 
-          - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-${VERSION}-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
+          - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
 
           This macOS build is signed and notarized.
 
