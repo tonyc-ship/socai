@@ -13,17 +13,16 @@
 
 ## Desktop App
 
-Directly install on Mac:**[下载最新 .dmg](https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg)**(通用包,支持 Apple Silicon 与 Intel)。
+[Download .dmg for Mac](https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg). 
 
-For local development with app state and run artifacts written under the repo
-instead of `~/.socai`, use:
+For local development:
 
 ```bash
 cd app
 pnpm run dev:desktop:local
 ```
 
-This writes to:
+This writes records and artifacts to:
 
 ```text
 .socai/app/tasks.json
