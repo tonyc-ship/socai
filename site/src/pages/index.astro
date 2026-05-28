@@ -1,8 +1,11 @@
 ---
 import '../styles/global.css';
 
-const pageTitle = 'socai — xiaohongshu research agent';
-const pageDescription = 'A lightweight placeholder website for socai downloads and product updates.';
+const githubUrl = 'https://github.com/tonyc-ship/socai';
+const releaseVersion = '0.1.2';
+const currentYear = new Date().getFullYear();
+const pageTitle = 'socai · download';
+const pageDescription = 'download socai, a web agent for 小红书 research tasks.';
 ---
 
 <html lang="en">
@@ -10,21 +13,135 @@ const pageDescription = 'A lightweight placeholder website for socai downloads a
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={pageDescription} />
+    <meta name="theme-color" content="#fafaf9" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>{pageTitle}</title>
   </head>
   <body>
-    <main class="page-shell">
-      <section class="hero" aria-labelledby="hero-title">
-        <p class="eyebrow">socai website scaffold</p>
-        <h1 id="hero-title">socai</h1>
-        <p class="lede">
-          A web use agent for xiaohongshu research, extraction, and repeatable content workflows.
-        </p>
-        <div class="actions" aria-label="website status">
-          <span class="pill">static astro site</span>
-          <span class="pill pill--hollow">downloads coming soon</span>
-        </div>
-      </section>
-    </main>
+    <div class="site-shell">
+      <header class="site-header" aria-label="primary navigation">
+        <a class="brand" href="/" aria-label="socai home">
+          <svg class="brand__mark" viewBox="0 0 32 32" width="20" height="20" fill="none" aria-hidden="true">
+            <rect x="2.5" y="2.5" width="27" height="27" rx="3" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="16" y="16" width="10" height="10" rx="1.2" fill="currentColor"></rect>
+          </svg>
+          <span>socai</span>
+        </a>
+
+        <nav class="site-nav" aria-label="site links">
+          <a class="nav-link nav-link--github" href={githubUrl}>
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+            </svg>
+            <span>github</span>
+          </a>
+          <span class="release-chip">v{releaseVersion}</span>
+        </nav>
+      </header>
+
+      <main class="page-main">
+        <section class="hero" aria-labelledby="hero-title">
+          <h1 id="hero-title">a web agent for 小红书.</h1>
+          <p class="hero__subtitle">
+            give socai a research task. it browses 小红书 for you and writes back.
+          </p>
+
+          <div class="hero__actions" aria-label="download and source">
+            <a class="button button--primary" href="/download">
+              <span>download for macOS</span>
+              <span class="button__glyph" aria-hidden="true">↓</span>
+            </a>
+            <a class="button button--secondary" href={githubUrl}>
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+              </svg>
+              <span>view on github</span>
+              <span class="button__external" aria-hidden="true">↗</span>
+            </a>
+          </div>
+
+          <p class="release-meta">macOS 13+ · universal build · v{releaseVersion}</p>
+        </section>
+
+        <section class="app-shot-section" aria-label="socai app preview">
+          <div class="app-window" role="img" aria-label="socai desktop app task composer mockup">
+            <div class="window-bar">
+              <span class="traffic-light"></span>
+              <span class="traffic-light"></span>
+              <span class="traffic-light"></span>
+              <span class="window-title">socai</span>
+            </div>
+
+            <div class="app-topbar">
+              <div class="app-brand">
+                <svg viewBox="0 0 32 32" width="20" height="20" fill="none" aria-hidden="true">
+                  <rect x="2.5" y="2.5" width="27" height="27" rx="3" stroke="currentColor" stroke-width="1.6"></rect>
+                  <rect x="16" y="16" width="10" height="10" rx="1.2" fill="currentColor"></rect>
+                </svg>
+                <span>socai</span>
+              </div>
+
+              <div class="status-group">
+                <span class="status-pill status-pill--active"><i></i> chrome · connected</span>
+                <span class="status-pill">agent · claude · sonnet 4.5</span>
+              </div>
+            </div>
+
+            <div class="composer">
+              <h2>what should socai research?</h2>
+              <p>
+                start a one-shot browser task. socai opens a temporary chrome tab, runs
+                the agent, saves the result, then closes the tab.
+              </p>
+
+              <div class="task-card">
+                <div class="task-input">
+                  <span>找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。</span><span class="cursor" aria-hidden="true"></span>
+                </div>
+                <div class="task-controls">
+                  <span class="mode-switch" aria-label="selected mode: agent tasks">
+                    <span class="mode-switch__item mode-switch__item--active">agent tasks</span>
+                    <span class="mode-switch__item">tool tests</span>
+                  </span>
+                  <span class="agent-context">agent · claude · <strong>claude-sonnet-4-5</strong></span>
+                  <span class="new-task-button">new task</span>
+                </div>
+              </div>
+
+              <div class="recent-head">
+                <span>recent</span>
+                <span>view history</span>
+              </div>
+              <div class="recent-list">
+                <div class="recent-row">
+                  <span>✓</span>
+                  <span>成都好喝的手冲咖啡馆</span>
+                  <span>completed · 14:02</span>
+                </div>
+                <div class="recent-row">
+                  <span>✓</span>
+                  <span>小红书露营装备入门 · 读 3 篇</span>
+                  <span>completed · 11:38</span>
+                </div>
+                <div class="recent-row">
+                  <span>✓</span>
+                  <span>上海周末 city walk 路线</span>
+                  <span>completed · yesterday</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>© socai · {currentYear}</span>
+        <nav aria-label="footer links">
+          <a href={githubUrl}>github</a>
+          <a href="/download">download</a>
+          <a href="mailto:hi@socai.app">contact</a>
+        </nav>
+      </footer>
+    </div>
   </body>
 </html>
