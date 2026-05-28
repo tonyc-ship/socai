@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">socai social preview</title>
+  <desc id="desc">socai download page preview for a web agent for 小红书 research tasks.</desc>
+  <rect width="1200" height="630" fill="#fafaf9"/>
+  <rect x="40" y="40" width="1120" height="550" rx="28" fill="#ffffff" stroke="#e5e5e5"/>
+
+  <g font-family="General Sans, -apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Hiragino Sans GB, Arial, sans-serif">
+    <g transform="translate(88 84)">
+      <rect x="0" y="0" width="88" height="88" rx="20" fill="#fafaf9" stroke="#e5e5e5"/>
+      <rect x="22" y="22" width="44" height="44" rx="5" fill="none" stroke="#000000" stroke-width="3.2"/>
+      <rect x="44" y="44" width="17" height="17" rx="2" fill="#000000"/>
+      <text x="112" y="56" fill="#000000" font-size="48" font-weight="500" letter-spacing="-1.2">socai</text>
+      <text x="112" y="84" fill="#737373" font-size="18" font-weight="400" letter-spacing="0.4">socai.io</text>
+    </g>
+
+    <text x="88" y="264" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">a web agent for</text>
+    <text x="88" y="346" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">小红书 research.</text>
+    <text x="92" y="414" fill="#737373" font-size="25" font-weight="400" letter-spacing="-0.2">connect chrome cdp. run focused browser tasks.</text>
+
+    <g transform="translate(88 472)">
+      <rect width="216" height="58" rx="8" fill="#000000"/>
+      <text x="108" y="37" text-anchor="middle" fill="#ffffff" font-size="20" font-weight="500" letter-spacing="-0.2">download for macOS</text>
+    </g>
+
+    <g transform="translate(768 148)">
+      <rect width="320" height="334" rx="14" fill="#fafaf9" stroke="#d4d4d4"/>
+      <rect x="0" y="0" width="320" height="42" rx="14" fill="#f4f4f4" stroke="#d4d4d4"/>
+      <path d="M1 42H319" stroke="#d4d4d4"/>
+      <circle cx="22" cy="21" r="5" fill="#d4d4d4"/>
+      <circle cx="40" cy="21" r="5" fill="#d4d4d4"/>
+      <circle cx="58" cy="21" r="5" fill="#d4d4d4"/>
+      <text x="160" y="25" text-anchor="middle" fill="#737373" font-size="13" letter-spacing="-0.1">socai</text>
+
+      <rect x="28" y="70" width="264" height="42" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+      <text x="46" y="97" fill="#000000" font-size="16" font-weight="500" letter-spacing="-0.2">what should socai research?</text>
+
+      <rect x="28" y="134" width="264" height="88" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+      <text x="46" y="166" fill="#404040" font-size="14">找 10 篇东京中古店笔记…</text>
+      <path d="M46 190H250" stroke="#e5e5e5"/>
+
+      <rect x="28" y="244" width="126" height="34" rx="17" fill="#000000"/>
+      <text x="91" y="266" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="500">agent tasks</text>
+      <rect x="170" y="244" width="122" height="34" rx="6" fill="#ffffff" stroke="#d4d4d4"/>
+      <text x="231" y="266" text-anchor="middle" fill="#000000" font-size="12" font-weight="500">new task</text>
+
+      <rect x="28" y="300" width="264" height="1" fill="#e5e5e5"/>
+      <circle cx="42" cy="317" r="5" fill="#000000"/>
+      <text x="58" y="322" fill="#737373" font-size="12">chrome connected · latest release</text>
+    </g>
+  </g>
+</svg>

@@ -66,8 +66,9 @@ a {
 }
 
 a:focus-visible {
-  outline: 2px solid rgba(0, 0, 0, 0.18);
-  outline-offset: 3px;
+  border-radius: 6px;
+  outline: 2px solid var(--ink-0);
+  outline-offset: 4px;
 }
 
 .site-shell {
@@ -190,7 +191,7 @@ a:focus-visible {
   max-width: none;
   margin: 0 auto 36px;
   color: var(--fg-soft);
-  font-size: clamp(10px, 1.25vw, 16px);
+  font-size: clamp(8px, 1.25vw, 16px);
   line-height: 1.5;
   white-space: nowrap;
 }
