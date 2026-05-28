@@ -271,7 +271,7 @@ a:focus-visible {
 
 .app-window {
   width: 100%;
-  height: clamp(360px, 46vw, 400px);
+  height: clamp(380px, 46vw, 420px);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
