@@ -1,0 +1,30 @@
+---
+import '../styles/global.css';
+
+const pageTitle = 'socai — xiaohongshu research agent';
+const pageDescription = 'A lightweight placeholder website for socai downloads and product updates.';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={pageDescription} />
+    <title>{pageTitle}</title>
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">socai website scaffold</p>
+        <h1 id="hero-title">socai</h1>
+        <p class="lede">
+          A web use agent for xiaohongshu research, extraction, and repeatable content workflows.
+        </p>
+        <div class="actions" aria-label="website status">
+          <span class="pill">static astro site</span>
+          <span class="pill pill--hollow">downloads coming soon</span>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

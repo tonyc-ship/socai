@@ -40,6 +40,20 @@ This writes to:
 .socai/runs/<run-dir>/
 ```
 
+## Website
+
+The marketing/download website lives in `site/` and builds as a static Astro
+site. It is separate from the desktop product UI in `app/`.
+
+```bash
+cd site
+pnpm install
+pnpm dev
+pnpm build
+```
+
+The build output is written to `site/dist/`.
+
 ## TUI
 
 ```bash
