@@ -287,6 +287,40 @@ jobs:
             --bundles app,dmg \
             --config tauri.release-signing.conf.json
 
+      - name: notarize and staple dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${MACOS_SIGNING_MODE}" != "developer-id" ]; then
+            echo "skipping dmg notarization for ${MACOS_SIGNING_MODE} build"
+            exit 0
+          fi
+
+          bundle_dir="target/${TARGET}/release/bundle"
+          dmg_dir="${bundle_dir}/dmg"
+          dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+
+          if [ -z "${dmg}" ]; then
+            echo "no dmg found in ${dmg_dir}" >&2
+            exit 1
+          fi
+
+          auth_args=()
+          if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+            auth_args=(--apple-id "${APPLE_ID}" --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}")
+          elif [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+            auth_args=(--key "${APPLE_API_KEY_PATH}" --key-id "${APPLE_API_KEY}" --issuer "${APPLE_API_ISSUER}")
+          else
+            echo "developer-id dmg notarization requires Apple ID or App Store Connect API credentials" >&2
+            exit 1
+          fi
+
+          echo "submitting ${dmg} for dmg notarization"
+          xcrun notarytool submit "${dmg}" "${auth_args[@]}" --wait
+          xcrun stapler staple "${dmg}"
+          xcrun stapler validate "${dmg}"
+
       - name: verify app bundle and dmg
         shell: bash
         run: |
@@ -313,6 +347,10 @@ jobs:
             xcrun stapler validate "${app_bundle}"
           fi
           hdiutil verify "${dmg}"
+          if [ "${MACOS_SIGNING_MODE}" = "developer-id" ]; then
+            xcrun stapler validate "${dmg}"
+            spctl -a -vvv -t open --context context:primary-signature "${dmg}"
+          fi
 
           mount_root="$(mktemp -d)"
           mount_point=""
