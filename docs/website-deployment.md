@@ -2,7 +2,7 @@
 
 The socai marketing/download site lives in [`site/`](../site/) and is deployed to Vercel.
 
-For agent workflows, Pi also has a project skill at [`.pi/skills/socai-site-deployment/SKILL.md`](../.pi/skills/socai-site-deployment/SKILL.md).
+For agent workflows, the deployment skill lives at [`.claude/skills/socai-site-deployment/SKILL.md`](../.claude/skills/socai-site-deployment/SKILL.md). Claude Code can read it directly, and Pi loads it via [`.pi/settings.json`](../.pi/settings.json).
 
 ## Vercel project
 

@@ -3,7 +3,9 @@ __pycache__/
 *.egg-info/
 .venv/
 .socai/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # macOS
 .DS_Store
