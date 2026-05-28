@@ -3,7 +3,9 @@ __pycache__/
 *.egg-info/
 .venv/
 .socai/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # macOS
 .DS_Store
@@ -19,6 +21,7 @@ app/src-tauri/gen/
 site/node_modules/
 site/dist/
 site/.astro/
+site/.vercel/
 
 # Rust workspace
 target/

@@ -1,6 +1,28 @@
 {
   "redirects": [
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.socai.io"
+        }
+      ],
+      "destination": "https://socai.io/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.socai.io"
+        }
+      ],
+      "destination": "https://socai.io/:path*",
+      "permanent": true
+    },
+    {
       "source": "/download",
       "destination": "https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg",
       "permanent": false

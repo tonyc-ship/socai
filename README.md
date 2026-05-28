@@ -41,7 +41,8 @@ pnpm dev
 pnpm build
 ```
 
-The build output is written to `site/dist/`.
+The build output is written to `site/dist/`. Deployment settings are documented in
+[Website deployment](docs/website-deployment.md).
 
 ## TUI
 
