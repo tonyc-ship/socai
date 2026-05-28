@@ -187,11 +187,12 @@ a:focus-visible {
 }
 
 .hero__subtitle {
-  max-width: 480px;
+  max-width: none;
   margin: 0 auto 36px;
   color: var(--fg-soft);
-  font-size: 16px;
+  font-size: clamp(10px, 1.25vw, 16px);
   line-height: 1.5;
+  white-space: nowrap;
 }
 
 .hero__actions {
