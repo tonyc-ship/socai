@@ -7,7 +7,7 @@ description: Deploy, configure, troubleshoot, and verify the socai marketing/dow
 
 Use this skill whenever the task involves the socai website deployment, Vercel configuration, `socai.io`, `www.socai.io`, `/download`, `/github`, or PR preview deployments.
 
-The source-of-truth deployment doc is [`../../../docs/website-deployment.md`](../../../docs/website-deployment.md). Read it when you need full context or are changing deployment behavior.
+This skill is the source-of-truth deployment runbook. [`../../../docs/website-deployment.md`](../../../docs/website-deployment.md) intentionally stays brief and points back here to avoid duplicate instructions drifting.
 
 ## Project context
 
