@@ -1,4 +1,4 @@
-# Socai
+# socai
 
 专为小红书优化的 web use agent，执行小红书调研、内容抽取和自定义 agent 任务。
 
@@ -6,10 +6,6 @@
 - 不使用程序化的批量爬虫，而是像人一样点击，避免被屏蔽
 - 沉淀了小红书网页知识，避免agent盲目探索，又快又准
 - 复用你已登录的chrome小红书账号，避免未登录被屏蔽
-
-## Documentation
-
-- [Data model](docs/data-model.md) — run artifacts, desktop task index, and timeline replay.
 
 ## Desktop App
 
@@ -29,6 +25,32 @@ This writes records and artifacts to:
 .socai/runs/<run-dir>/
 ```
 
+## CLI (for Claude Code, Codex, etc)
+
+From the repo root:
+
+```bash
+cargo install --path cli
+
+socai search_notes "运营爆款思路"                         # search + return note cards
+socai topic_scan "运营爆款思路"                           # default-depth scan + read top notes
+socai extract_note --note-id <id>                         # open a note from the current page
+socai stop                                                # stop the daemon (closes the tool tab)
+```
+
+Add `--pretty` to any tool command for indented JSON.
+
+`extract_note` is a
+continuation command: a prior `search_notes` / `topic_scan` must have left the
+tool tab on a waterfall containing the target card.
+
+## TUI
+
+```bash
+cargo install --path cli
+socai
+```
+
 ## Website
 
 The marketing/download website lives in `site/` and builds as a static Astro
@@ -44,24 +66,9 @@ pnpm build
 The build output is written to `site/dist/`. Deployment settings are documented in
 [Website deployment](docs/website-deployment.md).
 
-## TUI
+## Documentation
 
-```bash
-uv run socai
-```
-
-## CLI (for Claude Code, Codex, etc)
-
-```bash
-socai search_notes "运营爆款思路"                         # search + return note cards
-socai topic_scan "运营爆款思路" --depth standard          # search + read top notes (one bundle)
-socai extract_note --note-id <id> --level lite        # open a note from the current page
-socai stop                                            # stop the daemon (closes the tool tab)
-```
-
-Add `--pretty` to any tool command for indented JSON. `extract_note` is a
-continuation command: a prior `search_notes` / `topic_scan` must have left the
-tool tab on a waterfall containing the target card.
+- [Data model](docs/data-model.md) — run artifacts, desktop task index, and timeline replay.
 
 ## 欢迎加群交流
 
