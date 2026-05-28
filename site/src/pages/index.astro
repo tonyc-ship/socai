@@ -1,8 +1,8 @@
 ---
 import '../styles/global.css';
 
-const githubUrl = 'https://github.com/tonyc-ship/socai';
-const releaseVersion = '0.1.2';
+const githubUrl = '/github';
+const downloadPath = '/download';
 const currentYear = new Date().getFullYear();
 const researchPrompts = [
   '找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。',
@@ -41,7 +41,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </svg>
             <span>github</span>
           </a>
-          <span class="release-chip">v{releaseVersion}</span>
+          <span class="release-chip" data-release-chip>latest</span>
         </nav>
       </header>
 
@@ -53,7 +53,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
           </p>
 
           <div class="hero__actions" aria-label="download and source">
-            <a class="button button--primary" href="/download">
+            <a class="button button--primary" href={downloadPath}>
               <span>download for macOS</span>
               <span class="button__glyph" aria-hidden="true">↓</span>
             </a>
@@ -66,7 +66,9 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </a>
           </div>
 
-          <p class="release-meta">macOS 13+ · universal build · v{releaseVersion}</p>
+          <p class="release-meta" data-release-meta>
+            macOS 13+ · universal build · latest release
+          </p>
         </section>
 
         <section class="app-shot-section" aria-label="socai app preview">
@@ -144,7 +146,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
         <span>© socai · {currentYear}</span>
         <nav aria-label="footer links">
           <a href={githubUrl}>github</a>
-          <a href="/download">download</a>
+          <a href={downloadPath}>download</a>
           <a href="mailto:hi@socai.app">contact</a>
         </nav>
       </footer>
@@ -152,6 +154,40 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
 
     <script>
       const typewriter = document.querySelector('[data-typewriter]');
+      const releaseChip = document.querySelector('[data-release-chip]');
+      const releaseMeta = document.querySelector('[data-release-meta]');
+
+      const formatFileSize = (bytes) => {
+        const mb = bytes / 1_000_000;
+        return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+      };
+
+      const loadReleaseMetadata = async () => {
+        if (!(releaseChip instanceof HTMLElement) || !(releaseMeta instanceof HTMLElement)) return;
+
+        try {
+          const response = await fetch('https://api.github.com/repos/tonyc-ship/socai/releases/latest', {
+            headers: { Accept: 'application/vnd.github+json' },
+          });
+
+          if (!response.ok) return;
+
+          const release = await response.json();
+          const asset = release.assets?.find((candidate) => candidate.name === 'socai-macos-universal.dmg');
+          const tag = release.tag_name;
+
+          if (!tag) return;
+
+          releaseChip.textContent = tag;
+          releaseMeta.textContent = asset?.size
+            ? `macOS 13+ · universal build · ${tag} · ${formatFileSize(asset.size)}`
+            : `macOS 13+ · universal build · ${tag}`;
+        } catch {
+          // Keep the static fallback copy when GitHub metadata is unavailable.
+        }
+      };
+
+      loadReleaseMetadata();
 
       if (typewriter instanceof HTMLElement) {
         const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
