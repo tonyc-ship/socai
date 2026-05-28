@@ -1,11 +1,11 @@
 ---
 name: socai-site-deployment
-description: Deploy, configure, troubleshoot, and verify the Socai marketing/download website on Vercel. Use for socai.io deployments, Vercel project settings, domain/redirect checks, Git preview setup, /download and /github redirect validation, and deployment runbooks for the site/ Astro app.
+description: Deploy, configure, troubleshoot, and verify the socai marketing/download website on Vercel. Use for socai.io deployments, Vercel project settings, domain/redirect checks, Git preview setup, /download and /github redirect validation, and deployment runbooks for the site/ Astro app.
 ---
 
-# Socai Site Deployment
+# socai site deployment
 
-Use this skill whenever the task involves the Socai website deployment, Vercel configuration, `socai.io`, `www.socai.io`, `/download`, `/github`, or PR preview deployments.
+Use this skill whenever the task involves the socai website deployment, Vercel configuration, `socai.io`, `www.socai.io`, `/download`, `/github`, or PR preview deployments.
 
 The source-of-truth deployment doc is [`../../../docs/website-deployment.md`](../../../docs/website-deployment.md). Read it when you need full context or are changing deployment behavior.
 

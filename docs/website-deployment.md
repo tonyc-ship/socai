@@ -1,6 +1,6 @@
 # Website deployment
 
-The Socai marketing/download site lives in [`site/`](../site/) and is deployed to Vercel.
+The socai marketing/download site lives in [`site/`](../site/) and is deployed to Vercel.
 
 For agent workflows, Pi also has a project skill at [`.pi/skills/socai-site-deployment/SKILL.md`](../.pi/skills/socai-site-deployment/SKILL.md).
 
