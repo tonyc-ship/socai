@@ -1,4 +1,6 @@
 ---
+import { readFile } from 'node:fs/promises';
+
 import '../styles/global.css';
 
 const githubUrl = '/github';
@@ -16,6 +18,67 @@ const socialImageUrl = `${siteUrl}/social-card.png`;
 const socialImageAlt = 'socai app preview with a download prompt';
 const pageTitle = 'socai · web agent for 小红书 research';
 const pageDescription = 'socai is a web agent for 小红书 research tasks. connect your chrome session, run focused browser tasks, and download the macOS app.';
+const releaseVersion = await resolveReleaseVersion();
+
+function normalizeReleaseVersion(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.trim().match(/^v?(\d+\.\d+\.\d+)$/);
+  return match?.[1] ?? null;
+}
+
+async function fetchLatestReleaseVersion(): Promise<string | null> {
+  try {
+    const headers = new Headers({
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    });
+    const token = import.meta.env.GITHUB_TOKEN || import.meta.env.GH_TOKEN;
+
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+
+    const response = await fetch('https://api.github.com/repos/tonyc-ship/socai/releases/latest', {
+      headers,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const release = await response.json();
+    return normalizeReleaseVersion(release.tag_name) ?? normalizeReleaseVersion(release.name);
+  } catch {
+    return null;
+  }
+}
+
+async function readLocalAppVersion(): Promise<string | null> {
+  try {
+    const configUrl = new URL('../../../app/src-tauri/tauri.conf.json', import.meta.url);
+    const config = JSON.parse(await readFile(configUrl, 'utf8'));
+    return normalizeReleaseVersion(config.version);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveReleaseVersion(): Promise<string> {
+  const version =
+    normalizeReleaseVersion(import.meta.env.SOCAI_RELEASE_VERSION) ??
+    normalizeReleaseVersion(import.meta.env.PUBLIC_SOCAI_RELEASE_VERSION) ??
+    (await readLocalAppVersion()) ??
+    (await fetchLatestReleaseVersion());
+
+  if (!version) {
+    throw new Error('Unable to resolve release version; set SOCAI_RELEASE_VERSION to a MAJOR.MINOR.PATCH value.');
+  }
+
+  return version;
+}
 ---
 
 <html lang="en">
@@ -69,7 +132,7 @@ const pageDescription = 'socai is a web agent for 小红书 research tasks. conn
             </svg>
             <span>github</span>
           </a>
-          <span class="release-chip" data-release-chip>latest</span>
+          <span class="release-chip" data-release-chip aria-label={`release version ${releaseVersion}`}>{releaseVersion}</span>
         </nav>
       </header>
 
@@ -95,7 +158,7 @@ const pageDescription = 'socai is a web agent for 小红书 research tasks. conn
           </div>
 
           <p class="release-meta" data-release-meta>
-            macOS 13+ · universal build · latest release
+            macOS 13+ · universal build · {releaseVersion}
           </p>
         </section>
 
