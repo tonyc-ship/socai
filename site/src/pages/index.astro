@@ -1,10 +1,8 @@
 ---
 import '../styles/global.css';
-import release from '../data/release.json';
 
 const githubUrl = '/github';
-const downloadPath = release.downloadPath;
-const releaseTag = release.tag;
+const downloadPath = '/download';
 const currentYear = new Date().getFullYear();
 const researchPrompts = [
   '找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。',
@@ -43,7 +41,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </svg>
             <span>github</span>
           </a>
-          <span class="release-chip">{releaseTag}</span>
+          <span class="release-chip" data-release-chip>latest</span>
         </nav>
       </header>
 
@@ -68,8 +66,8 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </a>
           </div>
 
-          <p class="release-meta">
-            {release.minimumMacos} · {release.build} · {release.tag} · {release.fileSize}
+          <p class="release-meta" data-release-meta>
+            macOS 13+ · universal build · latest release
           </p>
         </section>
 
@@ -156,6 +154,40 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
 
     <script>
       const typewriter = document.querySelector('[data-typewriter]');
+      const releaseChip = document.querySelector('[data-release-chip]');
+      const releaseMeta = document.querySelector('[data-release-meta]');
+
+      const formatFileSize = (bytes) => {
+        const mb = bytes / 1_000_000;
+        return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+      };
+
+      const loadReleaseMetadata = async () => {
+        if (!(releaseChip instanceof HTMLElement) || !(releaseMeta instanceof HTMLElement)) return;
+
+        try {
+          const response = await fetch('https://api.github.com/repos/tonyc-ship/socai/releases/latest', {
+            headers: { Accept: 'application/vnd.github+json' },
+          });
+
+          if (!response.ok) return;
+
+          const release = await response.json();
+          const asset = release.assets?.find((candidate) => candidate.name === 'socai-macos-universal.dmg');
+          const tag = release.tag_name;
+
+          if (!tag) return;
+
+          releaseChip.textContent = tag;
+          releaseMeta.textContent = asset?.size
+            ? `macOS 13+ · universal build · ${tag} · ${formatFileSize(asset.size)}`
+            : `macOS 13+ · universal build · ${tag}`;
+        } catch {
+          // Keep the static fallback copy when GitHub metadata is unavailable.
+        }
+      };
+
+      loadReleaseMetadata();
 
       if (typewriter instanceof HTMLElement) {
         const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
