@@ -2,6 +2,8 @@
 
 The Socai marketing/download site lives in [`site/`](../site/) and is deployed to Vercel.
 
+For agent workflows, Pi also has a project skill at [`.pi/skills/socai-site-deployment/SKILL.md`](../.pi/skills/socai-site-deployment/SKILL.md).
+
 ## Vercel project
 
 - Team/scope: `socai-d83824c8` (`socai`)
@@ -39,17 +41,70 @@ pnpm install
 pnpm build
 ```
 
-## Manual production deploy
-
-If you need to deploy from a local checkout:
+## Inspect Vercel state
 
 ```bash
-cd site
-vercel link --yes --scope socai-d83824c8 --project socai-site
-vercel deploy --prod --scope socai-d83824c8
+vercel project inspect socai-site --scope socai-d83824c8 --yes
+vercel domains inspect socai.io --scope socai-d83824c8
+vercel domains inspect www.socai.io --scope socai-d83824c8
 ```
 
-After deployment, verify:
+## Preferred production deploy
+
+After Git integration is connected, prefer the normal Git flow:
+
+1. Merge website changes to `main`.
+2. Let Vercel build the `socai-site` project from root directory `site`.
+3. Verify production URLs.
+
+PR preview deployments also require the Vercel project to be connected to the GitHub repository.
+
+## Emergency/manual production deploy
+
+If Git integration is unavailable and a CLI deploy is required, temporarily clear the Vercel root directory, deploy from `site/`, and restore the root directory to `site` afterward.
+
+This workaround is necessary because the Vercel project is configured with root directory `site`; running a local deploy from `site/` without temporarily clearing that setting can make Vercel look for `site/site`.
+
+```bash
+set -euo pipefail
+
+cat > /tmp/vercel-root-null.json <<'EOF'
+{
+  "rootDirectory": null
+}
+EOF
+cat > /tmp/vercel-root-site.json <<'EOF'
+{
+  "rootDirectory": "site"
+}
+EOF
+
+restore_root() {
+  vercel api /v10/projects/socai-site \
+    --scope socai-d83824c8 \
+    -X PATCH \
+    --input /tmp/vercel-root-site.json \
+    --silent || true
+}
+trap restore_root EXIT
+
+vercel api /v10/projects/socai-site \
+  --scope socai-d83824c8 \
+  -X PATCH \
+  --input /tmp/vercel-root-null.json \
+  --silent
+
+cd site
+vercel deploy --prod --scope socai-d83824c8 --project socai-site --yes
+```
+
+After deployment, confirm the root directory was restored:
+
+```bash
+vercel project inspect socai-site --scope socai-d83824c8 --yes
+```
+
+## Verify production
 
 ```bash
 curl -I https://socai.io/
@@ -58,9 +113,9 @@ curl -I https://socai.io/download
 curl -I https://socai.io/github
 ```
 
-Expected behavior:
+Expected first-hop behavior:
 
-- `https://socai.io/` serves the static website.
+- `https://socai.io/` returns `200`.
 - `https://www.socai.io/` redirects to `https://socai.io/`.
 - `https://socai.io/download` redirects to the latest universal macOS DMG on GitHub Releases.
 - `https://socai.io/github` redirects to `https://github.com/tonyc-ship/socai`.
@@ -69,4 +124,12 @@ Expected behavior:
 
 Vercel preview deployments for pull requests require the `socai-site` project to be connected to the GitHub repository `tonyc-ship/socai` in Vercel.
 
-If `vercel git connect https://github.com/tonyc-ship/socai --scope socai-d83824c8` reports that a GitHub login connection is missing, open the Vercel dashboard and add/connect the GitHub account or installation first, then connect the project to the repository with root directory `site`.
+Try:
+
+```bash
+cd site
+vercel link --yes --scope socai-d83824c8 --project socai-site
+vercel git connect https://github.com/tonyc-ship/socai --scope socai-d83824c8
+```
+
+If Vercel reports that a GitHub login connection is missing, open the Vercel dashboard and add/connect the GitHub account or installation first, then connect the project to the repository with root directory `site`.
