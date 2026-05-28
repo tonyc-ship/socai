@@ -388,6 +388,10 @@ a:focus-visible {
   line-height: 1.55;
 }
 
+.typewriter-text {
+  white-space: pre-wrap;
+}
+
 .cursor {
   display: inline-block;
   width: 1.5px;

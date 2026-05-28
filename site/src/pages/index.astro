@@ -4,6 +4,12 @@ import '../styles/global.css';
 const githubUrl = 'https://github.com/tonyc-ship/socai';
 const releaseVersion = '0.1.2';
 const currentYear = new Date().getFullYear();
+const researchPrompts = [
+  '找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。',
+  '分析小红书上最近热门的上海周末 city walk 路线，按适合人群分类。',
+  '帮我调研 20 个小红书露营装备入门贴，总结新手最常买错的东西。',
+  '找 10 篇关于东京中古店的高质量笔记，整理店名、区域和推荐理由。',
+];
 const pageTitle = 'socai · download';
 const pageDescription = 'download socai, a web agent for 小红书 research tasks.';
 ---
@@ -96,7 +102,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
 
               <div class="task-card">
                 <div class="task-input">
-                  <span>找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。</span><span class="cursor" aria-hidden="true"></span>
+                  <span class="typewriter-text" data-typewriter data-phrases={JSON.stringify(researchPrompts)}>{researchPrompts[0]}</span><span class="cursor" aria-hidden="true"></span>
                 </div>
                 <div class="task-controls">
                   <span class="mode-switch" aria-label="selected mode: agent tasks">
@@ -143,5 +149,51 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
         </nav>
       </footer>
     </div>
+
+    <script>
+      const typewriter = document.querySelector('[data-typewriter]');
+
+      if (typewriter instanceof HTMLElement) {
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const phrases = JSON.parse(typewriter.dataset.phrases || '[]');
+        const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+        if (prefersReducedMotion || phrases.length < 2) {
+          typewriter.textContent = phrases[0] || typewriter.textContent;
+        } else {
+          let phraseIndex = 0;
+
+          const render = (chars) => {
+            typewriter.textContent = chars.join('');
+          };
+
+          const runTypewriter = async () => {
+            await sleep(2200);
+
+            while (true) {
+              const currentPhrase = Array.from(phrases[phraseIndex]);
+
+              for (let i = currentPhrase.length; i >= 0; i -= 1) {
+                render(currentPhrase.slice(0, i));
+                await sleep(20);
+              }
+
+              phraseIndex = (phraseIndex + 1) % phrases.length;
+              const nextPhrase = Array.from(phrases[phraseIndex]);
+              await sleep(280);
+
+              for (let i = 1; i <= nextPhrase.length; i += 1) {
+                render(nextPhrase.slice(0, i));
+                await sleep(44 + Math.random() * 26);
+              }
+
+              await sleep(2600);
+            }
+          };
+
+          runTypewriter();
+        }
+      }
+    </script>
   </body>
 </html>
