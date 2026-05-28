@@ -19,6 +19,7 @@ app/src-tauri/gen/
 site/node_modules/
 site/dist/
 site/.astro/
+site/.vercel/
 
 # Rust workspace
 target/

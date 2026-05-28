@@ -1,0 +1,9 @@
+# Local Vercel CLI deploys use the repo root so the remote project can apply
+# rootDirectory=site. Upload only the static website package.
+*
+!site/
+!site/**
+site/node_modules/
+site/dist/
+site/.astro/
+site/.vercel/
