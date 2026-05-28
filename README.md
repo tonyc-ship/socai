@@ -41,7 +41,9 @@ pnpm dev
 pnpm build
 ```
 
-The build output is written to `site/dist/`.
+`pnpm build` refreshes the checked-in release metadata from GitHub Releases
+when the network is available, then writes the static output to `site/dist/`.
+Set `GITHUB_TOKEN` or `GH_TOKEN` to avoid unauthenticated GitHub API rate limits.
 
 ## TUI
 

@@ -1,8 +1,10 @@
 ---
 import '../styles/global.css';
+import release from '../data/release.json';
 
-const githubUrl = 'https://github.com/tonyc-ship/socai';
-const releaseVersion = '0.1.2';
+const githubUrl = '/github';
+const downloadPath = release.downloadPath;
+const releaseTag = release.tag;
 const currentYear = new Date().getFullYear();
 const researchPrompts = [
   '找成都好喝的手冲咖啡馆，每家给出地址、人均、特色豆，整理成表格。',
@@ -41,7 +43,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </svg>
             <span>github</span>
           </a>
-          <span class="release-chip">v{releaseVersion}</span>
+          <span class="release-chip">{releaseTag}</span>
         </nav>
       </header>
 
@@ -53,7 +55,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
           </p>
 
           <div class="hero__actions" aria-label="download and source">
-            <a class="button button--primary" href="/download">
+            <a class="button button--primary" href={downloadPath}>
               <span>download for macOS</span>
               <span class="button__glyph" aria-hidden="true">↓</span>
             </a>
@@ -66,7 +68,9 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
             </a>
           </div>
 
-          <p class="release-meta">macOS 13+ · universal build · v{releaseVersion}</p>
+          <p class="release-meta">
+            {release.minimumMacos} · {release.build} · {release.tag} · {release.fileSize}
+          </p>
         </section>
 
         <section class="app-shot-section" aria-label="socai app preview">
@@ -144,7 +148,7 @@ const pageDescription = 'download socai, a web agent for 小红书 research task
         <span>© socai · {currentYear}</span>
         <nav aria-label="footer links">
           <a href={githubUrl}>github</a>
-          <a href="/download">download</a>
+          <a href={downloadPath}>download</a>
           <a href="mailto:hi@socai.app">contact</a>
         </nav>
       </footer>

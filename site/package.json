@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "release:sync": "node scripts/sync-release-metadata.mjs",
+    "build": "pnpm release:sync && astro build",
     "preview": "astro preview"
   },
   "devDependencies": {

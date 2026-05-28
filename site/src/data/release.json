@@ -1,0 +1,13 @@
+{
+  "tag": "v0.1.2",
+  "version": "0.1.2",
+  "assetName": "socai-macos-universal.dmg",
+  "build": "universal macOS build",
+  "fileSize": "14.6 MB",
+  "minimumMacos": "macOS 13 or later",
+  "downloadPath": "/download",
+  "downloadMacosPath": "/download/macos",
+  "downloadUrl": "https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg",
+  "githubUrl": "https://github.com/tonyc-ship/socai",
+  "sha256": "507ff343cc13b3453346d9d3663bb5e12bbda47507ed7e851b0bf65cfc893309"
+}
