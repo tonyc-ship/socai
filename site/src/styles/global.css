@@ -298,7 +298,7 @@ a:focus-visible {
 
 .window-title {
   margin-left: 18px;
-  color: var(--fg-soft);
+  color: var(--fg-muted);
   font-family: var(--font-sans);
   font-size: 12px;
   letter-spacing: -0.005em;
