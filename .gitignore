@@ -15,6 +15,11 @@ app/dist/
 app/src-tauri/target/
 app/src-tauri/gen/
 
+# Website
+site/node_modules/
+site/dist/
+site/.astro/
+
 # Rust workspace
 target/
 
