@@ -15,11 +15,11 @@ use serde_json::{json, Value};
 
 use crate::sites::xhs::{ReadNoteOptions, XhsNoteCard, XhsPageRuntime};
 
-pub const XHS_BROWSER_LOCK_PROMPT: &str = "The browser is locked to Xiaohongshu \
-(xiaohongshu.com / 小红书); every task is an XHS task. Do not navigate to other \
-websites. Use the XHS tools to search, scan topics, read notes, and inspect \
-page state. Prefer topic_scan for broad research tasks. Reply in the same \
-language as the user's task and ground your answer in tool output.";
+/// XHS agent playbook: browser-lock rule, tool inventory, anti-bot rules,
+/// page states, entity fields, workflows, reading levels, evidence rules,
+/// and Chinese UI hints. Embedded at compile time so the agent prompt always
+/// carries the latest copy.
+pub const XHS_KNOWLEDGE: &str = include_str!("knowledge.md");
 
 /// All XHS tools constructed against the same page. Convenience helper for
 /// the CLI / agent host — just register everything.
@@ -67,7 +67,7 @@ pub async fn xhs_agent_tools(
 }
 
 pub fn xhs_agent_instructions(extra: &str) -> String {
-    let base = format!("{XHS_BROWSER_LOCK_PROMPT}\n\n{XHS_AGENT_HINT}");
+    let base = XHS_KNOWLEDGE.trim().to_string();
     let extra = extra.trim();
     if extra.is_empty() {
         base
@@ -1064,13 +1064,3 @@ fn sanitize_for_filename(value: &str) -> String {
         .collect()
 }
 
-/// Hint that callers can include in `extra_instructions` when registering
-/// XHS tools. Mirrors the relevant bits of Python's XHS system prompt.
-pub const XHS_AGENT_HINT: &str = "You are operating Xiaohongshu (https://www.xiaohongshu.com — also called XHS or 小红书). \
-Tools available: search_notes, extract_search_cards, list_search_tabs, click_search_tab, \
-open_note, close_note, read_note, extract_note, extract_comments, scroll_in_note, \
-collect_carousel_images, extract_profile, topic_scan, page_state. \
-Prefer `topic_scan` for any 'research a topic' task — it bundles search + sample + read in one call. \
-Workflow for one-off lookups: page_state → search_notes → read_note (or open_note + extract_note + extract_comments). \
-Close any open note modal before searching again. \
-Default site URL: https://www.xiaohongshu.com/explore";
