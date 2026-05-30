@@ -23,8 +23,9 @@ pub use self::llm::{
 };
 pub use self::provider::{
     config_for, configured_default_model_for, default_model_for, list_available_providers,
-    load_api_key, resolve_provider, save_api_key, save_default_model, Provider, ProviderConfig,
-    PROVIDERS,
+    load_api_key, load_openai_credential, load_provider_credential, provider_credential_kind,
+    resolve_provider, save_api_key, save_default_model, Credential, CredentialKind, Provider,
+    ProviderConfig, PROVIDERS,
 };
 pub use self::r#loop::{run_agent, run_agent_with_events, AgentEvent, AgentOptions, AgentOutcome};
 pub use self::run_logging::{make_run_dir, RunDebugLogger};

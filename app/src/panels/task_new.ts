@@ -14,9 +14,6 @@ export interface NewTaskPageProps {
   submitError: string;
   tasks: AgentTaskView[];
   selectedModel: ModelInfo | undefined;
-  overlayKeyDraft: string;
-  overlayKeySaving: boolean;
-  overlayKeyError: string;
 }
 
 export function renderNewTaskPage(props: NewTaskPageProps): string {
@@ -25,8 +22,7 @@ export function renderNewTaskPage(props: NewTaskPageProps): string {
   const agentMode = props.mode === "agent";
   const running = agentMode ? props.submittingTask : props.toolInFlight;
   const runDisabled = running || !props.draft.trim() || !connected || (agentMode && !modelReady);
-  const needsKey = connected && agentMode && !!props.selectedModel && !props.selectedModel.has_key;
-  const gated = !connected || needsKey;
+  const gated = !connected;
 
   return `
     <div class="new-task-page">
@@ -43,7 +39,6 @@ export function renderNewTaskPage(props: NewTaskPageProps): string {
             ${agentMode ? "" : renderToolResult(props)}
           </div>
           ${!connected ? renderConnectOverlay(props.shell.status) : ""}
-          ${connected && needsKey ? renderApiKeyOverlay(props.selectedModel!, props) : ""}
         </div>
       </div>
       ${renderRunningChip(props.tasks)}
@@ -85,6 +80,7 @@ function renderTaskForm(
 function renderInlineGuard(mode: TaskMode, toolCommand: ToolCommand, selected: ModelInfo | undefined): string {
   if (mode !== "agent") return renderToolHint(toolCommand);
   if (!selected) return `<p class="t-small subtle">loading agent models…</p>`;
+  if (!selected.has_key) return `<p class="t-small subtle">add a key in the agent menu to run this model.</p>`;
   return "";
 }
 
@@ -157,54 +153,6 @@ function renderConnectOverlay(status: Status): string {
         rel="noopener noreferrer"
       >how do i enable remote debugging? ↗</a>
     </div>
-  `;
-}
-
-function renderApiKeyOverlay(selected: ModelInfo, props: NewTaskPageProps): string {
-  const placeholder = {
-    anthropic: "sk-ant-...",
-    openai: "sk-...",
-  }[selected.provider] ?? "paste api key";
-  const saving = props.overlayKeySaving;
-  const cta = saving ? "saving…" : "save & continue →";
-  const disableSubmit = saving || !props.overlayKeyDraft.trim();
-  return `
-    <form
-      id="overlay-key-form"
-      class="connect-overlay"
-      role="dialog"
-      aria-label="api key required"
-      data-provider="${esc(selected.provider)}"
-    >
-      <span class="connect-overlay-pill">
-        <i class="badge-dot badge-dot-hollow" aria-hidden="true"></i>
-        agent · ${esc(selected.display_name)} · key needed
-      </span>
-      <h3 class="connect-overlay-head">
-        add your ${esc(selected.display_name.toLowerCase())} api key
-      </h3>
-      <input
-        id="overlay-key-input"
-        type="password"
-        class="input-field connect-overlay-input"
-        placeholder="${esc(placeholder)}"
-        autocomplete="off"
-        value="${esc(props.overlayKeyDraft)}"
-        ${saving ? "disabled" : ""}
-      />
-      <button
-        id="overlay-key-save"
-        type="submit"
-        class="btn-primary connect-overlay-cta"
-        ${disableSubmit ? "disabled" : ""}
-      >${cta}</button>
-      ${props.overlayKeyError ? `<p class="t-small result-error connect-overlay-error">${esc(props.overlayKeyError)}</p>` : ""}
-      <button
-        id="overlay-switch-tools"
-        type="button"
-        class="connect-overlay-link t-small"
-      >use tool tests (no key needed) →</button>
-    </form>
   `;
 }
 

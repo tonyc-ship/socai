@@ -3,7 +3,8 @@ use crate::timeline::{agent_event_to_timeline, AgentTaskEventKind, AgentTaskEven
 use anyhow::Result;
 use serde_json::{json, Value};
 use socai_core::agent::{
-    configured_default_model_for, load_api_key, make_run_dir, AgentEvent, Provider,
+    configured_default_model_for, make_run_dir, provider_credential_kind, AgentEvent,
+    CredentialKind, Provider,
 };
 use socai_core::runtime::{
     create_llm_provider, ensure_llm_provider_configured, run_agent_task as run_agent_with_tools,
@@ -13,7 +14,9 @@ use socai_core::sites::xhs::{
     search_notes_command, topic_scan_command, xhs_agent_instructions, xhs_agent_tools,
     XhsPageRuntime, XHS_HOME_URL,
 };
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -207,15 +210,83 @@ pub async fn agent_list_models() -> Result<Vec<Value>, String> {
     use socai_core::agent::PROVIDERS;
     let mut out = Vec::new();
     for cfg in PROVIDERS {
+        let credential_kind = provider_credential_kind(cfg.provider);
+        let credential_kind_label = match credential_kind {
+            Some(CredentialKind::ApiKey) => Some("api_key"),
+            Some(CredentialKind::CodexOAuth) => Some("codex_oauth"),
+            None => None,
+        };
         out.push(serde_json::json!({
             "provider": cfg.provider.as_str(),
             "display_name": cfg.display_name,
             "default_model": configured_default_model_for(cfg.provider),
-            "has_key": load_api_key(cfg.provider).is_some(),
+            "has_key": credential_kind.is_some(),
+            "credential_kind": credential_kind_label,
         }));
     }
     Ok(out)
 }
+
+#[tauri::command]
+pub async fn agent_open_codex_login() -> Result<Value, String> {
+    tokio::task::spawn_blocking(start_codex_login)
+        .await
+        .map_err(|e| format!("codex login task failed: {e}"))?
+}
+
+fn start_codex_login() -> Result<Value, String> {
+    let codex = find_codex_binary().ok_or_else(|| {
+        "could not find `codex`. Install Codex CLI or paste an OpenAI API key.".to_string()
+    })?;
+    // Headless loopback browser login; the frontend polls for the credential.
+    let mut child = Command::new(codex)
+        .arg("login")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to start `codex login`: {e}"))?;
+
+    // Drain stdout and reap the child off-thread once login completes.
+    let stdout = child.stdout.take();
+    std::thread::spawn(move || {
+        if let Some(stdout) = stdout {
+            let mut reader = BufReader::new(stdout);
+            let mut rest = String::new();
+            let _ = reader.read_to_string(&mut rest);
+        }
+        let _ = child.wait();
+    });
+
+    Ok(json!({
+        "message": "Browser opened. Finish signing in to ChatGPT, then return to socai.",
+    }))
+}
+
+fn find_codex_binary() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("codex");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    [
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "~/.cargo/bin/codex",
+    ]
+    .iter()
+    .filter_map(|path| {
+        if let Some(stripped) = path.strip_prefix("~/") {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(stripped))
+        } else {
+            Some(PathBuf::from(path))
+        }
+    })
+    .find(|path| path.is_file())
+}
+
 
 #[tauri::command]
 pub async fn agent_task_start(

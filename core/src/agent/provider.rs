@@ -1,8 +1,9 @@
 //! LLM provider catalog + API key resolution.
 //!
-//! Key precedence:
+//! Credential precedence:
 //! 1. environment variables (`ANTHROPIC_API_KEY`, etc.)
 //! 2. `~/.socai/auth.json` — `{provider: {api_key: ...}}`
+//! 3. OpenAI only: Codex CLI auth in `~/.codex/auth.json`
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -51,6 +52,21 @@ pub struct ProviderConfig {
     pub base_url: Option<&'static str>,
     /// Model id prefix → provider matching (e.g. "claude-" → Anthropic).
     pub model_prefixes: &'static [&'static str],
+}
+
+#[derive(Debug, Clone)]
+pub enum Credential {
+    ApiKey(String),
+    CodexOAuth {
+        access_token: String,
+        account_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    ApiKey,
+    CodexOAuth,
 }
 
 /// Static table. Order is the preference order when no provider is
@@ -127,6 +143,10 @@ fn auth_paths() -> Vec<PathBuf> {
     paths
 }
 
+fn codex_auth_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".codex/auth.json"))
+}
+
 /// Re-reads on every call. The file is tiny, and not caching means
 /// `save_api_key` is visible to the same process.
 fn auth_blobs() -> Vec<(PathBuf, HashMap<String, Value>)> {
@@ -166,7 +186,69 @@ pub fn load_api_key(provider: Provider) -> Option<String> {
 }
 
 pub fn provider_has_key(provider: Provider) -> bool {
-    load_api_key(provider).is_some()
+    load_provider_credential(provider).is_some()
+}
+
+pub fn provider_credential_kind(provider: Provider) -> Option<CredentialKind> {
+    match load_provider_credential(provider) {
+        Some(Credential::ApiKey(_)) => Some(CredentialKind::ApiKey),
+        Some(Credential::CodexOAuth { .. }) => Some(CredentialKind::CodexOAuth),
+        None => None,
+    }
+}
+
+pub fn load_provider_credential(provider: Provider) -> Option<Credential> {
+    if provider == Provider::OpenAI {
+        return load_openai_credential();
+    }
+    load_api_key(provider).map(Credential::ApiKey)
+}
+
+pub fn load_openai_credential() -> Option<Credential> {
+    if let Some(key) = load_api_key(Provider::OpenAI) {
+        return Some(Credential::ApiKey(key));
+    }
+    load_codex_oauth_credential()
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthFile {
+    #[serde(rename = "OPENAI_API_KEY")]
+    openai_api_key: Option<String>,
+    tokens: Option<CodexTokenData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexTokenData {
+    access_token: String,
+    account_id: Option<String>,
+}
+
+fn load_codex_auth_file() -> Option<(PathBuf, CodexAuthFile)> {
+    let path = codex_auth_path()?;
+    let bytes = std::fs::read(&path).ok()?;
+    let auth = serde_json::from_slice::<CodexAuthFile>(&bytes).ok()?;
+    Some((path, auth))
+}
+
+fn load_codex_oauth_credential() -> Option<Credential> {
+    let (_path, auth) = load_codex_auth_file()?;
+    if let Some(api_key) = auth.openai_api_key {
+        let trimmed = api_key.trim().to_string();
+        if trimmed.len() >= 8 {
+            return Some(Credential::ApiKey(trimmed));
+        }
+    }
+    let tokens = auth.tokens?;
+    let access_token = tokens.access_token.trim().to_string();
+    let account_id = tokens.account_id?.trim().to_string();
+    if access_token.len() < 8 || account_id.is_empty() {
+        return None;
+    }
+    Some(Credential::CodexOAuth {
+        access_token,
+        account_id,
+    })
 }
 
 /// Persist an API key to `~/.socai/auth.json`: refuses keys shorter than 8

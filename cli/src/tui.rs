@@ -16,8 +16,8 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{Cmd, CompletionType, Config, Editor, EventHandler, Helper, KeyEvent, Modifiers};
 use socai_core::agent::{
-    config_for, configured_default_model_for, load_api_key, resolve_provider, save_api_key,
-    save_default_model, AgentEvent, Backend, Provider, PROVIDERS,
+    config_for, configured_default_model_for, provider_credential_kind, resolve_provider,
+    save_api_key, save_default_model, AgentEvent, Backend, CredentialKind, Provider, PROVIDERS,
 };
 use socai_core::runtime::{
     create_llm_provider, run_agent_task as run_agent_with_tools, AgentRunConfig, SocaiRuntime,
@@ -234,10 +234,10 @@ fn model_options() -> Vec<ModelOption> {
         .map(|provider| {
             let cfg = config_for(*provider);
             let model = configured_default_model_for(*provider);
-            let key_status = if load_api_key(*provider).is_some() {
-                "key"
-            } else {
-                "no key"
+            let key_status = match provider_credential_kind(*provider) {
+                Some(CredentialKind::ApiKey) => "api key set",
+                Some(CredentialKind::CodexOAuth) => "codex oauth set",
+                None => "api key missing",
             };
             let label = format!("{} — {} ({})", cfg.display_name, model, key_status);
             ModelOption {
@@ -288,7 +288,7 @@ async fn handle_model_command(state: &mut AppState, rest: &str) -> Result<()> {
 }
 
 async fn set_active_model(state: &mut AppState, provider: Provider, model: String) -> Result<()> {
-    if load_api_key(provider).is_none() && !prompt_save_key(provider).await? {
+    if provider_credential_kind(provider).is_none() && !prompt_save_key(provider).await? {
         println!("[socai] model unchanged.");
         return Ok(());
     }
@@ -307,6 +307,9 @@ async fn set_active_model(state: &mut AppState, provider: Provider, model: Strin
 async fn prompt_save_key(provider: Provider) -> Result<bool> {
     let cfg = config_for(provider);
     let env_hint = cfg.env_keys.join(" or ");
+    if provider == Provider::OpenAI {
+        return prompt_openai_credential().await;
+    }
     println!(
         "[socai] No API key found for {}. Enter one now (esc to cancel; you can also set {}).",
         cfg.display_name, env_hint
@@ -331,17 +334,83 @@ async fn prompt_save_key(provider: Provider) -> Result<bool> {
     .context("API key prompt thread panicked")?
 }
 
+async fn prompt_openai_credential() -> Result<bool> {
+    println!("[socai] No OpenAI credential found. Choose Codex OAuth or paste an OpenAI API key.");
+    let choice = tokio::task::spawn_blocking(move || {
+        Select::new(
+            "OpenAI credential",
+            vec![
+                "Use Codex OAuth".to_string(),
+                "Paste OpenAI API key".to_string(),
+            ],
+        )
+        .with_help_message("↑/↓ to move · enter to confirm · esc to cancel")
+        .prompt_skippable()
+    })
+    .await
+    .context("OpenAI credential picker thread panicked")??;
+
+    let Some(choice) = choice else {
+        return Ok(false);
+    };
+    if choice.starts_with("Use Codex OAuth") {
+        run_codex_login().await?;
+        return Ok(provider_credential_kind(Provider::OpenAI).is_some());
+    }
+    prompt_save_api_key_only(Provider::OpenAI).await
+}
+
+async fn prompt_save_api_key_only(provider: Provider) -> Result<bool> {
+    let cfg = config_for(provider);
+    let label = cfg.display_name.to_string();
+    let provider_for_save = provider;
+    tokio::task::spawn_blocking(move || -> Result<bool> {
+        let key = match Text::new(&format!("{label} API key:")).prompt_skippable()? {
+            Some(k) => k,
+            None => return Ok(false),
+        };
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let path = save_api_key(provider_for_save, trimmed)?;
+        println!("[socai] Saved {label} key to {}", path.display());
+        Ok(true)
+    })
+    .await
+    .context("API key prompt thread panicked")?
+}
+
+async fn run_codex_login() -> Result<()> {
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let status = std::process::Command::new("codex")
+            .arg("login")
+            .status()
+            .context(
+                "failed to start `codex login`; install Codex CLI or paste an OpenAI API key",
+            )?;
+        if !status.success() {
+            anyhow::bail!("`codex login` exited with status {status}");
+        }
+        Ok(())
+    })
+    .await
+    .context("codex login thread panicked")??;
+    Ok(())
+}
+
 async fn ensure_any_llm_key() -> Result<()> {
     if PROVIDERS
         .iter()
-        .any(|cfg| load_api_key(cfg.provider).is_some())
+        .any(|cfg| provider_credential_kind(cfg.provider).is_some())
     {
         return Ok(());
     }
     if !io::stdin().is_terminal() {
         anyhow::bail!(
-            "No LLM API key found. Set OPENAI_API_KEY / ANTHROPIC_API_KEY / \
-             KIMI_API_KEY / QWEN_API_KEY or run `socai tui` in a terminal to save one."
+            "No LLM credential found. Set OPENAI_API_KEY / ANTHROPIC_API_KEY / \
+             KIMI_API_KEY / QWEN_API_KEY, run `codex login`, or run `socai tui` \
+             in a terminal to save one."
         );
     }
 
@@ -380,7 +449,7 @@ async fn ensure_any_llm_key() -> Result<()> {
 
 async fn ensure_model_key(model: &str) -> Result<()> {
     let provider = resolve_provider(None, Some(model))?;
-    if load_api_key(provider).is_some() {
+    if provider_credential_kind(provider).is_some() {
         return Ok(());
     }
     if !io::stdin().is_terminal() {

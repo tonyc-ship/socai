@@ -15,6 +15,7 @@ export interface ModelInfo {
   display_name: string;
   default_model: string;
   has_key: boolean;
+  credential_kind?: "api_key" | "codex_oauth" | null;
 }
 
 export type AgentTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
@@ -278,6 +279,9 @@ async function main(): Promise<void> {
 
   const refresh = (): void => {
     invoke("cdp_refresh").catch((e) => console.error("cdp_refresh failed:", e));
+    agentPanel.refreshModels()
+      .then(() => render())
+      .catch((e) => console.error("agent_list_models refresh failed:", e));
   };
   window.addEventListener("focus", refresh);
   document.addEventListener("visibilitychange", () => {

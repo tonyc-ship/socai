@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::{
-    config_for, configured_default_model_for, load_api_key, resolve_provider,
+    config_for, configured_default_model_for, load_provider_credential, resolve_provider,
     run_agent_with_events, AgentEvent, AgentOptions, AgentOutcome, AnthropicBackend, Backend,
     OpenAICompatBackend, Provider, Tool,
 };
@@ -173,13 +173,19 @@ pub fn create_llm_provider(model: Option<&str>) -> Result<Arc<dyn Backend>> {
 
 pub fn ensure_llm_provider_configured(model: Option<&str>) -> Result<Provider> {
     let provider = resolve_provider(None, model)?;
-    if load_api_key(provider).is_none() {
+    if load_provider_credential(provider).is_none() {
         let cfg = config_for(provider);
-        anyhow::bail!(
-            "missing API key for {} — set {} in your environment or via the CLI before running.",
-            cfg.display_name,
-            cfg.env_keys.join(" or ")
-        );
+        if provider == Provider::OpenAI {
+            anyhow::bail!(
+                "missing OpenAI credential — set OPENAI_API_KEY, save an OpenAI API key in socai, or run `codex login`."
+            );
+        } else {
+            anyhow::bail!(
+                "missing API key for {} — set {} in your environment or via the CLI before running.",
+                cfg.display_name,
+                cfg.env_keys.join(" or ")
+            );
+        }
     }
     Ok(provider)
 }

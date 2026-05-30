@@ -250,6 +250,42 @@ body.has-paper > * { position: relative; z-index: 1; }
   align-items: center;
   gap: var(--sp-2);
 }
+.agent-config-key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.agent-config-key-row .input-field {
+  flex: 1;
+  min-width: 0;
+}
+.agent-model-list {
+  display: flex;
+  flex-direction: column;
+  border: var(--hairline);
+  border-radius: var(--r-3);
+  overflow: hidden;
+}
+.agent-model-option {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: none;
+  border-bottom: var(--hairline);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.agent-model-option:last-child { border-bottom: none; }
+.agent-model-option:hover { background: var(--canvas); }
+.agent-model-option:disabled { cursor: wait; color: var(--fg-soft); }
+.agent-model-option.is-active { background: var(--canvas); }
+.agent-model-name { flex: 1; min-width: 0; }
+.agent-model-option.is-active .agent-model-name { font-weight: 600; }
 
 /* ── Stacked sections ──────────────────────────────────────────── */
 .stack {

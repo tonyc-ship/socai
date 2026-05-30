@@ -18,6 +18,7 @@ export type TaskMode = "agent" | "tools";
 type TaskPage = "new" | "history";
 export type ToolCommand = "search_notes" | "topic_scan" | "extract_note";
 export type AgentTaskView = AgentTaskSnapshot & { events: AgentTaskEventPayload[] };
+type CodexLoginStart = { message: string };
 
 // ── Agent task workspace ──────────────────────────────────────────────────
 
@@ -40,14 +41,10 @@ export namespace agentPanel {
   // Key-entry sub-state — used by the header configuration popover.
   let pendingKey = "";
   let savingKey = false;
+  let codexStarting = false;
+  let keyMessage = "";
   let keyError = "";
   let configOpen = false;
-
-  // Overlay key-entry sub-state — used by the inline new-task gate when
-  // chrome is connected but the selected agent has no key.
-  let overlayKey = "";
-  let overlaySaving = false;
-  let overlayError = "";
 
   export function setModels(models: ModelInfo[]): void {
     modelsCache = models;
@@ -55,6 +52,12 @@ export namespace agentPanel {
       const withKey = models.find((m) => m.has_key);
       model = (withKey ?? models[0])?.default_model ?? "";
     }
+  }
+
+  export async function refreshModels(): Promise<ModelInfo[]> {
+    const models = await invoke<ModelInfo[]>("agent_list_models");
+    setModels(models);
+    return models;
   }
 
   export function setTasks(snapshots: AgentTaskSnapshot[]): void {
@@ -87,30 +90,42 @@ export namespace agentPanel {
   }
 
   export function renderHeader(): string {
+    const showConfig = configOpen || selectedNeedsKey();
     return `
       <div class="agent-status">
         ${renderAgentBadge()}
-        ${configOpen ? renderConfigPopover() : ""}
+        ${showConfig ? renderConfigPopover() : ""}
       </div>
     `;
   }
 
   export function bindHeader(shell: ShellState): void {
     document.getElementById("agent-config-toggle")?.addEventListener("click", () => {
-      configOpen = !configOpen;
+      configOpen = selectedNeedsKey() ? true : !configOpen;
       shell.rerender();
     });
 
-    const modelEl = document.getElementById("agent-header-model") as HTMLSelectElement | null;
-    modelEl?.addEventListener("change", () => {
-      model = modelEl.value;
-      keyError = "";
-      pendingKey = "";
-      shell.rerender();
+    document.querySelectorAll<HTMLButtonElement>(".agent-model-option").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        const next = opt.dataset.model;
+        if (!next || next === model) return;
+        model = next;
+        keyMessage = "";
+        keyError = "";
+        pendingKey = "";
+        // Close the popover when the picked model is ready; keep it open to
+        // collect a credential when the model still needs one.
+        configOpen = false;
+        shell.rerender();
+      });
     });
 
     const keyInput = document.getElementById("agent-header-key-input") as HTMLInputElement | null;
-    keyInput?.addEventListener("input", () => { pendingKey = keyInput.value; });
+    keyInput?.addEventListener("input", () => {
+      pendingKey = keyInput.value;
+      keyMessage = "";
+      keyError = "";
+    });
 
     const saveBtn = document.getElementById("agent-header-key-save") as HTMLButtonElement | null;
     saveBtn?.addEventListener("click", async () => {
@@ -118,6 +133,7 @@ export namespace agentPanel {
       const key = pendingKey.trim();
       if (!provider || !key || savingKey) return;
       savingKey = true;
+      keyMessage = "";
       keyError = "";
       shell.rerender();
       try {
@@ -131,9 +147,30 @@ export namespace agentPanel {
         shell.rerender();
       }
     });
+
+    document.getElementById("agent-header-codex-login")?.addEventListener("click", async () => {
+      if (codexStarting) return;
+      codexStarting = true;
+      keyMessage = "";
+      keyError = "";
+      shell.rerender();
+      try {
+        const login = await invoke<CodexLoginStart>("agent_open_codex_login");
+        keyMessage = login.message;
+        codexStarting = false;
+        shell.rerender();
+        void pollCodexOAuth(shell);
+      } catch (err) {
+        keyError = `${err}`;
+        codexStarting = false;
+        shell.rerender();
+      }
+    });
+
   }
 
   export function closeHeaderConfig(): boolean {
+    if (selectedNeedsKey()) return false;
     if (!configOpen) return false;
     configOpen = false;
     return true;
@@ -141,7 +178,7 @@ export namespace agentPanel {
 
   function renderAgentBadge(): string {
     const selected = selectedModel();
-    const expanded = configOpen ? "true" : "false";
+    const expanded = configOpen || selectedNeedsKey() ? "true" : "false";
     if (!selected) {
       return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-muted" aria-hidden="true"></i>agent · loading</button>`;
     }
@@ -153,58 +190,79 @@ export namespace agentPanel {
 
   function renderConfigPopover(): string {
     const selected = selectedModel();
-    const modelOpts = modelsCache
+    const disabled = savingKey || submittingTask;
+    const options = modelsCache
       .map((m) => {
-        const sel = model === m.default_model ? "selected" : "";
-        const flag = m.has_key ? "" : " · no key";
-        return `<option value="${esc(m.default_model)}" ${sel}>${esc(m.display_name)} — ${esc(m.default_model)}${flag}</option>`;
+        const active = model === m.default_model;
+        const dotClass = active ? "badge-dot-ink" : "badge-dot-hollow";
+        const flag = m.has_key ? "" : `<span class="t-small subtle">key needed</span>`;
+        return `
+          <button
+            type="button"
+            class="agent-model-option${active ? " is-active" : ""}"
+            data-model="${esc(m.default_model)}"
+            role="option"
+            aria-selected="${active ? "true" : "false"}"
+            ${disabled ? "disabled" : ""}
+          >
+            <i class="badge-dot ${dotClass}" aria-hidden="true"></i>
+            <span class="agent-model-name">${esc(m.display_name)}</span>
+            ${flag}
+          </button>
+        `;
       })
       .join("");
 
     return `
       <div class="topbar-popover agent-config-popover" role="dialog" aria-label="agent configuration">
-        <p class="t-eyebrow agent-config-title">agent</p>
-        <label class="agent-config-field">
-          <span class="t-small">model</span>
-          <select id="agent-header-model" class="input-field" ${savingKey || submittingTask ? "disabled" : ""}>
-            ${modelOpts || `<option value="">loading…</option>`}
-          </select>
-        </label>
-        ${
-          selected
-            ? `<p class="t-small subtle">${esc(selected.display_name)} · <span class="t-mono">${esc(selected.default_model)}</span></p>`
-            : `<p class="t-small subtle">loading available models…</p>`
-        }
-        ${selected ? selected.has_key ? `<p class="t-small subtle">api key configured.</p>` : renderHeaderKeyEntry(selected) : ""}
+        <div class="agent-model-list" role="listbox" aria-label="select agent model">
+          ${options || `<p class="t-small subtle">loading…</p>`}
+        </div>
+        ${selected && !selected.has_key ? renderHeaderKeyEntry(selected) : ""}
       </div>
     `;
   }
 
   function renderHeaderKeyEntry(selected: ModelInfo): string {
+    const openai = selected.provider === "openai";
     return `
       <div class="agent-config-key">
-        <p class="t-small subtle">${esc(selected.display_name)} needs an api key.</p>
-        <input
-          id="agent-header-key-input"
-          class="input-field"
-          type="password"
-          placeholder="paste api key"
-          value="${esc(pendingKey)}"
-          autocomplete="off"
-          ${savingKey ? "disabled" : ""}
-        />
-        <div class="agent-config-actions">
+        <p class="t-small subtle">${esc(selected.display_name)} needs a credential.</p>
+        ${openai ? `
+          <div class="agent-config-actions">
+            <button id="agent-header-codex-login" type="button" class="btn-primary btn-compact" ${codexStarting ? "disabled" : ""}>
+              ${codexStarting ? "Opening..." : "Connect My ChatGPT Subscription"}
+            </button>
+          </div>
+        ` : ""}
+        ${openai ? `<p class="t-small subtle">Or,</p>` : ""}
+        <div class="agent-config-key-row">
+          <input
+            id="agent-header-key-input"
+            class="input-field"
+            type="password"
+            placeholder="paste api key"
+            value="${esc(pendingKey)}"
+            autocomplete="off"
+            ${savingKey ? "disabled" : ""}
+          />
           <button id="agent-header-key-save" type="button" data-provider="${esc(selected.provider)}" class="btn-primary btn-compact" ${savingKey ? "disabled" : ""}>
             ${savingKey ? "saving…" : "save"}
           </button>
-          ${keyError ? `<span class="t-small result-error">${esc(keyError)}</span>` : ""}
         </div>
+        ${keyMessage ? `<p class="t-small subtle">${esc(keyMessage)}</p>` : ""}
+        ${keyError ? `<p class="t-small result-error">${esc(keyError)}</p>` : ""}
       </div>
     `;
   }
 
   function selectedModel(): ModelInfo | undefined {
     return modelsCache.find((m) => m.default_model === model);
+  }
+
+  function selectedNeedsKey(): boolean {
+    const selected = selectedModel();
+    return !!selected && !selected.has_key;
   }
 
   // Append a streamed event and update state. Returns true when the shell
@@ -243,9 +301,6 @@ export namespace agentPanel {
               submitError,
               tasks,
               selectedModel: selectedModel(),
-              overlayKeyDraft: overlayKey,
-              overlayKeySaving: overlaySaving,
-              overlayKeyError: overlayError,
             })
           : renderHistoryPage({ tasks, selectedTask: selectedTask(), selectedTaskId })}
       </div>
@@ -336,48 +391,37 @@ export namespace agentPanel {
       invoke("cdp_connect").catch((e) => console.error("cdp_connect failed:", e));
     });
 
-    document.getElementById("overlay-switch-tools")?.addEventListener("click", () => {
-      mode = "tools";
-      submitError = "";
-      overlayKey = "";
-      overlayError = "";
-      shell.rerender();
-    });
-
-    const overlayKeyInput = document.getElementById("overlay-key-input") as HTMLInputElement | null;
-    overlayKeyInput?.addEventListener("input", () => {
-      overlayKey = overlayKeyInput.value;
-      const submit = document.getElementById("overlay-key-save") as HTMLButtonElement | null;
-      if (submit) submit.disabled = overlaySaving || !overlayKey.trim();
-    });
-    if (overlayKeyInput && document.activeElement === document.body) {
-      overlayKeyInput.focus();
-    }
-
-    document.getElementById("overlay-key-form")?.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      await saveOverlayKey(shell);
-    });
   }
 
-  async function saveOverlayKey(shell: ShellState): Promise<void> {
-    const form = document.getElementById("overlay-key-form") as HTMLFormElement | null;
-    const provider = form?.dataset.provider;
-    const key = overlayKey.trim();
-    if (!provider || !key || overlaySaving) return;
-    overlaySaving = true;
-    overlayError = "";
-    shell.rerender();
-    try {
-      await invoke("agent_save_api_key", { provider, apiKey: key });
-      setModels(await invoke<ModelInfo[]>("agent_list_models"));
-      overlayKey = "";
-    } catch (err) {
-      overlayError = `${err}`;
-    } finally {
-      overlaySaving = false;
-      shell.rerender();
+  async function pollCodexOAuth(shell: ShellState): Promise<void> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(1000);
+      try {
+        const models = await refreshModels();
+        if (models.some((item) => item.provider === "openai" && item.has_key)) {
+          keyMessage = "";
+          keyError = "";
+          savingKey = false;
+          shell.rerender();
+          return;
+        }
+      } catch (err) {
+        keyMessage = "";
+        keyError = `${err}`;
+        savingKey = false;
+        shell.rerender();
+        return;
+      }
     }
+
+    keyMessage = "";
+    keyError = "codex login not detected yet. return to socai after login completes.";
+    savingKey = false;
+    shell.rerender();
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function updateSubmitButton(shell: ShellState): void {
