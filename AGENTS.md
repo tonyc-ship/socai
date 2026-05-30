@@ -89,3 +89,21 @@ Gotchas:
 - The Vite dev server ignores `src-tauri/**` (see `vite.config.ts`) so Rust
   file changes don't cause spurious frontend reloads. Rust edits trigger a
   full Tauri shell restart instead.
+
+## WeChat group QR maintenance
+
+The WeChat group QR in README is `docs/assets/wechat-group-qr.jpg`. WeChat group
+QR codes expire after 7 days and can't be fetched via any API — the user must
+re-export it manually from WeChat on their phone.
+
+A `SessionStart` hook in `.claude/settings.json` checks the file's last git
+commit date and, if ≥6 days old, injects a `[wechat-qr-reminder]`. On seeing it,
+remind the user at the start of your reply.
+
+To update: ask the user for the freshly exported image, overwrite
+`docs/assets/wechat-group-qr.jpg` (same name/path — README needs no change),
+then commit (`docs: refresh wechat group QR`) and push to `main`.
+
+This QR refresh is the only case where committing and pushing to `main` is
+pre-authorized without per-time confirmation; everything else still follows the
+default commit/push-only-when-asked rule.
