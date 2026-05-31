@@ -292,6 +292,265 @@ const SocaiXhsPageScripts = (() => {
     return { ok: true, label, x: tab.x, y: tab.y, was_active: tab.active };
   }
 
+  // ── search filter popup (hover-triggered 筛选 panel) ─────────
+  const SEARCH_FILTER_GROUPS = [
+    { key: 'sort', title: '排序依据', options: ['综合', '最新', '最多点赞', '最多评论', '最多收藏'] },
+    { key: 'note_type', title: '笔记类型', options: ['不限', '视频', '图文'] },
+    { key: 'publish_time', title: '发布时间', options: ['不限', '一天内', '一周内', '半年内'] },
+    { key: 'search_scope', title: '搜索范围', options: ['不限', '已看过', '未看过', '已关注'] },
+    { key: 'distance', title: '位置距离', options: ['不限', '同城', '附近'] },
+  ];
+
+  const FILTER_TITLES = SEARCH_FILTER_GROUPS.map((g) => g.title);
+  const FILTER_OPTIONS = Array.from(new Set(SEARCH_FILTER_GROUPS.flatMap((g) => g.options)));
+
+  function centerOf(rect) {
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    };
+  }
+
+  function elementCenter(el) {
+    const rect = el.getBoundingClientRect();
+    return centerOf(rect);
+  }
+
+  function colorLooksActive(value) {
+    const m = String(value || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (!m) return false;
+    const [, r, g, b] = m.map(Number);
+    return r >= 200 && g <= 130 && b <= 150;
+  }
+
+  function optionLooksActive(el) {
+    const cls = String(el.className || '');
+    const style = window.getComputedStyle(el);
+    return el.getAttribute('aria-selected') === 'true'
+      || el.getAttribute('aria-pressed') === 'true'
+      || el.getAttribute('data-active') === 'true'
+      || /\b(active|current|selected|checked)\b/i.test(cls)
+      || colorLooksActive(style.color)
+      || colorLooksActive(style.backgroundColor);
+  }
+
+  function clickableOptionElement(el, label) {
+    let best = el;
+    let cur = el;
+    while (cur?.parentElement) {
+      const parent = cur.parentElement;
+      if (!isVisible(parent)) break;
+      if (text(parent) !== label) break;
+      const rect = parent.getBoundingClientRect();
+      if (rect.width > 240 || rect.height > 90) break;
+      best = parent;
+      cur = parent;
+    }
+    return best;
+  }
+
+  function filterTriggerLabel(el) {
+    return norm([
+      text(el),
+      el?.getAttribute?.('aria-label') || '',
+      el?.getAttribute?.('title') || '',
+    ].filter(Boolean).join(' ')).replace(/\s+/g, '');
+  }
+
+  function cacheSearchFilterTrigger(el, label) {
+    const rect = el.getBoundingClientRect();
+    const center = centerOf(rect);
+    window.__SOCAI_XHS_LAST_FILTER_TRIGGER = {
+      label,
+      x: center.x,
+      y: center.y,
+      at: Date.now(),
+    };
+    return center;
+  }
+
+  function cachedSearchFilterTrigger() {
+    const cached = window.__SOCAI_XHS_LAST_FILTER_TRIGGER;
+    if (!cached || Date.now() - Number(cached.at || 0) > 120000) return null;
+    const x = Number(cached.x);
+    const y = Number(cached.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return null;
+    return { x, y, label: cached.label || '筛选', cached: true };
+  }
+
+  function findSearchFilterTrigger() {
+    const candidates = [];
+    const selector = 'button, a, div, span, [role="button"], [aria-label*="筛选"], [title*="筛选"]';
+    for (const el of $$(selector)) {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+      const label = filterTriggerLabel(el);
+      if (!label.includes('筛选')) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 32 || rect.height < 18) continue;
+      if (rect.width > Math.min(260, innerWidth * 0.35)) continue;
+      if (rect.height > 90) continue;
+      if (rect.top > Math.min(360, innerHeight * 0.55)) continue;
+      if (rect.left < innerWidth * 0.30) continue;
+      const exact = label === '筛选';
+      const starts = label.startsWith('筛选');
+      const score = rect.left
+        + (exact ? 3000 : 0)
+        + (starts ? 1200 : 0)
+        + (rect.top < 220 ? 600 : 0)
+        - Math.abs(rect.height - 40);
+      candidates.push({ el, rect, label, score });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0]?.el || null;
+  }
+
+  function searchFilterTrigger() {
+    const trigger = findSearchFilterTrigger();
+    if (!trigger) {
+      const cached = cachedSearchFilterTrigger();
+      if (cached) return { ok: true, ...cached };
+      return { ok: false, error: 'filter_trigger_not_found' };
+    }
+    const label = filterTriggerLabel(trigger) || text(trigger) || '筛选';
+    return { ok: true, label, ...cacheSearchFilterTrigger(trigger, label) };
+  }
+
+  function panelScore(el) {
+    const value = text(el);
+    if (!value) return 0;
+    let score = 0;
+    for (const title of FILTER_TITLES) {
+      if (value.includes(title)) score += 12;
+    }
+    for (const option of FILTER_OPTIONS) {
+      if (value.includes(option)) score += 1;
+    }
+    if (value.includes('重置')) score += 4;
+    if (value.includes('收起')) score += 4;
+    return score;
+  }
+
+  function findSearchFilterPanel() {
+    const candidates = [];
+    for (const el of $$('div, section, aside, [role="dialog"], [class*="filter"], [class*="popover"], [class*="dropdown"]')) {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 260 || rect.height < 120) continue;
+      if (rect.width > Math.min(innerWidth - 20, 820)) continue;
+      if (rect.left < innerWidth * 0.30) continue;
+      const score = panelScore(el);
+      if (score < 24) continue;
+      candidates.push({ el, rect, score, area: rect.width * rect.height });
+    }
+    candidates.sort((a, b) => (b.score - a.score) || (a.area - b.area));
+    return candidates[0]?.el || null;
+  }
+
+  function findExactTextElement(root, label, { top = -Infinity, bottom = Infinity } = {}) {
+    const matches = [];
+    for (const el of $$('button, a, div, span', root)) {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+      if (text(el) !== label) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.top < top || rect.top >= bottom) continue;
+      matches.push({ el, rect, area: rect.width * rect.height });
+    }
+    matches.sort((a, b) => b.area - a.area);
+    return matches[0]?.el || null;
+  }
+
+  function searchFilters() {
+    const panel = findSearchFilterPanel();
+    if (!panel) return { ok: false, error: 'filter_panel_not_found' };
+
+    const headings = SEARCH_FILTER_GROUPS
+      .map((group) => {
+        const el = findExactTextElement(panel, group.title);
+        if (!el) return null;
+        return { group, el, rect: el.getBoundingClientRect() };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.rect.top - b.rect.top);
+
+    const groups = [];
+    for (let i = 0; i < headings.length; i += 1) {
+      const { group, rect } = headings[i];
+      const bottom = headings[i + 1]?.rect.top ?? panel.getBoundingClientRect().bottom;
+      const options = [];
+      for (const label of group.options) {
+        const optionEl = findExactTextElement(panel, label, { top: rect.bottom - 6, bottom });
+        if (!optionEl) continue;
+        const target = clickableOptionElement(optionEl, label);
+        const targetRect = target.getBoundingClientRect();
+        options.push({
+          label,
+          active: optionLooksActive(optionEl) || optionLooksActive(target),
+          x: Math.round(targetRect.left + targetRect.width / 2),
+          y: Math.round(targetRect.top + targetRect.height / 2),
+        });
+      }
+      if (options.length) {
+        groups.push({
+          key: group.key,
+          title: group.title,
+          active: options.find((option) => option.active)?.label || '',
+          options,
+        });
+      }
+    }
+
+    const resetEl = findExactTextElement(panel, '重置');
+    const closeEl = findExactTextElement(panel, '收起');
+    return {
+      ok: true,
+      groups,
+      available_groups: groups.map((group) => group.key),
+      reset: resetEl ? elementCenter(clickableOptionElement(resetEl, '重置')) : null,
+      close: closeEl ? elementCenter(clickableOptionElement(closeEl, '收起')) : null,
+    };
+  }
+
+  function searchFilterTarget(arg) {
+    const panel = searchFilters();
+    if (!panel.ok) return panel;
+    const action = String(arg?.action || 'option');
+    if (action === 'reset') {
+      if (!panel.reset) return { ok: false, error: 'filter_reset_not_found', filters: panel };
+      return { ok: true, action, ...panel.reset, filters: panel };
+    }
+    if (action === 'close') {
+      if (!panel.close) return { ok: false, error: 'filter_close_not_found', filters: panel };
+      return { ok: true, action, ...panel.close, filters: panel };
+    }
+
+    const key = String(arg?.group || '').trim();
+    const label = String(arg?.label || '').trim();
+    const group = panel.groups.find((item) => item.key === key);
+    if (!group) {
+      return {
+        ok: false,
+        error: 'filter_group_not_available',
+        group: key,
+        label,
+        available_groups: panel.available_groups,
+        filters: panel,
+      };
+    }
+    const option = group.options.find((item) => item.label === label);
+    if (!option) {
+      return {
+        ok: false,
+        error: 'filter_option_not_found',
+        group: key,
+        label,
+        available_options: group.options.map((item) => item.label),
+        filters: panel,
+      };
+    }
+    return { ok: true, action: 'option', group: key, label, was_active: option.active, x: option.x, y: option.y, filters: panel };
+  }
+
   // ── card click / note open / note close ──────────────────────
   function findCardElement(arg) {
     const cards = $$('section.note-item, [data-note-id], .feeds-page .note-item');
@@ -801,6 +1060,9 @@ const SocaiXhsPageScripts = (() => {
     searchState,
     searchTabs,
     clickSearchTab,
+    searchFilterTrigger,
+    searchFilters,
+    searchFilterTarget,
     clickCard,
     closeNote,
     noteOpen,

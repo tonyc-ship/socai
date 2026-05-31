@@ -76,7 +76,7 @@ pub async fn tool_topic_scan(
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
-    let result = topic_scan_command(page.clone(), &query, "standard", None).await;
+    let result = topic_scan_command(page.clone(), &query, "standard", None, None, false).await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }
@@ -286,7 +286,6 @@ fn find_codex_binary() -> Option<PathBuf> {
     })
     .find(|path| path.is_file())
 }
-
 
 #[tauri::command]
 pub async fn agent_task_start(

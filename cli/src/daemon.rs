@@ -200,8 +200,13 @@ impl DaemonState {
             .and_then(Value::as_str)
             .unwrap_or("standard");
         let tab_label = args.get("tab_label").and_then(Value::as_str);
+        let filters = args.get("filters").cloned();
+        let reset_filters = args
+            .get("reset_filters")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        topic_scan_command(page, &query, depth, tab_label).await
+        topic_scan_command(page, &query, depth, tab_label, filters, reset_filters).await
     }
 
     async fn extract_note(&mut self, args: Value) -> Result<Value> {

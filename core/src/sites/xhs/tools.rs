@@ -43,6 +43,11 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(ListSearchTabsTool { page: page.clone() }),
         Arc::new(ClickSearchTabTool { page: page.clone() }),
+        Arc::new(ListSearchFiltersTool { page: page.clone() }),
+        Arc::new(ApplySearchFiltersTool {
+            page: page.clone(),
+            history: history.clone(),
+        }),
         Arc::new(OpenNoteTool { page: page.clone() }),
         Arc::new(CloseNoteTool { page: page.clone() }),
         Arc::new(ReadNoteTool {
@@ -131,11 +136,13 @@ pub async fn topic_scan_command(
     query: &str,
     depth: &str,
     tab_label: Option<&str>,
+    filters: Option<Value>,
+    reset_filters: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
-        topic_scan_input(query, depth, tab_label)?,
+        topic_scan_input(query, depth, tab_label, filters.as_ref(), reset_filters)?,
     )
     .await
 }
@@ -151,12 +158,24 @@ fn search_notes_input(query: &str) -> anyhow::Result<Value> {
     }))
 }
 
-fn topic_scan_input(query: &str, depth: &str, tab_label: Option<&str>) -> anyhow::Result<Value> {
+fn topic_scan_input(
+    query: &str,
+    depth: &str,
+    tab_label: Option<&str>,
+    filters: Option<&Value>,
+    reset_filters: bool,
+) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
         "depth": defaulted_str(depth, "standard"),
     });
     insert_optional_str(&mut input, "tab_label", tab_label);
+    if let Some(filters) = filters {
+        input["filters"] = filters.clone();
+    }
+    if reset_filters {
+        input["reset_filters"] = Value::Bool(true);
+    }
     Ok(input)
 }
 
@@ -752,6 +771,102 @@ impl Tool for ClickSearchTabTool {
     }
 }
 
+/// list_search_filters() -> {ok, groups, ...}
+pub struct ListSearchFiltersTool {
+    page: Arc<PageSession>,
+}
+
+#[async_trait]
+impl Tool for ListSearchFiltersTool {
+    fn name(&self) -> &str {
+        "list_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control and list the \
+         currently available filter groups/options. Use this after \
+         `search_notes` and after any `click_search_tab`, because the filter \
+         panel changes when the active search tab changes."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Seconds to wait for the hover popup to appear",
+                    "default": 1.0
+                }
+            }
+        })
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
+        let xhs = XhsPageRuntime::new(&self.page);
+        let value = xhs.list_search_filters(wait_seconds).await?;
+        Ok(json_result(&value))
+    }
+}
+
+/// apply_search_filters(filters, reset?, wait_seconds?) -> {ok, filters, cards}
+pub struct ApplySearchFiltersTool {
+    page: Arc<PageSession>,
+    history: Arc<XhsHistoryStore>,
+}
+
+#[async_trait]
+impl Tool for ApplySearchFiltersTool {
+    fn name(&self) -> &str {
+        "apply_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control and choose filter \
+         options from the current panel. Each group is single-select, but \
+         different groups can be combined. Call `list_search_filters` first \
+         after switching tabs so you only request groups/options that are \
+         currently visible."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filters": search_filters_schema(),
+                "reset": {
+                    "type": "boolean",
+                    "description": "Click reset before applying the requested filters",
+                    "default": false
+                },
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Seconds to wait for the hover popup/results refresh",
+                    "default": 1.0
+                }
+            },
+            "required": ["filters"]
+        })
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let filters = input
+            .get("filters")
+            .ok_or_else(|| anyhow::anyhow!("missing filters"))?;
+        let reset = get_bool(&input, "reset", false);
+        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
+        let xhs = XhsPageRuntime::new(&self.page);
+        let mut value = xhs
+            .apply_search_filters(filters, reset, wait_seconds)
+            .await?;
+        if let Some(cards) = value.get_mut("cards") {
+            self.history.annotate_cards(cards);
+        }
+        Ok(json_result(&value))
+    }
+}
+
 /// scroll_in_note(pixels?) -> {ok, scroll_top, ...}
 pub struct ScrollInNoteTool {
     page: Arc<PageSession>,
@@ -856,10 +971,10 @@ impl Tool for ExtractProfileTool {
     }
 }
 
-/// topic_scan(query, tab_label?, depth?) -> aggregated topic bundle
+/// topic_scan(query, tab_label?, filters?, depth?) -> aggregated topic bundle
 ///
-/// Composite macro: search → optional tab switch → sample N visible cards in
-/// page order → read each (deep or lite depending on depth profile) →
+/// Composite macro: search → optional tab switch → optional search filters →
+/// sample N visible cards in page order → read each (deep or lite depending on depth profile) →
 /// bundle into one artifact. Prefer this for any "research a topic on XHS"
 /// task — it returns search results plus the note bodies plus comments in
 /// one tool call, so the agent doesn't have to chain 10+ tools by hand.
@@ -911,6 +1026,7 @@ impl Tool for TopicScanTool {
 
     fn description(&self) -> &str {
         "Xiaohongshu topic research macro: search → optional tab switch → \
+         optional search filters → \
          sample top visible cards in page order → read deep/lite notes → \
          return one compact bundle (search results + selected cards + note \
          bodies + comments). Prefer this for XHS topic research. Do not \
@@ -926,6 +1042,12 @@ impl Tool for TopicScanTool {
                 "tab_label": {
                     "type": "string",
                     "enum": ["全部", "图文", "视频", "用户"]
+                },
+                "filters": search_filters_schema(),
+                "reset_filters": {
+                    "type": "boolean",
+                    "description": "Click reset before applying the requested filters",
+                    "default": false
                 },
                 "depth": {
                     "type": "string",
@@ -943,6 +1065,11 @@ impl Tool for TopicScanTool {
             .to_string();
         let depth = get_str(&input, "depth").unwrap_or("standard").to_string();
         let tab_label = get_str(&input, "tab_label").unwrap_or("").to_string();
+        let filters = input
+            .get("filters")
+            .filter(|value| !value.is_null())
+            .cloned();
+        let reset_filters = get_bool(&input, "reset_filters", false);
         let profile = scan_profile_for(&depth);
 
         let media = media_for(ctx, self.llm_provider.clone(), profile.include_media)?;
@@ -957,20 +1084,53 @@ impl Tool for TopicScanTool {
 
         let search = xhs.search_notes(&query, 2.0).await?;
 
-        // Optional tab switch + re-extract cards.
+        // Optional tab switch, optional filter application, then re-extract cards.
         let mut tab_result = Value::Object(serde_json::Map::new());
-        let cards: Vec<XhsNoteCard> = if !tab_label.is_empty() {
+        if !tab_label.is_empty() {
             tab_result = xhs.click_search_tab(&tab_label, 1.5).await?;
+        }
+
+        let mut filter_result = Value::Object(serde_json::Map::new());
+        let cards: Vec<XhsNoteCard> = if let Some(filters) = filters {
+            filter_result = xhs
+                .apply_search_filters(&filters, reset_filters, 1.5)
+                .await?;
+            if !filter_result
+                .get("ok")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                let mut search = search;
+                if let Some(cards) = search.get_mut("cards") {
+                    history_snapshot.annotate_cards(cards);
+                }
+                let payload = json!({
+                    "ok": false,
+                    "query": query,
+                    "depth": depth,
+                    "tab": tab_result,
+                    "filters": filter_result,
+                    "search": search,
+                    "selected_cards": [],
+                    "notes": [],
+                    "sampling": {
+                        "max_deep_notes": profile.deep,
+                        "max_lite_notes": profile.lite,
+                        "depth": depth,
+                        "include_media": profile.include_media,
+                    },
+                    "timing": {
+                        "media": {},
+                    },
+                    "error": "filter_apply_failed",
+                });
+                return Ok(json_result(&payload));
+            }
+            cards_from_payload(&filter_result)
+        } else if !tab_label.is_empty() {
             xhs.extract_search_cards().await?
         } else {
-            search
-                .get("cards")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|v| serde_json::from_value::<XhsNoteCard>(v).ok())
-                .collect()
+            cards_from_payload(&search)
         };
 
         let total_limit = profile.deep + profile.lite;
@@ -1097,6 +1257,7 @@ impl Tool for TopicScanTool {
             "query": query,
             "depth": depth,
             "tab": tab_result,
+            "filters": filter_result,
             "search": search,
             "selected_cards": selected_cards,
             "notes": notes,
@@ -1133,6 +1294,47 @@ impl Tool for TopicScanTool {
     }
 }
 
+fn search_filters_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Search filter selections by group key. Use only options visible in the current search filter panel.",
+        "properties": {
+            "sort": {
+                "type": "string",
+                "enum": ["综合", "最新", "最多点赞", "最多评论", "最多收藏"]
+            },
+            "note_type": {
+                "type": "string",
+                "enum": ["不限", "视频", "图文"]
+            },
+            "publish_time": {
+                "type": "string",
+                "enum": ["不限", "一天内", "一周内", "半年内"]
+            },
+            "search_scope": {
+                "type": "string",
+                "enum": ["不限", "已看过", "未看过", "已关注"]
+            },
+            "distance": {
+                "type": "string",
+                "enum": ["不限", "同城", "附近"]
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn cards_from_payload(payload: &Value) -> Vec<XhsNoteCard> {
+    payload
+        .get("cards")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<XhsNoteCard>(v).ok())
+        .collect()
+}
+
 fn sanitize_for_filename(value: &str) -> String {
     value
         .chars()
@@ -1148,4 +1350,35 @@ fn sanitize_for_filename(value: &str) -> String {
         .chars()
         .take(48)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_scan_input_includes_search_filters() {
+        let filters = json!({
+            "sort": "最新",
+            "publish_time": "一周内"
+        });
+        let input =
+            topic_scan_input(" 胖丁 ", "quick", Some(" 视频 "), Some(&filters), true).unwrap();
+
+        assert_eq!(input["query"], "胖丁");
+        assert_eq!(input["depth"], "quick");
+        assert_eq!(input["tab_label"], "视频");
+        assert_eq!(input["filters"], filters);
+        assert_eq!(input["reset_filters"], true);
+    }
+
+    #[test]
+    fn topic_scan_input_omits_absent_search_filters() {
+        let input = topic_scan_input("胖丁", "", Some(" "), None, false).unwrap();
+
+        assert_eq!(input["depth"], "standard");
+        assert!(input.get("tab_label").is_none());
+        assert!(input.get("filters").is_none());
+        assert!(input.get("reset_filters").is_none());
+    }
 }

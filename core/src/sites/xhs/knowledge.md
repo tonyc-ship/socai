@@ -17,12 +17,13 @@ user's task and ground your answer in tool output.
 ## Tools
 
 `search_notes`, `extract_search_cards`, `list_search_tabs`,
-`click_search_tab`, `open_note`, `close_note`, `read_note`, `extract_note`,
-`extract_comments`, `scroll_in_note`, `collect_carousel_images`,
-`extract_profile`, `topic_scan`, `page_state`.
+`click_search_tab`, `list_search_filters`, `apply_search_filters`,
+`open_note`, `close_note`, `read_note`, `extract_note`, `extract_comments`,
+`scroll_in_note`, `collect_carousel_images`, `extract_profile`,
+`topic_scan`, `page_state`.
 
-Prefer `topic_scan` for any "research a topic" task — it bundles search,
-sample, and read in one call. For one-off lookups: `page_state` →
+Prefer `topic_scan` for any "research a topic" task, including filtered scans
+— it bundles search, sample, and read in one call. For one-off lookups: `page_state` →
 `search_notes` → `read_note` (or `open_note` + `extract_note` +
 `extract_comments`). Close any open note modal before searching again.
 
@@ -71,10 +72,15 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
 ## Workflows
 
 - Topic research: call `topic_scan(query=..., depth="standard")`. It
-  searches, optionally switches tab, samples visible cards in page order,
-  writes artifacts, closes note modals, and marks already analyzed posts.
+  searches, optionally switches tab, optionally applies search-result filters,
+  samples visible cards in page order, writes artifacts, closes note modals,
+  and marks already analyzed posts.
 - Quick breadth scan: use `search_notes` or `extract_search_cards` to
   inspect cards without opening notes.
+- Search filters: on a `search_results` page, use `list_search_filters` to
+  inspect the hover-only `筛选` popup, then `apply_search_filters` for visible
+  options such as sort order, note type, publish time, search scope, and
+  distance.
 - Manual note read: use `read_note(index=N)` or `read_note(note_id=...)`.
   Use `level="card"` for metadata only, `level="lite"` for body/comments, and
   `level="deep"` plus `include_media=true` only when images, OCR, video, or
