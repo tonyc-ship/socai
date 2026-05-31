@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Value};
 
-pub const TOOL_RESULT_TEXT_MAX_CHARS: usize = 2200;
+pub const TOOL_RESULT_TEXT_MAX_CHARS: usize = 10_000;
 pub const ASSISTANT_TEXT_MAX_CHARS: usize = 320;
 
 /// Trim a string to at most `max_chars` characters, suffixing
