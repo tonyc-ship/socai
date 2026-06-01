@@ -13,6 +13,12 @@ pub const XHS_HOME_URL: &str = "https://www.xiaohongshu.com/explore";
 
 const PAGE_SCRIPTS_JS: &str = include_str!("page_scripts.js");
 
+const SEARCH_AFTER_SUBMIT_SETTLE_MS: u64 = 1_000;
+const SEARCH_FILTER_PRE_OPEN_SETTLE_MS: u64 = 1_200;
+const SEARCH_FILTER_HOVER_SETTLE_MS: u64 = 350;
+const SEARCH_FILTER_BEFORE_CLICK_MS: u64 = 300;
+const SEARCH_FILTER_AFTER_CLICK_MS: u64 = 900;
+
 const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "note",
     "noteWithWait",
@@ -53,12 +59,6 @@ impl Default for ReadNoteOptions {
             max_video_frames: 4,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct SearchFilterSelection {
-    key: String,
-    label: String,
 }
 
 /// Site-aware XHS operations on top of a CDP `PageSession`.
@@ -212,6 +212,7 @@ impl<'a> XhsPageRuntime<'a> {
 
         sleep_ms(150).await;
         self.page.press_key("Enter").await?;
+        sleep_ms(SEARCH_AFTER_SUBMIT_SETTLE_MS).await;
         let state = self
             .wait_for_search_transition(query, wait_seconds.clamp(0.2, 6.0))
             .await?;
@@ -229,6 +230,7 @@ impl<'a> XhsPageRuntime<'a> {
             let y = number(submit, "y");
             if x > 0.0 && y > 0.0 {
                 self.page.click(x, y).await?;
+                sleep_ms(SEARCH_AFTER_SUBMIT_SETTLE_MS).await;
                 let state = self
                     .wait_for_search_transition(query, wait_seconds.clamp(0.2, 6.0))
                     .await?;
@@ -603,6 +605,8 @@ impl<'a> XhsPageRuntime<'a> {
         }))
     }
 
+    /// Hover the search page's filter trigger and return the currently
+    /// available filter groups/options, then close the popup.
     pub async fn list_search_filters(&self, wait_seconds: f64) -> Result<Value> {
         self.ensure_xhs(false).await?;
         if let Some(error) = self.search_results_only_error().await? {
@@ -613,6 +617,8 @@ impl<'a> XhsPageRuntime<'a> {
         Ok(filters)
     }
 
+    /// Apply search-result filters from the hover popup and return the
+    /// refreshed visible cards.
     pub async fn apply_search_filters(
         &self,
         filters: &Value,
@@ -623,10 +629,26 @@ impl<'a> XhsPageRuntime<'a> {
         if let Some(error) = self.search_results_only_error().await? {
             return Ok(error);
         }
-        let selections = match normalize_search_filter_request(filters) {
-            Ok(selections) => selections,
-            Err(error) => return Ok(error),
+        let Some(filter_obj) = filters.as_object() else {
+            return Ok(json!({
+                "ok": false,
+                "error": "filters_must_be_object",
+            }));
         };
+        let mut requested_filters = Vec::new();
+        for (key, value) in filter_obj {
+            let Some(label) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+                return Ok(json!({
+                    "ok": false,
+                    "error": "filter_option_must_be_string",
+                    "group": key,
+                }));
+            };
+            requested_filters.push((key.to_string(), label.to_string()));
+        }
+        self.wait_for_search_page_settled(wait_seconds.max(2.0))
+            .await?;
+        sleep_ms(SEARCH_FILTER_PRE_OPEN_SETTLE_MS).await;
 
         let mut current = self.open_search_filter_panel(wait_seconds).await?;
         if !current.get("ok").and_then(Value::as_bool).unwrap_or(false) {
@@ -634,6 +656,7 @@ impl<'a> XhsPageRuntime<'a> {
             return Ok(current);
         }
 
+        let mut changed_filters = false;
         if reset {
             let target = self
                 .expect_object("searchFilterTarget", Some(&json!({ "action": "reset" })))
@@ -642,10 +665,12 @@ impl<'a> XhsPageRuntime<'a> {
                 self.close_search_filter_panel().await?;
                 return Ok(target);
             }
+            sleep_ms(SEARCH_FILTER_BEFORE_CLICK_MS).await;
             self.page
                 .click(number(&target, "x"), number(&target, "y"))
                 .await?;
-            sleep_ms(350).await;
+            changed_filters = true;
+            sleep_ms(SEARCH_FILTER_AFTER_CLICK_MS).await;
             current = self.open_search_filter_panel(wait_seconds).await?;
             if !current.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                 self.close_search_filter_panel().await?;
@@ -653,26 +678,32 @@ impl<'a> XhsPageRuntime<'a> {
             }
         }
 
-        for selection in selections {
-            if !filter_group_available(&current, &selection.key) {
-                self.close_search_filter_panel().await?;
-                return Ok(json!({
-                    "ok": false,
-                    "error": "filter_group_not_available",
-                    "group": selection.key,
-                    "label": selection.label,
-                    "available_groups": available_filter_groups(&current),
-                    "filters": current,
-                }));
-            }
+        let group_order: Vec<String> = current
+            .get("groups")
+            .and_then(Value::as_array)
+            .map(|groups| {
+                groups
+                    .iter()
+                    .filter_map(|group| group.get("key").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut handled_groups = HashSet::new();
+        for group_key in group_order {
+            let Some((_, label)) = requested_filters.iter().find(|(key, _)| key == &group_key)
+            else {
+                continue;
+            };
+            handled_groups.insert(group_key.clone());
 
             let target = self
                 .expect_object(
                     "searchFilterTarget",
                     Some(&json!({
                         "action": "option",
-                        "group": selection.key,
-                        "label": selection.label,
+                        "group": group_key,
+                        "label": label,
                     })),
                 )
                 .await?;
@@ -685,10 +716,12 @@ impl<'a> XhsPageRuntime<'a> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
+                sleep_ms(SEARCH_FILTER_BEFORE_CLICK_MS).await;
                 self.page
                     .click(number(&target, "x"), number(&target, "y"))
                     .await?;
-                sleep_ms(450).await;
+                changed_filters = true;
+                sleep_ms(SEARCH_FILTER_AFTER_CLICK_MS).await;
             }
             current = self.open_search_filter_panel(wait_seconds).await?;
             if !current.get("ok").and_then(Value::as_bool).unwrap_or(false) {
@@ -697,8 +730,29 @@ impl<'a> XhsPageRuntime<'a> {
             }
         }
 
+        for (group_key, label) in &requested_filters {
+            if handled_groups.contains(group_key) {
+                continue;
+            }
+            let target = self
+                .expect_object(
+                    "searchFilterTarget",
+                    Some(&json!({
+                        "action": "option",
+                        "group": group_key,
+                        "label": label,
+                    })),
+                )
+                .await?;
+            self.close_search_filter_panel().await?;
+            return Ok(target);
+        }
+
         self.close_search_filter_panel().await?;
-        if wait_seconds > 0.0 {
+        if changed_filters {
+            self.wait_for_search_page_settled(wait_seconds.max(3.0))
+                .await?;
+        } else if wait_seconds > 0.0 {
             tokio::time::sleep(Duration::from_secs_f64(wait_seconds.min(6.0))).await;
         }
         let cards = self.extract_search_cards().await?;
@@ -711,6 +765,35 @@ impl<'a> XhsPageRuntime<'a> {
         }))
     }
 
+    async fn wait_for_search_page_settled(&self, timeout_s: f64) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s.max(0.5));
+        let mut stable_reads = 0;
+        while Instant::now() < deadline {
+            let state = self.expect_object("searchState", None).await?;
+            let loading = state
+                .get("loading")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let has_cards = state.get("card_count").and_then(Value::as_i64).unwrap_or(0) > 0;
+            let has_no_results = state
+                .get("has_no_results")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !loading && (has_cards || has_no_results) {
+                stable_reads += 1;
+                if stable_reads >= 3 {
+                    return Ok(());
+                }
+            } else {
+                stable_reads = 0;
+            }
+            sleep_ms(250).await;
+        }
+        Ok(())
+    }
+
+    /// Return a structured tool error when the current page is not a search
+    /// results page; filter controls only exist on `search_results`.
     async fn search_results_only_error(&self) -> Result<Option<Value>> {
         let state = self.expect_object("searchState", None).await?;
         if state
@@ -729,9 +812,16 @@ impl<'a> XhsPageRuntime<'a> {
         }
     }
 
+    /// Ensure the hover-only filter popup is visible and return its parsed
+    /// contents. If the trigger is off-screen, scroll to the top and retry.
     async fn open_search_filter_panel(&self, wait_seconds: f64) -> Result<Value> {
         let visible = self.expect_object("searchFilters", None).await?;
         if visible.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            sleep_ms(SEARCH_FILTER_HOVER_SETTLE_MS).await;
+            let settled = self.expect_object("searchFilters", None).await?;
+            if settled.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(settled);
+            }
             return Ok(visible);
         }
 
@@ -760,6 +850,11 @@ impl<'a> XhsPageRuntime<'a> {
         while Instant::now() < deadline {
             latest = self.expect_object("searchFilters", None).await?;
             if latest.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                sleep_ms(SEARCH_FILTER_HOVER_SETTLE_MS).await;
+                let settled = self.expect_object("searchFilters", None).await?;
+                if settled.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                    return Ok(settled);
+                }
                 return Ok(latest);
             }
             sleep_ms(120).await;
@@ -771,6 +866,8 @@ impl<'a> XhsPageRuntime<'a> {
         }
     }
 
+    /// Close the filter popup, preferring the visible `收起` control and
+    /// falling back to moving the mouse away from the popup trigger.
     async fn close_search_filter_panel(&self) -> Result<()> {
         let target = self
             .expect_object("searchFilterTarget", Some(&json!({ "action": "close" })))
@@ -1152,106 +1249,6 @@ async fn wait_for_note_state(
     }
 }
 
-const SEARCH_FILTER_GROUPS: &[(&str, &[&str])] = &[
-    (
-        "sort",
-        &["综合", "最新", "最多点赞", "最多评论", "最多收藏"],
-    ),
-    ("note_type", &["不限", "视频", "图文"]),
-    ("publish_time", &["不限", "一天内", "一周内", "半年内"]),
-    ("search_scope", &["不限", "已看过", "未看过", "已关注"]),
-    ("distance", &["不限", "同城", "附近"]),
-];
-
-fn normalize_search_filter_request(
-    filters: &Value,
-) -> std::result::Result<Vec<SearchFilterSelection>, Value> {
-    let Some(obj) = filters.as_object() else {
-        return Err(json!({
-            "ok": false,
-            "error": "filters_must_be_object",
-        }));
-    };
-
-    for key in obj.keys() {
-        if search_filter_options(key).is_none() {
-            return Err(json!({
-                "ok": false,
-                "error": "unsupported_filter_group",
-                "group": key,
-                "supported_groups": SEARCH_FILTER_GROUPS
-                    .iter()
-                    .map(|(key, _)| Value::String((*key).to_string()))
-                    .collect::<Vec<_>>(),
-            }));
-        }
-    }
-
-    let mut out = Vec::new();
-    for (key, options) in SEARCH_FILTER_GROUPS {
-        let Some(value) = obj.get(*key) else {
-            continue;
-        };
-        let Some(label) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
-            return Err(json!({
-                "ok": false,
-                "error": "filter_option_must_be_string",
-                "group": key,
-            }));
-        };
-        if !options.contains(&label) {
-            return Err(json!({
-                "ok": false,
-                "error": "unsupported_filter_option",
-                "group": key,
-                "label": label,
-                "supported_options": options
-                    .iter()
-                    .map(|value| Value::String((*value).to_string()))
-                    .collect::<Vec<_>>(),
-            }));
-        }
-        out.push(SearchFilterSelection {
-            key: (*key).to_string(),
-            label: label.to_string(),
-        });
-    }
-    Ok(out)
-}
-
-fn search_filter_options(key: &str) -> Option<&'static [&'static str]> {
-    SEARCH_FILTER_GROUPS
-        .iter()
-        .find(|(candidate, _)| *candidate == key)
-        .map(|(_, options)| *options)
-}
-
-fn available_filter_groups(filters: &Value) -> Vec<Value> {
-    filters
-        .get("available_groups")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_else(|| {
-            filters
-                .get("groups")
-                .and_then(Value::as_array)
-                .map(|groups| {
-                    groups
-                        .iter()
-                        .filter_map(|group| group.get("key").and_then(Value::as_str))
-                        .map(|key| Value::String(key.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
-}
-
-fn filter_group_available(filters: &Value, key: &str) -> bool {
-    available_filter_groups(filters)
-        .iter()
-        .any(|value| value.as_str() == Some(key))
-}
-
 fn parse_cards(raw: &[Value]) -> Vec<XhsNoteCard> {
     raw.iter()
         .enumerate()
@@ -1326,15 +1323,15 @@ fn search_transition_ok(state: &Value, query: &str) -> bool {
     {
         return false;
     }
-    if state.get("card_count").and_then(Value::as_i64).unwrap_or(0) > 0 {
-        return true;
-    }
     if state
         .get("loading")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         return false;
+    }
+    if state.get("card_count").and_then(Value::as_i64).unwrap_or(0) > 0 {
+        return true;
     }
     state
         .get("has_no_results")
@@ -1461,56 +1458,5 @@ mod tests {
 
         let body = json!({});
         assert_eq!(parse_note(&body, "lite").image_count, 0);
-    }
-
-    #[test]
-    fn normalizes_search_filter_request_in_canonical_order() {
-        let filters = json!({
-            "publish_time": "一周内",
-            "sort": "最新",
-        });
-
-        let selections = normalize_search_filter_request(&filters).unwrap();
-        assert_eq!(selections.len(), 2);
-        assert_eq!(selections[0].key, "sort");
-        assert_eq!(selections[0].label, "最新");
-        assert_eq!(selections[1].key, "publish_time");
-        assert_eq!(selections[1].label, "一周内");
-    }
-
-    #[test]
-    fn rejects_unknown_search_filter_group() {
-        let err = normalize_search_filter_request(&json!({ "unknown": "一周内" }))
-            .expect_err("unknown group should be rejected");
-
-        assert_eq!(err["ok"], false);
-        assert_eq!(err["error"], "unsupported_filter_group");
-        assert_eq!(err["group"], "unknown");
-    }
-
-    #[test]
-    fn rejects_unknown_search_filter_option() {
-        let err = normalize_search_filter_request(&json!({ "publish_time": "三天内" }))
-            .expect_err("unknown option should be rejected");
-
-        assert_eq!(err["ok"], false);
-        assert_eq!(err["error"], "unsupported_filter_option");
-        assert_eq!(err["group"], "publish_time");
-        assert_eq!(err["label"], "三天内");
-    }
-
-    #[test]
-    fn detects_available_filter_groups_from_panel_payload() {
-        let filters = json!({
-            "ok": true,
-            "groups": [
-                { "key": "sort", "options": [] },
-                { "key": "publish_time", "options": [] }
-            ]
-        });
-
-        assert!(filter_group_available(&filters, "sort"));
-        assert!(filter_group_available(&filters, "publish_time"));
-        assert!(!filter_group_available(&filters, "note_type"));
     }
 }
