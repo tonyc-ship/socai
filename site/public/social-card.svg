@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">socai social preview</title>
-  <desc id="desc">socai download page preview for a web agent for 小红书 research tasks.</desc>
+  <desc id="desc">socai download page preview for a Web Agent for RedNote research tasks.</desc>
   <rect width="1200" height="630" fill="#fafaf9"/>
   <rect x="40" y="40" width="1120" height="550" rx="28" fill="#ffffff" stroke="#e5e5e5"/>
 
@@ -13,8 +13,8 @@
       <text x="112" y="84" fill="#737373" font-size="18" font-weight="400" letter-spacing="0.4">socai.io</text>
     </g>
 
-    <text x="88" y="264" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">a web agent for</text>
-    <text x="88" y="346" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">小红书 research.</text>
+    <text x="88" y="264" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">a Web Agent for</text>
+    <text x="88" y="346" fill="#000000" font-size="72" font-weight="500" letter-spacing="-2.8">RedNote research.</text>
     <text x="92" y="414" fill="#737373" font-size="25" font-weight="400" letter-spacing="-0.2">connect chrome cdp. run focused browser tasks.</text>
 
     <g transform="translate(88 472)">
@@ -39,7 +39,7 @@
       <path d="M46 190H250" stroke="#e5e5e5"/>
 
       <rect x="28" y="244" width="126" height="34" rx="17" fill="#000000"/>
-      <text x="91" y="266" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="500">agent tasks</text>
+      <text x="91" y="266" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="500">Agent tasks</text>
       <rect x="170" y="244" width="122" height="34" rx="6" fill="#ffffff" stroke="#d4d4d4"/>
       <text x="231" y="266" text-anchor="middle" fill="#000000" font-size="12" font-weight="500">new task</text>
 
