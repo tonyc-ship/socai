@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { applyLanguageToDocument, formatTabs, getLanguage, isSupportedLanguage, setLanguage, t } from "./lib/i18n";
 import { agentPanel } from "./panels/tasks";
 
 export type Status =
@@ -131,6 +132,7 @@ function render(): void {
       <header class="topbar">
         <div class="brand">${MARK_SVG}<span class="brand-name">socai</span></div>
         <div class="topbar-controls">
+          ${renderLanguageSwitch()}
           ${connectionStatusBar()}
           ${agentPanel.renderHeader()}
         </div>
@@ -138,9 +140,31 @@ function render(): void {
       <main class="stack">${sections}</main>
     </div>
   `;
+  bindLanguageSwitch();
   bindConnectionStatusBar();
   agentPanel.bindHeader(state);
   for (const p of PANELS) p.bind(state);
+}
+
+function renderLanguageSwitch(): string {
+  const language = getLanguage();
+  return `
+    <div class="language-toggle" role="group" aria-label="${htmlEsc(t("language.switcherAria"))}">
+      <button class="language-toggle__button" type="button" data-lang-option="zh" aria-pressed="${language === "zh" ? "true" : "false"}">中文</button>
+      <button class="language-toggle__button" type="button" data-lang-option="en" aria-pressed="${language === "en" ? "true" : "false"}">en</button>
+    </div>
+  `;
+}
+
+function bindLanguageSwitch(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-lang-option]").forEach((option) => {
+    option.addEventListener("click", () => {
+      const nextLanguage = option.dataset.langOption;
+      if (!isSupportedLanguage(nextLanguage) || getLanguage() === nextLanguage) return;
+      setLanguage(nextLanguage);
+      render();
+    });
+  });
 }
 
 function connectionStatusBar(): string {
@@ -155,37 +179,37 @@ function connectionStatusBar(): string {
 function connectionBadge(): string {
   switch (status.state) {
     case "disconnected":
-      return `<button id="chrome-connect" type="button" class="badge badge-button" aria-label="connect chrome"><i class="badge-dot badge-dot-muted" aria-hidden="true"></i>chrome · disconnected</button>`;
+      return `<button id="chrome-connect" type="button" class="badge badge-button" aria-label="${htmlEsc(t("chrome.connectAria"))}"><i class="badge-dot badge-dot-muted" aria-hidden="true"></i>${htmlEsc(t("chrome.label"))} · ${htmlEsc(t("chrome.disconnected"))}</button>`;
     case "connecting":
-      return `<button type="button" class="badge badge-button" disabled><i class="badge-dot badge-dot-ink badge-dot-pulse" aria-hidden="true"></i>chrome · connecting · ${status.attempt}/3</button>`;
+      return `<button type="button" class="badge badge-button" disabled><i class="badge-dot badge-dot-ink badge-dot-pulse" aria-hidden="true"></i>${htmlEsc(t("chrome.label"))} · ${htmlEsc(t("chrome.connecting"))} · ${status.attempt}/3</button>`;
     case "connected":
-      return `<button id="chrome-status-toggle" type="button" class="badge badge-button" aria-expanded="${connectionDetailsOpen ? "true" : "false"}" aria-label="show chrome connection status"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>chrome · connected</button>`;
+      return `<button id="chrome-status-toggle" type="button" class="badge badge-button" aria-expanded="${connectionDetailsOpen ? "true" : "false"}" aria-label="${htmlEsc(t("chrome.statusToggleAria"))}"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>${htmlEsc(t("chrome.label"))} · ${htmlEsc(t("chrome.connected"))}</button>`;
   }
 }
 
 function renderConnectionDialog(connected: Extract<Status, { state: "connected" }>): string {
-  const tabs = `${connected.page_count} tab${connected.page_count === 1 ? "" : "s"}`;
+  const tabs = formatTabs(connected.page_count);
   return `
-    <div class="topbar-popover connection-dialog" role="dialog" aria-label="chrome connection status">
+    <div class="topbar-popover connection-dialog" role="dialog" aria-label="${htmlEsc(t("chrome.dialogAria"))}">
       <div class="connection-dialog-head">
-        <p class="t-eyebrow connection-dialog-title">chrome</p>
-        <span class="badge"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>connected</span>
+        <p class="t-eyebrow connection-dialog-title">${htmlEsc(t("chrome.label"))}</p>
+        <span class="badge"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>${htmlEsc(t("chrome.connected"))}</span>
       </div>
       <div class="connection-meta">
         <div>
-          <p class="t-eyebrow">tabs</p>
-          <p class="t-mono">${tabs}</p>
+          <p class="t-eyebrow">${htmlEsc(t("chrome.tabs"))}</p>
+          <p class="t-mono">${htmlEsc(tabs)}</p>
         </div>
         <div>
-          <p class="t-eyebrow">browser</p>
+          <p class="t-eyebrow">${htmlEsc(t("chrome.browser"))}</p>
           <p class="t-mono">${htmlEsc(connected.browser_version)}</p>
         </div>
         <div class="connection-meta-wide">
-          <p class="t-eyebrow">endpoint</p>
+          <p class="t-eyebrow">${htmlEsc(t("chrome.endpoint"))}</p>
           <p class="t-mono connection-endpoint">${htmlEsc(connected.endpoint)}</p>
         </div>
       </div>
-      <button id="chrome-disconnect" type="button" class="btn-ghost">disconnect</button>
+      <button id="chrome-disconnect" type="button" class="btn-ghost">${htmlEsc(t("chrome.disconnect"))}</button>
     </div>
   `;
 }
@@ -242,6 +266,8 @@ function eventPathHasClass(event: Event, className: string): boolean {
 }
 
 async function main(): Promise<void> {
+  applyLanguageToDocument();
+
   await listen<Status>("cdp:status_changed", (event) => {
     status = event.payload;
     if (status.state !== "connected") connectionDetailsOpen = false;

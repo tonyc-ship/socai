@@ -11,6 +11,7 @@ import type {
   ShellState,
 } from "../main";
 import { esc } from "../lib/html";
+import { t } from "../lib/i18n";
 import { renderAgentEvent, renderHistoryPage } from "./task_history";
 import { renderNewTaskPage } from "./task_new";
 
@@ -180,12 +181,12 @@ export namespace agentPanel {
     const selected = selectedModel();
     const expanded = configOpen || selectedNeedsKey() ? "true" : "false";
     if (!selected) {
-      return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-muted" aria-hidden="true"></i>agent · loading</button>`;
+      return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-muted" aria-hidden="true"></i>${esc(t("agent.label"))} · ${esc(t("agent.loading"))}</button>`;
     }
     if (!selected.has_key) {
-      return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-hollow" aria-hidden="true"></i>agent · ${esc(selected.display_name)} · key needed</button>`;
+      return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-hollow" aria-hidden="true"></i>${esc(t("agent.label"))} · ${esc(selected.display_name)} · ${esc(t("agent.keyNeeded"))}</button>`;
     }
-    return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>agent · ${esc(selected.display_name)}</button>`;
+    return `<button id="agent-config-toggle" type="button" class="badge badge-button" aria-expanded="${expanded}"><i class="badge-dot badge-dot-ink" aria-hidden="true"></i>${esc(t("agent.label"))} · ${esc(selected.display_name)}</button>`;
   }
 
   function renderConfigPopover(): string {
@@ -195,7 +196,7 @@ export namespace agentPanel {
       .map((m) => {
         const active = model === m.default_model;
         const dotClass = active ? "badge-dot-ink" : "badge-dot-hollow";
-        const flag = m.has_key ? "" : `<span class="t-small subtle">key needed</span>`;
+        const flag = m.has_key ? "" : `<span class="t-small subtle">${esc(t("agent.keyNeeded"))}</span>`;
         return `
           <button
             type="button"
@@ -214,9 +215,9 @@ export namespace agentPanel {
       .join("");
 
     return `
-      <div class="topbar-popover agent-config-popover" role="dialog" aria-label="agent configuration">
-        <div class="agent-model-list" role="listbox" aria-label="select agent model">
-          ${options || `<p class="t-small subtle">loading…</p>`}
+      <div class="topbar-popover agent-config-popover" role="dialog" aria-label="${esc(t("agent.configurationAria"))}">
+        <div class="agent-model-list" role="listbox" aria-label="${esc(t("agent.selectModelAria"))}">
+          ${options || `<p class="t-small subtle">${esc(t("common.loading"))}</p>`}
         </div>
         ${selected && !selected.has_key ? renderHeaderKeyEntry(selected) : ""}
       </div>
@@ -227,27 +228,27 @@ export namespace agentPanel {
     const openai = selected.provider === "openai";
     return `
       <div class="agent-config-key">
-        <p class="t-small subtle">${esc(selected.display_name)} needs a credential.</p>
+        <p class="t-small subtle">${esc(t("agent.needsCredential", { model: selected.display_name }))}</p>
         ${openai ? `
           <div class="agent-config-actions">
             <button id="agent-header-codex-login" type="button" class="btn-primary btn-compact" ${codexStarting ? "disabled" : ""}>
-              ${codexStarting ? "Opening..." : "Connect My ChatGPT Subscription"}
+              ${codexStarting ? esc(t("agent.opening")) : esc(t("agent.connectChatgpt"))}
             </button>
           </div>
         ` : ""}
-        ${openai ? `<p class="t-small subtle">Or,</p>` : ""}
+        ${openai ? `<p class="t-small subtle">${esc(t("common.or"))}</p>` : ""}
         <div class="agent-config-key-row">
           <input
             id="agent-header-key-input"
             class="input-field"
             type="password"
-            placeholder="paste api key"
+            placeholder="${esc(t("agent.pasteApiKey"))}"
             value="${esc(pendingKey)}"
             autocomplete="off"
             ${savingKey ? "disabled" : ""}
           />
           <button id="agent-header-key-save" type="button" data-provider="${esc(selected.provider)}" class="btn-primary btn-compact" ${savingKey ? "disabled" : ""}>
-            ${savingKey ? "saving…" : "save"}
+            ${savingKey ? esc(t("common.saving")) : esc(t("common.save"))}
           </button>
         </div>
         ${keyMessage ? `<p class="t-small subtle">${esc(keyMessage)}</p>` : ""}
@@ -309,9 +310,9 @@ export namespace agentPanel {
 
   function renderPageTabs(): string {
     return `
-      <div class="page-switch" aria-label="task pages">
-        <button id="page-new" type="button" class="page-switch-button ${page === "new" ? "page-switch-button-active" : ""}">new task</button>
-        <button id="page-history" type="button" class="page-switch-button ${page === "history" ? "page-switch-button-active" : ""}">history</button>
+      <div class="page-switch" aria-label="${esc(t("task.pagesAria"))}">
+        <button id="page-new" type="button" class="page-switch-button ${page === "new" ? "page-switch-button-active" : ""}">${esc(t("task.new"))}</button>
+        <button id="page-history" type="button" class="page-switch-button ${page === "history" ? "page-switch-button-active" : ""}">${esc(t("task.history"))}</button>
       </div>
     `;
   }
@@ -415,7 +416,7 @@ export namespace agentPanel {
     }
 
     keyMessage = "";
-    keyError = "codex login not detected yet. return to socai after login completes.";
+    keyError = t("agent.codexLoginMissing");
     savingKey = false;
     shell.rerender();
   }

@@ -142,8 +142,43 @@ body.has-paper > * { position: relative; z-index: 1; }
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-2);
+  flex-wrap: wrap;
 }
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+}
+.language-toggle__button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-pill);
+  color: var(--fg-soft);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  padding: 5px 9px;
+  white-space: nowrap;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.language-toggle__button:hover { color: var(--ink-0); }
+.language-toggle__button[aria-pressed="true"] {
+  background: var(--ink-0);
+  color: var(--ink-9);
+}
+.language-toggle__button[aria-pressed="true"]:hover { color: var(--ink-9); }
 .connection-status,
 .agent-status {
   display: inline-flex;
