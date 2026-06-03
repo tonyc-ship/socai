@@ -195,13 +195,10 @@ impl DaemonState {
 
     async fn topic_scan(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
-        let depth = args
-            .get("depth")
-            .and_then(Value::as_str)
-            .unwrap_or("standard");
         let tab_label = args.get("tab_label").and_then(Value::as_str);
+        let num_notes = args.get("num_notes").and_then(Value::as_i64);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        topic_scan_command(page, &query, depth, tab_label).await
+        topic_scan_command(page, &query, tab_label, num_notes).await
     }
 
     async fn extract_note(&mut self, args: Value) -> Result<Value> {

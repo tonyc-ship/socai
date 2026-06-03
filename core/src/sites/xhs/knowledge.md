@@ -70,11 +70,14 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
 
 ## Workflows
 
-- Topic research: call `topic_scan(query=..., depth="standard")`. It
-  searches, optionally switches tab, samples visible cards in page order,
-  writes artifacts, closes note modals, and marks already analyzed posts.
-- Quick breadth scan: use `search_notes` or `extract_search_cards` to
-  inspect cards without opening notes.
+- Topic research: call `topic_scan(query=..., num_notes=N)`. It searches,
+  optionally switches tab, then reads notes top-to-bottom in feed order —
+  opening each (which pages the next cards in as it scrolls), reading its body
+  + top comments, writing artifacts, closing note modals, and marking already
+  analyzed posts. Default `num_notes` is 10.
+- Quick breadth scan: use `search_notes` (atomic — returns the first results
+  page's cards, no scrolling) or `extract_search_cards` to inspect cards
+  without opening notes.
 - Manual note read: use `read_note(index=N)` or `read_note(note_id=...)`.
   Use `level="card"` for metadata only, `level="lite"` for body/comments, and
   `level="deep"` plus `include_media=true` only when images, OCR, video, or

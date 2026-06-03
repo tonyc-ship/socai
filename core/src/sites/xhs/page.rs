@@ -473,23 +473,12 @@ impl<'a> XhsPageRuntime<'a> {
             .extract_note_with_options(wait_seconds, options.clone())
             .await?;
         if !note_id.is_empty() && !note.note_id.is_empty() && note.note_id != note_id {
-            if let Some(link) = tokenized_open_link(&open, note_id) {
-                self.page.navigate_with_timeout(&link, 60.0).await?;
-                let note = self
-                    .extract_note_with_options(wait_seconds, options)
-                    .await?;
-                if note.note_id == note_id {
-                    return Ok(json!({
-                        "ok": true,
-                        "entity": note,
-                        "open": open,
-                        "fallback": {
-                            "strategy": "tokenized_link_navigation",
-                            "url": link,
-                        },
-                    }));
-                }
-            }
+            // Opened the wrong note. Do NOT fall back to a full-page navigate
+            // to the tokenized URL: that loads the note full-screen and tears
+            // down the search grid + `__INITIAL_STATE__.search` state, which
+            // breaks every subsequent open in a topic scan. Report a soft
+            // failure; the caller closes the overlay and moves on intact.
+            let _ = options;
             return Ok(json!({
                 "ok": false,
                 "entity": note,
@@ -1062,21 +1051,6 @@ fn normalize_image_url(value: &str) -> String {
         return String::new();
     }
     trimmed.replacen("http://", "https://", 1)
-}
-
-fn tokenized_open_link(open: &Option<Value>, note_id: &str) -> Option<String> {
-    let link = open
-        .as_ref()?
-        .get("target")?
-        .get("link")?
-        .as_str()?
-        .trim()
-        .to_string();
-    if link.contains(note_id) {
-        Some(link)
-    } else {
-        None
-    }
 }
 
 fn note_is_open(state: &Value) -> bool {

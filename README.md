@@ -32,10 +32,10 @@ From the repo root:
 ```bash
 cargo install --path cli
 
-socai search_notes "运营爆款思路"                         # search + return note cards
-socai topic_scan "运营爆款思路"                           # default-depth scan + read top notes
-socai extract_note --note-id <id>                         # open a note from the current page
-socai stop                                                # stop the daemon (closes the tool tab)
+socai topic_scan "运营爆款思路" --num-notes 30            # 搜索并逐个获取帖子
+socai search_notes "运营爆款思路"                         # 只打开搜索结果页
+socai extract_note --note-id <id>                       # open a note from the current page
+socai stop                                              # stop the daemon (closes the tool tab)
 ```
 
 Add `--pretty` to any tool command for indented JSON.

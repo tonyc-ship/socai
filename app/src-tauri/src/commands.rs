@@ -73,10 +73,11 @@ pub async fn tool_search_notes(
 pub async fn tool_topic_scan(
     runtime: State<'_, SocaiRuntime>,
     query: String,
+    num_notes: Option<i64>,
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
-    let result = topic_scan_command(page.clone(), &query, "standard", None).await;
+    let result = topic_scan_command(page.clone(), &query, None, num_notes).await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }
