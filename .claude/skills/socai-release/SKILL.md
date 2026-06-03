@@ -47,6 +47,7 @@ A helper script wraps this command, finds the created run, watches it, and print
 - Do not cancel an in-progress production release unless the user explicitly asks.
 - Do not delete tags/releases unless the workflow failed and the user explicitly approves cleanup.
 - If local files are dirty, do not include unrelated changes in release work. The workflow publishes from the remote ref, not local uncommitted files.
+- Treat the website deploy as a separate, optional follow-up task. Do not block, alter, or rerun the release workflow just to update `socai.io`.
 
 ## Preflight checks
 
@@ -122,6 +123,16 @@ gh run watch "${run_id}" --repo tonyc-ship/socai --exit-status
 
 Use `minor` or `major` instead of `patch` only when requested.
 
+## Prompt for website deployment after release
+
+After a successful production release and release verification, prompt the user to deploy the static website immediately afterward. Use wording like:
+
+> Release `vX.Y.Z` is published. `socai.io` is a separate static Vercel deployment and may still show the previous version until it is redeployed. Do you want me to deploy `socai.io` now with `SOCAI_RELEASE_VERSION=X.Y.Z`?
+
+If the user says yes, switch to the `socai-site-deployment` skill and run the production site deployment with `SOCAI_RELEASE_VERSION` set to the published version. If the user says no, stop after noting that `/download` already points to GitHub's latest release asset.
+
+Do not make site deployment mandatory and do not change the GitHub release workflow to deploy the website automatically.
+
 ## Test the release workflow without publishing
 
 Only use a branch named `fix/release-*`. The workflow will build, use ad-hoc signing if production signing secrets are unavailable, and skip the publish job.
@@ -166,6 +177,7 @@ Common failure notes:
 - Missing Apple secrets on `main`: production release cannot proceed until signing/notarization secrets are configured.
 - Build/notarization failure after no `main` push: inspect logs; the workflow attempts to clean up draft release/tag state.
 - Failure after `main was already updated`: leave state for manual inspection; do not delete the release/tag without explicit approval.
+- If `socai.io` still shows the previous version after a release, do not rerun the release. Use the `socai-site-deployment` skill to redeploy the site with `SOCAI_RELEASE_VERSION` set to the published version.
 
 ## Verify the published release
 
@@ -186,11 +198,13 @@ Expected:
 Verify download redirects:
 
 ```bash
+tag="$(gh release view --repo tonyc-ship/socai --json tagName --jq '.tagName')"
 curl -I https://socai.io/download
 curl -I -L --max-time 30 -o /dev/null -w 'code=%{http_code}\nfinal=%{url_effective}\n' https://socai.io/download
+curl -sSI https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg | grep -F "/releases/download/${tag}/socai-macos-universal.dmg"
 ```
 
-Expected final URL should resolve through GitHub latest release download and produce a successful response.
+Expected final URL should resolve through GitHub latest release download and produce a successful response. The visible `socai.io` version is only expected to update after the separate site deployment follow-up.
 
 Optional artifact check:
 
@@ -215,4 +229,6 @@ Include:
 - Published tag/version and release URL
 - Asset presence (`socai-macos-universal.dmg`)
 - `/download` verification summary
+- Whether the user was prompted to deploy `socai.io`, and whether they accepted or deferred
+- If site deployment was accepted, include the `socai.io` deployment/visible version verification summary from the site deployment skill
 - Any failures, cleanup performed, or manual blockers

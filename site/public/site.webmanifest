@@ -1,7 +1,7 @@
 {
   "name": "socai",
   "short_name": "socai",
-  "description": "socai is a web agent for 小红书 research tasks.",
+  "description": "socai is a Web Agent for RedNote research tasks.",
   "start_url": "/",
   "scope": "/",
   "background_color": "#fafaf9",

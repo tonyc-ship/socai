@@ -1,5 +1,11 @@
 import type { ModelInfo, Status, ShellState } from "../main";
 import { esc } from "../lib/html";
+import {
+  formatRunningTaskCount,
+  getLocale,
+  taskStatusLabel,
+  t,
+} from "../lib/i18n";
 import type { AgentTaskView, TaskMode, ToolCommand } from "./tasks";
 
 export interface NewTaskPageProps {
@@ -28,8 +34,8 @@ export function renderNewTaskPage(props: NewTaskPageProps): string {
     <div class="new-task-page">
       <div class="new-task-compose">
         <div class="new-task-copy">
-          <h2 class="t-h2">what should socai research?</h2>
-          <p class="t-small subtle">start a one-shot browser task. socai opens a temporary chrome tab, runs the agent, saves the result, then closes the tab.</p>
+          <h2 class="t-h2">${esc(t("task.hero"))}</h2>
+          <p class="t-small subtle">${esc(t("task.lede"))}</p>
         </div>
         <div class="compose-form-stack ${gated ? "is-masked" : ""}">
           <div class="compose-form-inner" aria-hidden="${gated ? "true" : "false"}">
@@ -64,13 +70,13 @@ function renderTaskForm(
       >${esc(props.draft)}</textarea>
 
       <div class="task-controls">
-        <div class="mode-switch" aria-label="task mode">
-          <button id="mode-agent" type="button" class="mode-button ${agentMode ? "mode-button-active" : ""}">agent tasks</button>
-          <button id="mode-tools" type="button" class="mode-button ${!agentMode ? "mode-button-active" : ""}">tool tests</button>
+        <div class="mode-switch" aria-label="${esc(t("task.modeAria"))}">
+          <button id="mode-agent" type="button" class="mode-button ${agentMode ? "mode-button-active" : ""}">${esc(t("task.modeAgent"))}</button>
+          <button id="mode-tools" type="button" class="mode-button ${!agentMode ? "mode-button-active" : ""}">${esc(t("task.modeTools"))}</button>
         </div>
         ${agentMode ? renderAgentSummary(props.selectedModel) : renderToolPicker(props.toolCommand)}
         <button id="task-submit" type="submit" class="btn-primary" ${runDisabled ? "disabled" : ""}>
-          ${running ? "starting…" : agentMode ? "new task" : "run test"}
+          ${running ? esc(t("task.starting")) : agentMode ? esc(t("task.new")) : esc(t("task.runTest"))}
         </button>
       </div>
     </form>
@@ -79,29 +85,29 @@ function renderTaskForm(
 
 function renderInlineGuard(mode: TaskMode, toolCommand: ToolCommand, selected: ModelInfo | undefined): string {
   if (mode !== "agent") return renderToolHint(toolCommand);
-  if (!selected) return `<p class="t-small subtle">loading agent models…</p>`;
-  if (!selected.has_key) return `<p class="t-small subtle">add a key in the agent menu to run this model.</p>`;
+  if (!selected) return `<p class="t-small subtle">${esc(t("task.loadingModels"))}</p>`;
+  if (!selected.has_key) return `<p class="t-small subtle">${esc(t("task.addKeyHint"))}</p>`;
   return "";
 }
 
 function renderAgentSummary(selected: ModelInfo | undefined): string {
   const summary = selected
-    ? `agent · ${esc(selected.display_name)} · <span class="t-mono">${esc(selected.default_model)}</span>`
-    : "agent · loading";
+    ? `${esc(t("agent.label"))} · ${esc(selected.display_name)} · <span class="t-mono">${esc(selected.default_model)}</span>`
+    : `${esc(t("agent.label"))} · ${esc(t("agent.loading"))}`;
   return `<p class="t-small subtle task-context">${summary}</p>`;
 }
 
 function renderToolPicker(toolCommand: ToolCommand): string {
   const tools: Array<[ToolCommand, string]> = [
-    ["search_notes", "search notes"],
-    ["topic_scan", "topic scan"],
-    ["extract_note", "extract note"],
+    ["search_notes", t("tool.searchNotes")],
+    ["topic_scan", t("tool.topicScan")],
+    ["extract_note", t("tool.extractNote")],
   ];
   return `
-    <div class="tool-picker" aria-label="tool">
+    <div class="tool-picker" aria-label="${esc(t("tool.pickerAria"))}">
       ${tools.map(([cmd, label]) => `
         <button type="button" data-tool="${cmd}" class="tool-choice ${toolCommand === cmd ? "tool-choice-active" : ""}">
-          ${label}
+          ${esc(label)}
         </button>
       `).join("")}
     </div>
@@ -110,48 +116,49 @@ function renderToolPicker(toolCommand: ToolCommand): string {
 
 function renderToolHint(toolCommand: ToolCommand): string {
   const hint = {
-    search_notes: "test search_notes on a fresh temporary xiaohongshu tab.",
-    topic_scan: "test topic_scan on a fresh temporary xiaohongshu tab.",
-    extract_note: "paste a note id or url; socai opens a fresh temporary page and extracts it.",
+    search_notes: t("tool.hintSearchNotes"),
+    topic_scan: t("tool.hintTopicScan"),
+    extract_note: t("tool.hintExtractNote"),
   }[toolCommand];
-  return `<p class="t-small subtle">${hint}</p>`;
+  return `<p class="t-small subtle">${esc(hint)}</p>`;
 }
 
 function taskPlaceholder(mode: TaskMode, toolCommand: ToolCommand): string {
-  if (mode === "agent") return "tell socai what you want researched…\neach task opens its own temporary chrome tab.";
+  if (mode === "agent") return t("task.agentPlaceholder");
   switch (toolCommand) {
-    case "search_notes": return "search query…";
-    case "topic_scan": return "topic to scan…";
-    case "extract_note": return "note id or url…";
+    case "search_notes": return t("tool.placeholderSearch");
+    case "topic_scan": return t("tool.placeholderTopic");
+    case "extract_note": return t("tool.placeholderNote");
   }
 }
 
 function renderConnectOverlay(status: Status): string {
   const connecting = status.state === "connecting";
   const label = connecting
-    ? `chrome · connecting · ${(status as Extract<Status, { state: "connecting" }>).attempt}/3`
-    : "chrome · disconnected";
-  const heading = connecting ? "looking for chrome…" : "connect chrome to start";
-  const cta = connecting ? "connecting…" : "connect chrome →";
+    ? `${t("chrome.label")} · ${t("chrome.connecting")} · ${(status as Extract<Status, { state: "connecting" }>).attempt}/3`
+    : `${t("chrome.label")} · ${t("chrome.disconnected")}`;
+  const heading = connecting ? t("chrome.lookingForChrome") : t("chrome.connectToStart");
+  const cta = connecting ? t("chrome.connectingCta") : t("chrome.connectCta");
   const dotClass = connecting ? "badge-dot-ink badge-dot-pulse" : "badge-dot-hollow";
   return `
-    <div class="connect-overlay" role="dialog" aria-label="chrome required">
+    <div class="connect-overlay" role="dialog" aria-label="${esc(t("chrome.requiredAria"))}">
       <span class="connect-overlay-pill">
-        <i class="badge-dot ${dotClass}" aria-hidden="true"></i>${label}
+        <i class="badge-dot ${dotClass}" aria-hidden="true"></i>${esc(label)}
       </span>
-      <h3 class="connect-overlay-head">${heading}</h3>
+      <h3 class="connect-overlay-head">${esc(heading)}</h3>
       <button
         id="overlay-chrome-connect"
         type="button"
         class="btn-primary connect-overlay-cta"
         ${connecting ? "disabled" : ""}
-      >${cta}</button>
+      >${esc(cta)}</button>
       <a
+        id="overlay-remote-debugging-help"
         class="connect-overlay-link t-small"
-        href="https://developer.chrome.com/docs/devtools/remote-debugging"
+        href="https://socai.io/connect"
         target="_blank"
         rel="noopener noreferrer"
-      >how do i enable remote debugging? ↗</a>
+      >${esc(t("chrome.remoteDebuggingHelp"))}</a>
     </div>
   `;
 }
@@ -163,7 +170,7 @@ function renderRunningChip(tasks: AgentTaskView[]): string {
   if (running.length === 0) return "";
   const first = running[0];
   const isOne = running.length === 1;
-  const count = isOne ? "1 task running" : `${running.length} tasks running`;
+  const count = formatRunningTaskCount(running.length);
   const taskLabel = isOne
     ? `<span class="running-chip-dot" aria-hidden="true">·</span><span class="running-chip-task">${esc(first.task)}</span>`
     : "";
@@ -187,10 +194,10 @@ function renderTaskGlance(tasks: AgentTaskView[]): string {
     <div class="task-glance">
       <section class="task-glance-card">
         <div class="task-glance-head">
-          <p class="t-eyebrow result-label">recent</p>
-          <button id="recent-history-link" type="button" class="btn-ghost btn-compact">view history</button>
+          <p class="t-eyebrow result-label">${esc(t("task.recent"))}</p>
+          <button id="recent-history-link" type="button" class="btn-ghost btn-compact">${esc(t("task.viewHistory"))}</button>
         </div>
-        ${renderTaskSummaryRows(recent, "no recent tasks yet.")}
+        ${renderTaskSummaryRows(recent, t("task.noRecent"))}
       </section>
     </div>
   `;
@@ -198,7 +205,7 @@ function renderTaskGlance(tasks: AgentTaskView[]): string {
 
 function renderTaskSummaryRows(items: AgentTaskView[], emptyText: string): string {
   if (items.length === 0) {
-    return `<p class="t-small placeholder task-summary-empty">${emptyText}</p>`;
+    return `<p class="t-small placeholder task-summary-empty">${esc(emptyText)}</p>`;
   }
   return `
     <div class="task-summary-list">
@@ -207,7 +214,7 @@ function renderTaskSummaryRows(items: AgentTaskView[], emptyText: string): strin
           <span class="task-row-glyph task-row-glyph-${esc(task.status)}" aria-hidden="true">${taskStatusGlyph(task.status)}</span>
           <span class="task-row-main">
             <span class="task-row-title">${esc(task.task)}</span>
-            <span class="task-row-meta">${esc(task.status)} · ${esc(formatTime(task.created_at))}</span>
+            <span class="task-row-meta">${esc(taskStatusLabel(task.status))} · ${esc(formatTime(task.created_at))}</span>
           </span>
         </button>
       `).join("")}
@@ -217,7 +224,7 @@ function renderTaskSummaryRows(items: AgentTaskView[], emptyText: string): strin
 
 function renderToolResult(props: NewTaskPageProps): string {
   if (props.toolInFlight) {
-    return `<pre class="result-pre result-running">running: ${esc(props.toolCommand)}(${esc(JSON.stringify(props.draft.trim()))})</pre>`;
+    return `<pre class="result-pre result-running">${esc(t("tool.running"))}: ${esc(props.toolCommand)}(${esc(JSON.stringify(props.draft.trim()))})</pre>`;
   }
   if (props.toolError) {
     return `<pre class="result-pre result-error">${esc(props.toolError)}</pre>`;
@@ -225,7 +232,7 @@ function renderToolResult(props: NewTaskPageProps): string {
   if (props.toolResult) {
     return `<pre class="result-pre">${esc(JSON.stringify(props.toolResult, null, 2))}</pre>`;
   }
-  return `<p class="t-small placeholder">no tool test result yet.</p>`;
+  return `<p class="t-small placeholder">${esc(t("tool.noResult"))}</p>`;
 }
 
 function taskStatusGlyph(status: AgentTaskView["status"]): string {
@@ -241,5 +248,5 @@ function taskStatusGlyph(status: AgentTaskView["status"]): string {
 
 function formatTime(ms: number): string {
   if (!ms) return "";
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(ms).toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit" });
 }

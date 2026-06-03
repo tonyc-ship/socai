@@ -73,10 +73,11 @@ pub async fn tool_search_notes(
 pub async fn tool_topic_scan(
     runtime: State<'_, SocaiRuntime>,
     query: String,
+    num_notes: Option<i64>,
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
-    let result = topic_scan_command(page.clone(), &query, "standard", None, None).await;
+    let result = topic_scan_command(page.clone(), &query, None, None, num_notes).await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }
@@ -227,6 +228,41 @@ pub async fn agent_list_models() -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
+/// Open a web URL in the user's default browser. Tauri's webview does not hand
+/// `target="_blank"` links off to the OS browser, so external links (e.g. the
+/// "how to enable remote debugging" guide) route through here. Restricted to
+/// http(s) so the frontend can't open arbitrary schemes or local files.
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("refusing to open non-web url: {url}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = Command::new("open");
+        c.arg(&url);
+        c
+    };
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut c = Command::new("xdg-open");
+        c.arg(&url);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", &url]);
+        c
+    };
+
+    command
+        .status()
+        .map_err(|e| format!("failed to open {url}: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agent_open_codex_login() -> Result<Value, String> {
     tokio::task::spawn_blocking(start_codex_login)
@@ -286,6 +322,7 @@ fn find_codex_binary() -> Option<PathBuf> {
     })
     .find(|path| path.is_file())
 }
+
 
 #[tauri::command]
 pub async fn agent_task_start(

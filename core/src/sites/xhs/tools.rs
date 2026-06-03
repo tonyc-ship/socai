@@ -15,6 +15,9 @@ use serde_json::{json, Value};
 
 use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime};
 
+/// Default number of notes `topic_scan` reads when the caller doesn't specify.
+const DEFAULT_NUM_NOTES: i64 = 10;
+
 /// XHS agent playbook: browser-lock rule, tool inventory, anti-bot rules,
 /// page states, entity fields, workflows, reading levels, evidence rules,
 /// and Chinese UI hints. Embedded at compile time so the agent prompt always
@@ -43,11 +46,6 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(ListSearchTabsTool { page: page.clone() }),
         Arc::new(ClickSearchTabTool { page: page.clone() }),
-        Arc::new(ListSearchFiltersTool { page: page.clone() }),
-        Arc::new(ApplySearchFiltersTool {
-            page: page.clone(),
-            history: history.clone(),
-        }),
         Arc::new(OpenNoteTool { page: page.clone() }),
         Arc::new(CloseNoteTool { page: page.clone() }),
         Arc::new(ReadNoteTool {
@@ -134,14 +132,14 @@ pub async fn search_notes_command(page: Arc<PageSession>, query: &str) -> anyhow
 pub async fn topic_scan_command(
     page: Arc<PageSession>,
     query: &str,
-    depth: &str,
     tab_label: Option<&str>,
     filters: Option<&Value>,
+    num_notes: Option<i64>,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
-        topic_scan_input(query, depth, tab_label, filters)?,
+        topic_scan_input(query, tab_label, filters, num_notes)?,
     )
     .await
 }
@@ -159,17 +157,19 @@ fn search_notes_input(query: &str) -> anyhow::Result<Value> {
 
 fn topic_scan_input(
     query: &str,
-    depth: &str,
     tab_label: Option<&str>,
     filters: Option<&Value>,
+    num_notes: Option<i64>,
 ) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
-        "depth": defaulted_str(depth, "standard"),
     });
     insert_optional_str(&mut input, "tab_label", tab_label);
     if let Some(filters) = filters {
         input["filters"] = filters.clone();
+    }
+    if let Some(n) = num_notes {
+        input["num_notes"] = json!(n.max(1));
     }
     Ok(input)
 }
@@ -282,15 +282,6 @@ fn trimmed_required(value: &str, label: &str) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
-fn defaulted_str<'a>(value: &'a str, default: &'a str) -> &'a str {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default
-    } else {
-        trimmed
-    }
-}
-
 fn insert_optional_str(input: &mut Value, key: &str, value: Option<&str>) {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
@@ -358,9 +349,10 @@ impl Tool for SearchNotesTool {
     }
 
     fn description(&self) -> &str {
-        "Search Xiaohongshu for notes matching `query`. Returns the cards \
-         visible on the results page (id, title, author, image). Use this \
-         before `open_note` to pick which note to read."
+        "Search Xiaohongshu for notes matching `query`. Atomic: submits the \
+         search and returns the first results page's cards (id, title, author, \
+         image) without scrolling. Use this before `open_note` to pick which \
+         note to read; to research a topic in one call use `topic_scan`."
     }
 
     fn input_schema(&self) -> Value {
@@ -766,102 +758,6 @@ impl Tool for ClickSearchTabTool {
     }
 }
 
-/// list_search_filters() -> {ok, groups, ...}
-pub struct ListSearchFiltersTool {
-    page: Arc<PageSession>,
-}
-
-#[async_trait]
-impl Tool for ListSearchFiltersTool {
-    fn name(&self) -> &str {
-        "list_search_filters"
-    }
-
-    fn description(&self) -> &str {
-        "Hover the Xiaohongshu search page's `筛选` control and list the \
-         currently available filter groups/options. Use this after \
-         `search_notes` and after any `click_search_tab`, because the filter \
-         panel changes when the active search tab changes."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "wait_seconds": {
-                    "type": "number",
-                    "description": "Seconds to wait for the hover popup to appear",
-                    "default": 1.0
-                }
-            }
-        })
-    }
-
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
-        let xhs = XhsPageRuntime::new(&self.page);
-        let value = xhs.list_search_filters(wait_seconds).await?;
-        Ok(json_result(&value))
-    }
-}
-
-/// apply_search_filters(filters, reset?, wait_seconds?) -> {ok, filters, cards}
-pub struct ApplySearchFiltersTool {
-    page: Arc<PageSession>,
-    history: Arc<XhsHistoryStore>,
-}
-
-#[async_trait]
-impl Tool for ApplySearchFiltersTool {
-    fn name(&self) -> &str {
-        "apply_search_filters"
-    }
-
-    fn description(&self) -> &str {
-        "Hover the Xiaohongshu search page's `筛选` control and choose filter \
-         options from the current panel. Each group is single-select, but \
-         different groups can be combined. Call `list_search_filters` first \
-         after switching tabs so you only request groups/options that are \
-         currently visible."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "filters": search_filters_schema(),
-                "reset": {
-                    "type": "boolean",
-                    "description": "Click reset before applying the requested filters",
-                    "default": false
-                },
-                "wait_seconds": {
-                    "type": "number",
-                    "description": "Seconds to wait for the hover popup/results refresh",
-                    "default": 1.0
-                }
-            },
-            "required": ["filters"]
-        })
-    }
-
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let filters = input
-            .get("filters")
-            .ok_or_else(|| anyhow::anyhow!("missing filters"))?;
-        let reset = get_bool(&input, "reset", false);
-        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
-        let xhs = XhsPageRuntime::new(&self.page);
-        let mut value = xhs
-            .apply_search_filters(filters, reset, wait_seconds)
-            .await?;
-        if let Some(cards) = value.get_mut("cards") {
-            self.history.annotate_cards(cards);
-        }
-        Ok(json_result(&value))
-    }
-}
-
 /// scroll_in_note(pixels?) -> {ok, scroll_top, ...}
 pub struct ScrollInNoteTool {
     page: Arc<PageSession>,
@@ -966,52 +862,27 @@ impl Tool for ExtractProfileTool {
     }
 }
 
-/// topic_scan(query, tab_label?, filters?, depth?) -> aggregated topic bundle
+/// topic_scan(query, tab_label?, filters?, num_notes?) -> aggregated topic bundle
 ///
 /// Composite macro: search → optional tab switch → optional search filters →
-/// sample N visible cards in page order → read each (deep or lite depending on depth profile) →
-/// bundle into one artifact. Prefer this for any "research a topic on XHS"
-/// task — it returns search results plus the note bodies plus comments in
-/// one tool call, so the agent doesn't have to chain 10+ tools by hand.
+/// collect up to `num_notes` cards in page order (scrolling the feed only when
+/// the first page is too small) → open each note and extract its body + top
+/// comments → bundle into one artifact. Prefer this for any "research a topic
+/// on XHS" task — it returns search results plus the note bodies plus comments
+/// in one tool call, so the agent doesn't have to chain 10+ tools by hand.
+///
+/// Defaults to `DEFAULT_NUM_NOTES` notes; pass a larger `num_notes` to scan
+/// more (each note is opened, so latency grows roughly linearly).
 pub struct TopicScanTool {
     page: Arc<PageSession>,
     llm_provider: Option<Arc<dyn LlmProvider>>,
     history: Arc<XhsHistoryStore>,
 }
 
-struct ScanProfile {
-    deep: usize,
-    lite: usize,
-    deep_comments: i64,
-    lite_comments: i64,
-    include_media: bool,
-}
-
-fn scan_profile_for(depth: &str) -> ScanProfile {
-    match depth.to_ascii_lowercase().as_str() {
-        "quick" => ScanProfile {
-            deep: 2,
-            lite: 4,
-            deep_comments: 6,
-            lite_comments: 0,
-            include_media: false,
-        },
-        "deep" => ScanProfile {
-            deep: 6,
-            lite: 4,
-            deep_comments: 20,
-            lite_comments: 4,
-            include_media: true,
-        },
-        _ => ScanProfile {
-            deep: 3,
-            lite: 5,
-            deep_comments: 12,
-            lite_comments: 0,
-            include_media: false,
-        },
-    }
-}
+/// Number of top comments pulled per scanned note. Comments are read for free
+/// from the already-open note modal's DOM (one extra JS read, no extra
+/// navigation), so every scan includes them.
+const TOPIC_SCAN_COMMENTS: i64 = 12;
 
 #[async_trait]
 impl Tool for TopicScanTool {
@@ -1022,11 +893,13 @@ impl Tool for TopicScanTool {
     fn description(&self) -> &str {
         "Xiaohongshu topic research macro: search → optional tab switch → \
          optional search filters → \
-         sample top visible cards in page order → read deep/lite notes → \
-         return one compact bundle (search results + selected cards + note \
-         bodies + comments). Prefer this for XHS topic research. Do not \
-         repeat the same scan at a deeper depth unless the previous scan \
-         was clearly insufficient."
+         collect up to `num_notes` cards in page order (scrolling only if the \
+         first page is too small) → open each note and read its body + top \
+         comments → return one compact bundle (search results + selected cards \
+         + note bodies + comments). Defaults to 10 notes; pass a larger \
+         `num_notes` to scan more (each note is opened, so latency scales with \
+         it). Prefer this for XHS topic research. Do not repeat the same scan \
+         unless the previous one was clearly insufficient."
     }
 
     fn input_schema(&self) -> Value {
@@ -1039,10 +912,11 @@ impl Tool for TopicScanTool {
                     "enum": ["全部", "图文", "视频", "用户"]
                 },
                 "filters": search_filters_schema(),
-                "depth": {
-                    "type": "string",
-                    "enum": ["quick", "standard", "deep"],
-                    "default": "standard"
+                "num_notes": {
+                    "type": "integer",
+                    "description": "Number of notes to read (body + top comments each). The first results page is used directly; only if it holds fewer than this does the feed scroll for more. Each note is opened, so latency scales with this.",
+                    "default": DEFAULT_NUM_NOTES,
+                    "minimum": 1
                 }
             },
             "required": ["query"]
@@ -1053,15 +927,18 @@ impl Tool for TopicScanTool {
         let query = get_str(&input, "query")
             .ok_or_else(|| anyhow::anyhow!("missing query"))?
             .to_string();
-        let depth = get_str(&input, "depth").unwrap_or("standard").to_string();
+        let num_notes = get_i64(&input, "num_notes", DEFAULT_NUM_NOTES).max(1);
         let tab_label = get_str(&input, "tab_label").unwrap_or("").to_string();
         let filters = input
             .get("filters")
             .filter(|value| !value.is_null())
             .cloned();
-        let profile = scan_profile_for(&depth);
+        // Every scanned note is read the same way: open it, extract the body,
+        // and pull top comments. Per-note image vision is off (it's the one
+        // genuinely expensive enrichment and not needed for topic research).
+        let include_media = false;
 
-        let media = media_for(ctx, self.llm_provider.clone(), profile.include_media)?;
+        let media = media_for(ctx, self.llm_provider.clone(), include_media)?;
         let media_baseline: Option<TimingSnapshot> = media.as_ref().map(|m| m.timing().snapshot());
         let xhs = XhsPageRuntime::new_with_media(&self.page, media.clone());
 
@@ -1073,14 +950,15 @@ impl Tool for TopicScanTool {
 
         let search = xhs.search_notes(&query, 2.0).await?;
 
-        // Optional tab switch, optional filter application, then re-extract cards.
+        // Optional tab switch (re-runs the search under the chosen tab), then
+        // optional filter application.
         let mut tab_result = Value::Object(serde_json::Map::new());
         if !tab_label.is_empty() {
             tab_result = xhs.click_search_tab(&tab_label, 1.5).await?;
         }
 
         let mut filter_result = Value::Object(serde_json::Map::new());
-        let cards: Vec<XhsNoteCard> = if let Some(filters) = filters {
+        if let Some(filters) = filters {
             filter_result = xhs.apply_search_filters(&filters, false, 1.5).await?;
             if !filter_result
                 .get("ok")
@@ -1094,17 +972,16 @@ impl Tool for TopicScanTool {
                 let payload = json!({
                     "ok": false,
                     "query": query,
-                    "depth": depth,
                     "tab": tab_result,
                     "filters": filter_result,
                     "search": search,
                     "selected_cards": [],
                     "notes": [],
                     "sampling": {
-                        "max_deep_notes": profile.deep,
-                        "max_lite_notes": profile.lite,
-                        "depth": depth,
-                        "include_media": profile.include_media,
+                        "num_notes": num_notes,
+                        "selected": 0,
+                        "comments_per_note": TOPIC_SCAN_COMMENTS,
+                        "include_media": include_media,
                     },
                     "timing": {
                         "media": {},
@@ -1113,34 +990,57 @@ impl Tool for TopicScanTool {
                 });
                 return Ok(json_result(&payload));
             }
-            cards_from_payload(&filter_result)
-        } else if !tab_label.is_empty() {
-            xhs.extract_search_cards().await?
-        } else {
-            cards_from_payload(&search)
-        };
+        }
 
-        let total_limit = profile.deep + profile.lite;
-        let selected: Vec<&XhsNoteCard> = cards.iter().take(total_limit).collect();
-        let sampled_ids: Vec<String> = selected
-            .iter()
-            .filter(|c| !c.note_id.is_empty())
-            .map(|c| c.note_id.clone())
-            .collect();
-        ctx.add_topic_scan_note_ids(&sampled_ids);
+        // Every sampled note is read with the same extraction level (body +
+        // top comments).
+        let level = "deep";
+        let comment_count = TOPIC_SCAN_COMMENTS;
+        let requested_media = include_media;
+        let want = num_notes.max(1) as usize;
 
+        // Read top-to-bottom: pull cards from the results state (which only
+        // grows) in feed order and open each. Opening a card scrolls it into
+        // view, which pages the later cards in on its own — there's no
+        // separate "scroll to the bottom and collect everything first" phase.
+        // When we've consumed every loaded card, wait briefly for that async
+        // paging to land; if nothing more loads after a few tries, stop.
         let mut notes: Vec<Value> = Vec::new();
-        for (idx, card) in selected.iter().enumerate() {
-            let level = if idx < profile.deep { "deep" } else { "lite" };
-            let comment_count = if level == "deep" {
-                profile.deep_comments
+        let mut selected: Vec<XhsNoteCard> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cursor = 0usize;
+        let mut stalls = 0usize;
+
+        while notes.len() < want {
+            let cards = xhs.extract_search_cards().await?;
+            if cursor >= cards.len() {
+                if stalls >= 3 {
+                    break;
+                }
+                stalls += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                continue;
+            }
+            stalls = 0;
+            let card = cards[cursor].clone();
+            cursor += 1;
+            let dedup = if !card.note_id.is_empty() {
+                card.note_id.clone()
+            } else if !card.link.is_empty() {
+                card.link.clone()
             } else {
-                profile.lite_comments
+                format!("pos:{}", card.position)
             };
+            if !seen.insert(dedup) {
+                continue;
+            }
+            if !card.note_id.is_empty() {
+                ctx.add_topic_scan_note_ids(std::slice::from_ref(&card.note_id));
+            }
+            selected.push(card.clone());
 
             // Dedup: skip notes already processed at this level or deeper
             // within the same run OR in a previous run (cross-run history).
-            let requested_media = profile.include_media && level == "deep";
             if !card.note_id.is_empty()
                 && ctx.has_processed_note(&card.note_id, level, requested_media)
             {
@@ -1148,7 +1048,7 @@ impl Tool for TopicScanTool {
                     "scan_level": level,
                     "source_position": card.position,
                     "skipped": {"reason": "already_processed"},
-                    "entity": card,
+                    "entity": &card,
                 }));
                 continue;
             }
@@ -1162,7 +1062,7 @@ impl Tool for TopicScanTool {
                     "scan_level": level,
                     "source_position": card.position,
                     "skipped": {"reason": "already_analyzed", "history": entry},
-                    "entity": card,
+                    "entity": &card,
                 }));
                 ctx.mark_processed_note(&card.note_id, level, requested_media);
                 continue;
@@ -1194,17 +1094,34 @@ impl Tool for TopicScanTool {
                     "scan_level": level,
                     "source_position": card.position,
                     "ok": false,
-                    "entity": card,
+                    "entity": &card,
                     "error": format!("{e:#}"),
                 }),
             };
 
-            // Pull comments separately for deep notes.
+            // Pull comments separately after waiting for the slower comment
+            // list to hydrate. Body content often appears before comments.
             if level == "deep" && comment_count > 0 {
-                if let Ok(comments) = xhs.extract_comments(comment_count).await {
+                if let Ok(comments_payload) =
+                    xhs.extract_comments_with_wait(comment_count, 5.0).await
+                {
+                    let comments = comments_payload
+                        .get("comments")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
                     let entity_map = entry.get_mut("entity").and_then(|v| v.as_object_mut());
                     if let Some(map) = entity_map {
                         map.insert("top_comments".into(), Value::Array(comments));
+                        map.insert(
+                            "top_comments_wait".into(),
+                            json!({
+                                "ready": comments_payload.get("ready").and_then(Value::as_bool).unwrap_or(false),
+                                "reason": comments_payload.get("reason").and_then(Value::as_str).unwrap_or(""),
+                                "waited_ms": comments_payload.get("waited_ms").and_then(Value::as_i64).unwrap_or(0),
+                                "attempts": comments_payload.get("attempts").and_then(Value::as_i64).unwrap_or(0),
+                            }),
+                        );
                     }
                 }
             }
@@ -1235,24 +1152,22 @@ impl Tool for TopicScanTool {
         if let Some(cards) = search.get_mut("cards") {
             history_snapshot.annotate_cards(cards);
         }
-        let mut selected_cards =
-            serde_json::to_value(selected.iter().map(|c| (*c).clone()).collect::<Vec<_>>())?;
+        let mut selected_cards = serde_json::to_value(&selected)?;
         history_snapshot.annotate_cards(&mut selected_cards);
 
         let payload = json!({
             "ok": search.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "query": query,
-            "depth": depth,
             "tab": tab_result,
             "filters": filter_result,
             "search": search,
             "selected_cards": selected_cards,
             "notes": notes,
             "sampling": {
-                "max_deep_notes": profile.deep,
-                "max_lite_notes": profile.lite,
-                "depth": depth,
-                "include_media": profile.include_media,
+                "num_notes": num_notes,
+                "selected": selected.len(),
+                "comments_per_note": TOPIC_SCAN_COMMENTS,
+                "include_media": include_media,
             },
             "timing": {
                 "media": media_timing,
@@ -1311,17 +1226,6 @@ fn search_filters_schema() -> Value {
     })
 }
 
-fn cards_from_payload(payload: &Value) -> Vec<XhsNoteCard> {
-    payload
-        .get("cards")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|v| serde_json::from_value::<XhsNoteCard>(v).ok())
-        .collect()
-}
-
 fn sanitize_for_filename(value: &str) -> String {
     value
         .chars()
@@ -1337,32 +1241,4 @@ fn sanitize_for_filename(value: &str) -> String {
         .chars()
         .take(48)
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn topic_scan_input_includes_search_filters() {
-        let filters = json!({
-            "sort": "最新",
-            "publish_time": "一周内"
-        });
-        let input = topic_scan_input(" 胖丁 ", "quick", Some(" 视频 "), Some(&filters)).unwrap();
-
-        assert_eq!(input["query"], "胖丁");
-        assert_eq!(input["depth"], "quick");
-        assert_eq!(input["tab_label"], "视频");
-        assert_eq!(input["filters"], filters);
-    }
-
-    #[test]
-    fn topic_scan_input_omits_absent_search_filters() {
-        let input = topic_scan_input("胖丁", "", Some(" "), None).unwrap();
-
-        assert_eq!(input["depth"], "standard");
-        assert!(input.get("tab_label").is_none());
-        assert!(input.get("filters").is_none());
-    }
 }

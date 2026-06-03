@@ -994,6 +994,60 @@ const SocaiXhsPageScripts = (() => {
     return out;
   }
 
+  function commentsSignature(items) {
+    return items
+      .map((item) => `${item.username || ''}:${String(item.text || '').slice(0, 40)}`)
+      .join('|');
+  }
+
+  function commentsWithWait(opts = {}) {
+    const timeoutMs = Math.max(500, Number(opts.timeout_ms) || 5000);
+    const settleMs = Math.max(300, Number(opts.settle_ms) || 900);
+    const emptySettleMs = Math.max(700, Number(opts.empty_settle_ms) || 1800);
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      let latest = [];
+      let lastSig = '';
+      let stableSince = startedAt;
+      let emptyShellSeenAt = 0;
+      let attempts = 0;
+      const tick = () => {
+        attempts += 1;
+        const root = getNoteRoot();
+        const items = comments(opts);
+        const sig = commentsSignature(items);
+        if (sig !== lastSig) {
+          lastSig = sig;
+          stableSince = Date.now();
+        }
+        latest = items;
+
+        if (items.length > 0 && Date.now() - stableSince >= settleMs) {
+          resolve({ ready: true, reason: 'comments_ready', waited_ms: Date.now() - startedAt, attempts, comments: items });
+          return;
+        }
+
+        const noCommentCopy = /这是一片荒地|还没有评论哦|暂无评论|还没有评论|抢首评/.test(norm(text(root)).slice(0, 1200));
+        if (!items.length && noCommentCopy && !pendingHydration(root)) {
+          if (!emptyShellSeenAt) emptyShellSeenAt = Date.now();
+          if (Date.now() - emptyShellSeenAt >= emptySettleMs) {
+            resolve({ ready: true, reason: 'no_comments', waited_ms: Date.now() - startedAt, attempts, comments: [] });
+            return;
+          }
+        } else {
+          emptyShellSeenAt = 0;
+        }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          resolve({ ready: items.length > 0, reason: items.length > 0 ? 'timeout_with_comments' : 'timeout', waited_ms: Date.now() - startedAt, attempts, comments: latest });
+          return;
+        }
+        setTimeout(tick, 250);
+      };
+      tick();
+    });
+  }
+
   // ── modal-internal scroll (Promise-resolved) ─────────────────
   function scrollInNote(opts = {}) {
     const pixels = Number(opts.pixels) || 400;
@@ -1067,6 +1121,7 @@ const SocaiXhsPageScripts = (() => {
     closeNote,
     noteOpen,
     comments,
+    commentsWithWait,
     scrollInNote,
     carouselImages,
     profileInfo,

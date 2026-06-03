@@ -57,6 +57,7 @@ pub fn run() {
             commands::cdp_disconnect,
             commands::cdp_status,
             commands::cdp_refresh,
+            commands::open_external,
             commands::tool_search_notes,
             commands::tool_topic_scan,
             commands::tool_extract_note,
