@@ -1,7 +1,12 @@
 ---
-import { readFile } from "node:fs/promises";
-
 import "../styles/global.css";
+import SiteHeader from "../components/SiteHeader.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import {
+    message as messageFor,
+    formatMessage as formatMessageFor,
+} from "../lib/i18n";
+import { resolveReleaseVersion } from "../lib/release";
 
 const githubUrl = "/github";
 const downloadPath = "/download";
@@ -25,6 +30,8 @@ const messages = {
             homeAria: "socai home",
             linksAria: "site links",
             github: "github",
+            connect: "connect chrome",
+            contact: "contact",
             languageAria: "language",
             releaseLabel: "release version {version}",
         },
@@ -62,6 +69,7 @@ const messages = {
         footer: {
             linksAria: "footer links",
             download: "download",
+            connect: "connect",
             contact: "contact",
         },
         prompts: [
@@ -83,6 +91,8 @@ const messages = {
             homeAria: "socai 首页",
             linksAria: "站点链接",
             github: "github",
+            connect: "连接 Chrome",
+            contact: "联系",
             languageAria: "语言",
             releaseLabel: "发布版本 {version}",
         },
@@ -120,6 +130,7 @@ const messages = {
         footer: {
             linksAria: "页脚链接",
             download: "下载",
+            connect: "连接",
             contact: "联系",
         },
         prompts: [
@@ -131,19 +142,13 @@ const messages = {
     },
 };
 
-function message(path, language = defaultLanguage) {
-    const value = path
-        .split(".")
-        .reduce((cursor, key) => cursor?.[key], messages[language]);
-    return typeof value === "string" ? value : "";
-}
-
-function formatMessage(path, values = {}, language = defaultLanguage) {
-    return message(path, language).replace(
-        /\{(\w+)\}/g,
-        (_, key) => values[key] ?? "",
-    );
-}
+const message = (path: string, language = defaultLanguage) =>
+    messageFor(messages, path, language);
+const formatMessage = (
+    path: string,
+    values: Record<string, string | number> = {},
+    language = defaultLanguage,
+) => formatMessageFor(messages, path, values, language);
 
 const initialPrompts = messages[defaultLanguage].prompts;
 const pageTitle = message("meta.title");
@@ -151,77 +156,6 @@ const pageDescription = message("meta.description");
 const socialImageAlt = message("meta.socialImageAlt");
 const releaseVersion = await resolveReleaseVersion();
 const releaseValues = JSON.stringify({ version: releaseVersion });
-
-function normalizeReleaseVersion(value: unknown): string | null {
-    if (typeof value !== "string") {
-        return null;
-    }
-
-    const match = value.trim().match(/^v?(\d+\.\d+\.\d+)$/);
-    return match?.[1] ?? null;
-}
-
-async function fetchLatestReleaseVersion(): Promise<string | null> {
-    try {
-        const headers = new Headers({
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        });
-        const token = import.meta.env.GITHUB_TOKEN || import.meta.env.GH_TOKEN;
-
-        if (token) {
-            headers.set("Authorization", `Bearer ${token}`);
-        }
-
-        const response = await fetch(
-            "https://api.github.com/repos/tonyc-ship/socai/releases/latest",
-            {
-                headers,
-            },
-        );
-
-        if (!response.ok) {
-            return null;
-        }
-
-        const release = await response.json();
-        return (
-            normalizeReleaseVersion(release.tag_name) ??
-            normalizeReleaseVersion(release.name)
-        );
-    } catch {
-        return null;
-    }
-}
-
-async function readLocalAppVersion(): Promise<string | null> {
-    try {
-        const configUrl = new URL(
-            "../../../app/src-tauri/tauri.conf.json",
-            import.meta.url,
-        );
-        const config = JSON.parse(await readFile(configUrl, "utf8"));
-        return normalizeReleaseVersion(config.version);
-    } catch {
-        return null;
-    }
-}
-
-async function resolveReleaseVersion(): Promise<string> {
-    const version =
-        normalizeReleaseVersion(import.meta.env.SOCAI_RELEASE_VERSION) ??
-        normalizeReleaseVersion(import.meta.env.PUBLIC_SOCAI_RELEASE_VERSION) ??
-        (await readLocalAppVersion()) ??
-        (await fetchLatestReleaseVersion());
-
-    if (!version) {
-        throw new Error(
-            "Unable to resolve release version; set SOCAI_RELEASE_VERSION to a MAJOR.MINOR.PATCH value.",
-        );
-    }
-
-    return version;
-}
 ---
 
 <html lang={defaultHtmlLanguage} data-language={defaultLanguage}>
@@ -291,95 +225,11 @@ async function resolveReleaseVersion(): Promise<string> {
     </head>
     <body>
         <div class="site-shell">
-            <header
-                class="site-header"
-                aria-label={message("nav.primaryAria")}
-                data-i18n-aria-label="nav.primaryAria"
-            >
-                <a
-                    class="brand"
-                    href="/"
-                    aria-label={message("nav.homeAria")}
-                    data-i18n-aria-label="nav.homeAria"
-                >
-                    <svg
-                        class="brand__mark"
-                        viewBox="0 0 32 32"
-                        width="20"
-                        height="20"
-                        fill="none"
-                        aria-hidden="true"
-                    >
-                        <rect
-                            x="2.5"
-                            y="2.5"
-                            width="27"
-                            height="27"
-                            rx="3"
-                            stroke="currentColor"
-                            stroke-width="1.6"></rect>
-                        <rect
-                            x="16"
-                            y="16"
-                            width="10"
-                            height="10"
-                            rx="1.2"
-                            fill="currentColor"></rect>
-                    </svg>
-                    <span>socai</span>
-                </a>
-
-                <nav
-                    class="site-nav"
-                    aria-label={message("nav.linksAria")}
-                    data-i18n-aria-label="nav.linksAria"
-                >
-                    <a class="nav-link nav-link--github" href={githubUrl}>
-                        <svg
-                            viewBox="0 0 16 16"
-                            width="13"
-                            height="13"
-                            fill="currentColor"
-                            aria-hidden="true"
-                        >
-                            <path
-                                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
-                            ></path>
-                        </svg>
-                        <span data-i18n="nav.github"
-                            >{message("nav.github")}</span
-                        >
-                    </a>
-                    <div
-                        class="language-toggle"
-                        role="group"
-                        aria-label={message("nav.languageAria")}
-                        data-i18n-aria-label="nav.languageAria"
-                    >
-                        <button
-                            class="language-toggle__button"
-                            type="button"
-                            data-lang-option="zh"
-                            aria-pressed="true">中文</button
-                        >
-                        <button
-                            class="language-toggle__button"
-                            type="button"
-                            data-lang-option="en"
-                            aria-pressed="false">en</button
-                        >
-                    </div>
-                    <span
-                        class="release-chip"
-                        data-release-chip
-                        data-i18n-aria-label="nav.releaseLabel"
-                        data-i18n-values={releaseValues}
-                        aria-label={formatMessage("nav.releaseLabel", {
-                            version: releaseVersion,
-                        })}>{releaseVersion}</span
-                    >
-                </nav>
-            </header>
+            <SiteHeader
+                messages={messages}
+                language={defaultLanguage}
+                releaseVersion={releaseVersion}
+            />
 
             <main class="page-main">
                 <section class="hero" aria-labelledby="hero-title">
@@ -603,21 +453,11 @@ async function resolveReleaseVersion(): Promise<string> {
                 </section>
             </main>
 
-            <footer class="site-footer">
-                <span>© socai · {currentYear}</span>
-                <nav
-                    aria-label={message("footer.linksAria")}
-                    data-i18n-aria-label="footer.linksAria"
-                >
-                    <a href={githubUrl}>github</a>
-                    <a href={downloadPath} data-i18n="footer.download"
-                        >{message("footer.download")}</a
-                    >
-                    <a href="mailto:hi@socai.app" data-i18n="footer.contact"
-                        >{message("footer.contact")}</a
-                    >
-                </nav>
-            </footer>
+            <SiteFooter
+                messages={messages}
+                language={defaultLanguage}
+                currentYear={currentYear}
+            />
         </div>
 
         <script
@@ -626,220 +466,7 @@ async function resolveReleaseVersion(): Promise<string> {
             set:html={JSON.stringify(messages)}
         />
         <script>
-            const i18nElement = document.getElementById("site-i18n");
-            const dictionary = JSON.parse(i18nElement?.textContent || "{}");
-            const languageKey = "socai-language";
-            const languageOptions = Array.from(
-                document.querySelectorAll("[data-lang-option]"),
-            );
-            const supportedLanguages = Object.keys(dictionary);
-            const typewriter = document.querySelector("[data-typewriter]");
-            const prefersReducedMotion = window.matchMedia(
-                "(prefers-reduced-motion: reduce)",
-            ).matches;
-            let typewriterRun = 0;
-
-            const isSupportedLanguage = (language) =>
-                supportedLanguages.includes(language);
-
-            const getMessage = (language, path) => {
-                const table =
-                    dictionary[language] ||
-                    dictionary.zh ||
-                    dictionary.en ||
-                    {};
-                const value = path
-                    .split(".")
-                    .reduce((cursor, key) => cursor?.[key], table);
-                return typeof value === "string" ? value : "";
-            };
-
-            const getValues = (element) => {
-                const value = element.getAttribute("data-i18n-values");
-
-                if (!value) {
-                    return {};
-                }
-
-                try {
-                    return JSON.parse(value);
-                } catch {
-                    return {};
-                }
-            };
-
-            const interpolate = (value, replacements = {}) =>
-                value.replace(
-                    /\{(\w+)\}/g,
-                    (_, key) => replacements[key] ?? "",
-                );
-
-            const sleep = (ms) =>
-                new Promise((resolve) => window.setTimeout(resolve, ms));
-
-            const renderTypewriter = (chars, runId) => {
-                if (
-                    runId !== typewriterRun ||
-                    !(typewriter instanceof HTMLElement)
-                ) {
-                    return false;
-                }
-
-                typewriter.textContent = chars.join("");
-                return true;
-            };
-
-            const startTypewriter = (phrases) => {
-                typewriterRun += 1;
-                const runId = typewriterRun;
-
-                if (!(typewriter instanceof HTMLElement)) {
-                    return;
-                }
-
-                const nextPhrases = Array.isArray(phrases)
-                    ? phrases.filter(
-                          (phrase) =>
-                              typeof phrase === "string" && phrase.length > 0,
-                      )
-                    : [];
-                typewriter.dataset.phrases = JSON.stringify(nextPhrases);
-                typewriter.textContent = nextPhrases[0] || "";
-
-                if (prefersReducedMotion || nextPhrases.length < 2) {
-                    return;
-                }
-
-                const run = async () => {
-                    let phraseIndex = 0;
-                    await sleep(2200);
-
-                    while (runId === typewriterRun) {
-                        const currentPhrase = Array.from(
-                            nextPhrases[phraseIndex],
-                        );
-
-                        for (let i = currentPhrase.length; i >= 0; i -= 1) {
-                            if (
-                                !renderTypewriter(
-                                    currentPhrase.slice(0, i),
-                                    runId,
-                                )
-                            ) {
-                                return;
-                            }
-                            await sleep(20);
-                        }
-
-                        phraseIndex = (phraseIndex + 1) % nextPhrases.length;
-                        const nextPhrase = Array.from(nextPhrases[phraseIndex]);
-                        await sleep(280);
-
-                        for (let i = 1; i <= nextPhrase.length; i += 1) {
-                            if (
-                                !renderTypewriter(nextPhrase.slice(0, i), runId)
-                            ) {
-                                return;
-                            }
-                            await sleep(44 + Math.random() * 26);
-                        }
-
-                        await sleep(2600);
-                    }
-                };
-
-                run();
-            };
-
-            const chooseInitialLanguage = () => {
-                try {
-                    const storedLanguage =
-                        window.localStorage.getItem(languageKey);
-                    if (storedLanguage && isSupportedLanguage(storedLanguage)) {
-                        return storedLanguage;
-                    }
-                } catch {
-                    // Ignore storage errors and fall back to the default language.
-                }
-
-                return "zh";
-            };
-
-            const applyLanguage = (language, shouldPersist = false) => {
-                const nextLanguage = isSupportedLanguage(language)
-                    ? language
-                    : "zh";
-                const htmlLanguage = nextLanguage === "zh" ? "zh-CN" : "en";
-
-                document.documentElement.lang = htmlLanguage;
-                document.documentElement.dataset.language = nextLanguage;
-                document.title = getMessage(nextLanguage, "meta.title");
-
-                document.querySelectorAll("[data-i18n]").forEach((element) => {
-                    const path = element.getAttribute("data-i18n");
-                    const value = path ? getMessage(nextLanguage, path) : "";
-
-                    if (value) {
-                        element.textContent = interpolate(
-                            value,
-                            getValues(element),
-                        );
-                    }
-                });
-
-                [
-                    ["data-i18n-aria-label", "aria-label"],
-                    ["data-i18n-content", "content"],
-                ].forEach(([marker, attribute]) => {
-                    document
-                        .querySelectorAll(`[${marker}]`)
-                        .forEach((element) => {
-                            const path = element.getAttribute(marker);
-                            const value = path
-                                ? getMessage(nextLanguage, path)
-                                : "";
-
-                            if (value) {
-                                element.setAttribute(
-                                    attribute,
-                                    interpolate(value, getValues(element)),
-                                );
-                            }
-                        });
-                });
-
-                languageOptions.forEach((option) => {
-                    const isActive =
-                        option.getAttribute("data-lang-option") ===
-                        nextLanguage;
-                    option.setAttribute("aria-pressed", String(isActive));
-                });
-
-                startTypewriter(
-                    dictionary[nextLanguage]?.prompts ||
-                        dictionary.zh?.prompts ||
-                        [],
-                );
-
-                if (shouldPersist) {
-                    try {
-                        window.localStorage.setItem(languageKey, nextLanguage);
-                    } catch {
-                        // Ignore storage errors; the toggle should still update the page.
-                    }
-                }
-            };
-
-            languageOptions.forEach((option) => {
-                option.addEventListener("click", () => {
-                    applyLanguage(
-                        option.getAttribute("data-lang-option") || "zh",
-                        true,
-                    );
-                });
-            });
-
-            applyLanguage(chooseInitialLanguage());
+            import "../scripts/site.ts";
         </script>
     </body>
 </html>
