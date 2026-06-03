@@ -132,11 +132,21 @@ async fn serve_client(
 
     while reader.read_line(&mut line).await? != 0 {
         let request: DaemonRequest = serde_json::from_str(line.trim_end())?;
-        let response = handle_request(request, state.clone(), stop.clone()).await;
-        writer
-            .write_all(serde_json::to_string(&response)?.as_bytes())
-            .await?;
-        writer.write_all(b"\n").await?;
+        let mut disconnect_probe = String::new();
+        tokio::select! {
+            response = handle_request(request, state.clone(), stop.clone()) => {
+                writer
+                    .write_all(serde_json::to_string(&response)?.as_bytes())
+                    .await?;
+                writer.write_all(b"\n").await?;
+            }
+            read = reader.read_line(&mut disconnect_probe) => {
+                if read? == 0 {
+                    return Ok(());
+                }
+                anyhow::bail!("daemon client sent another request before the previous response");
+            }
+        }
         line.clear();
     }
 
@@ -195,13 +205,10 @@ impl DaemonState {
 
     async fn topic_scan(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
-        let depth = args
-            .get("depth")
-            .and_then(Value::as_str)
-            .unwrap_or("standard");
         let tab_label = args.get("tab_label").and_then(Value::as_str);
+        let num_notes = args.get("num_notes").and_then(Value::as_i64);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        topic_scan_command(page, &query, depth, tab_label).await
+        topic_scan_command(page, &query, tab_label, num_notes).await
     }
 
     async fn extract_note(&mut self, args: Value) -> Result<Value> {
