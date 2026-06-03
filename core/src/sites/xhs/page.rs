@@ -27,6 +27,7 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "closeNote",
     "noteOpen",
     "comments",
+    "commentsWithWait",
     "scrollInNote",
     "carouselImages",
     "profileInfo",
@@ -498,6 +499,23 @@ impl<'a> XhsPageRuntime<'a> {
             )
             .await?;
         Ok(raw.into_iter().filter(Value::is_object).collect())
+    }
+
+    pub async fn extract_comments_with_wait(
+        &self,
+        max_comments: i64,
+        wait_seconds: f64,
+    ) -> Result<Value> {
+        self.ensure_xhs(false).await?;
+        self.expect_object(
+            "commentsWithWait",
+            Some(&json!({
+                "prefer_hot": true,
+                "max_comments": max_comments,
+                "timeout_ms": (wait_seconds.max(0.5) * 1000.0) as i64,
+            })),
+        )
+        .await
     }
 
     pub async fn collect_carousel_images(&self, max_images: i64) -> Result<Vec<String>> {

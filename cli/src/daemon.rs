@@ -132,11 +132,21 @@ async fn serve_client(
 
     while reader.read_line(&mut line).await? != 0 {
         let request: DaemonRequest = serde_json::from_str(line.trim_end())?;
-        let response = handle_request(request, state.clone(), stop.clone()).await;
-        writer
-            .write_all(serde_json::to_string(&response)?.as_bytes())
-            .await?;
-        writer.write_all(b"\n").await?;
+        let mut disconnect_probe = String::new();
+        tokio::select! {
+            response = handle_request(request, state.clone(), stop.clone()) => {
+                writer
+                    .write_all(serde_json::to_string(&response)?.as_bytes())
+                    .await?;
+                writer.write_all(b"\n").await?;
+            }
+            read = reader.read_line(&mut disconnect_probe) => {
+                if read? == 0 {
+                    return Ok(());
+                }
+                anyhow::bail!("daemon client sent another request before the previous response");
+            }
+        }
         line.clear();
     }
 

@@ -1052,12 +1052,29 @@ impl Tool for TopicScanTool {
                 }),
             };
 
-            // Pull comments separately for deep notes.
+            // Pull comments separately after waiting for the slower comment
+            // list to hydrate. Body content often appears before comments.
             if level == "deep" && comment_count > 0 {
-                if let Ok(comments) = xhs.extract_comments(comment_count).await {
+                if let Ok(comments_payload) =
+                    xhs.extract_comments_with_wait(comment_count, 5.0).await
+                {
+                    let comments = comments_payload
+                        .get("comments")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
                     let entity_map = entry.get_mut("entity").and_then(|v| v.as_object_mut());
                     if let Some(map) = entity_map {
                         map.insert("top_comments".into(), Value::Array(comments));
+                        map.insert(
+                            "top_comments_wait".into(),
+                            json!({
+                                "ready": comments_payload.get("ready").and_then(Value::as_bool).unwrap_or(false),
+                                "reason": comments_payload.get("reason").and_then(Value::as_str).unwrap_or(""),
+                                "waited_ms": comments_payload.get("waited_ms").and_then(Value::as_i64).unwrap_or(0),
+                                "attempts": comments_payload.get("attempts").and_then(Value::as_i64).unwrap_or(0),
+                            }),
+                        );
                     }
                 }
             }
