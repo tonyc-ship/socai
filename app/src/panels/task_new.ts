@@ -154,7 +154,7 @@ function renderConnectOverlay(status: Status): string {
       >${esc(cta)}</button>
       <a
         class="connect-overlay-link t-small"
-        href="https://developer.chrome.com/docs/devtools/remote-debugging"
+        href="https://socai.io/connect"
         target="_blank"
         rel="noopener noreferrer"
       >${esc(t("chrome.remoteDebuggingHelp"))}</a>
