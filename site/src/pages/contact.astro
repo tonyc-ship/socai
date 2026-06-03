@@ -1,0 +1,230 @@
+---
+import "../styles/global.css";
+import SiteHeader from "../components/SiteHeader.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import { message as messageFor } from "../lib/i18n";
+import { resolveReleaseVersion } from "../lib/release";
+
+const githubIssuesUrl = "https://github.com/tonyc-ship/socai/issues";
+const qrImage = "/wechat-group-qr.jpg";
+const currentYear = new Date().getFullYear();
+const siteUrl = "https://socai.io";
+const canonicalUrl = `${siteUrl}/contact`;
+const socialImageUrl = `${siteUrl}/social-card.png`;
+const defaultLanguage = "zh";
+const defaultHtmlLanguage =
+    defaultLanguage === "zh" ? "zh-CN" : defaultLanguage;
+
+const messages = {
+    en: {
+        meta: {
+            title: "socai · contact",
+            description:
+                "join the socai wechat group to reach us. the wechat group is our primary channel.",
+            socialImageAlt: "socai contact — join the wechat group",
+        },
+        nav: {
+            primaryAria: "primary navigation",
+            homeAria: "socai home",
+            linksAria: "site links",
+            github: "github",
+            connect: "connect chrome",
+            contact: "contact",
+            languageAria: "language",
+            releaseLabel: "release version {version}",
+        },
+        contact: {
+            eyebrow: "contact",
+            qrAlt: "socai wechat group qr code",
+            altHead: "other ways",
+            githubLabel: "GitHub Issues",
+            githubDesc: "report a bug or request a feature",
+        },
+        footer: {
+            linksAria: "footer links",
+            download: "download",
+            connect: "connect",
+            contact: "contact",
+        },
+    },
+    zh: {
+        meta: {
+            title: "socai · 联系我们",
+            description:
+                "加入 socai 微信群，和我们交流。微信群是我们主要的交流渠道。",
+            socialImageAlt: "socai 联系我们 — 加入微信群",
+        },
+        nav: {
+            primaryAria: "主导航",
+            homeAria: "socai 首页",
+            linksAria: "站点链接",
+            github: "github",
+            connect: "连接 Chrome",
+            contact: "联系",
+            languageAria: "语言",
+            releaseLabel: "发布版本 {version}",
+        },
+        contact: {
+            eyebrow: "联系我们",
+            qrAlt: "socai 小红书使用 微信群二维码",
+            altHead: "其他方式",
+            githubLabel: "GitHub Issues",
+            githubDesc: "提交 bug 或功能请求",
+        },
+        footer: {
+            linksAria: "页脚链接",
+            download: "下载",
+            connect: "连接",
+            contact: "联系",
+        },
+    },
+};
+
+const message = (path: string, language = defaultLanguage) =>
+    messageFor(messages, path, language);
+
+const pageTitle = message("meta.title");
+const pageDescription = message("meta.description");
+const socialImageAlt = message("meta.socialImageAlt");
+const releaseVersion = await resolveReleaseVersion();
+---
+
+<html lang={defaultHtmlLanguage} data-language={defaultLanguage}>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{pageTitle}</title>
+        <meta
+            name="description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta name="robots" content="index, follow" />
+        <link rel="canonical" href={canonicalUrl} />
+
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="socai" />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta
+            property="og:title"
+            content={pageTitle}
+            data-i18n-content="meta.title"
+        />
+        <meta
+            property="og:description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta property="og:image" content={socialImageUrl} />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+            property="og:image:alt"
+            content={socialImageAlt}
+            data-i18n-content="meta.socialImageAlt"
+        />
+
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta
+            name="twitter:title"
+            content={pageTitle}
+            data-i18n-content="meta.title"
+        />
+        <meta
+            name="twitter:description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta name="twitter:image" content={socialImageUrl} />
+        <meta
+            name="twitter:image:alt"
+            content={socialImageAlt}
+            data-i18n-content="meta.socialImageAlt"
+        />
+
+        <meta name="theme-color" content="#fafaf9" />
+        <meta name="application-name" content="socai" />
+        <meta name="apple-mobile-web-app-title" content="socai" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="/apple-touch-icon.png"
+        />
+        <link rel="manifest" href="/site.webmanifest" />
+    </head>
+    <body>
+        <div class="site-shell">
+            <SiteHeader
+                messages={messages}
+                language={defaultLanguage}
+                releaseVersion={releaseVersion}
+            />
+
+            <main class="contact-main">
+                <section
+                    class="contact"
+                    aria-label={message("contact.eyebrow")}
+                    data-i18n-aria-label="contact.eyebrow"
+                >
+                    <span class="contact__eyebrow" data-i18n="contact.eyebrow"
+                        >{message("contact.eyebrow")}</span
+                    >
+
+                    <div class="qr-card">
+                        <img
+                            src={qrImage}
+                            alt={message("contact.qrAlt")}
+                            data-i18n-alt="contact.qrAlt"
+                            width="240"
+                            height="240"
+                        />
+                    </div>
+
+                    <div class="contact-alt">
+                        <span
+                            class="contact-alt__head"
+                            data-i18n="contact.altHead"
+                            >{message("contact.altHead")}</span
+                        >
+                        <div class="contact-alt__list">
+                            <a class="contact-alt__row" href={githubIssuesUrl}>
+                                <span>
+                                    <span
+                                        class="contact-alt__label"
+                                        data-i18n="contact.githubLabel"
+                                        >{message("contact.githubLabel")}</span
+                                    >
+                                    <span
+                                        class="contact-alt__desc"
+                                        data-i18n="contact.githubDesc"
+                                        >{message("contact.githubDesc")}</span
+                                    >
+                                </span>
+                                <span class="contact-alt__value"
+                                    >github.com/tonyc-ship/socai ↗</span
+                                >
+                            </a>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
+            <SiteFooter
+                messages={messages}
+                language={defaultLanguage}
+                currentYear={currentYear}
+            />
+        </div>
+
+        <script
+            id="site-i18n"
+            type="application/json"
+            set:html={JSON.stringify(messages)}
+        />
+        <script>
+            import "../scripts/site.ts";
+        </script>
+    </body>
+</html>

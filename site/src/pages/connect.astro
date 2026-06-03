@@ -1,0 +1,487 @@
+---
+import "../styles/global.css";
+import SiteHeader from "../components/SiteHeader.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import { message as messageFor } from "../lib/i18n";
+import { resolveReleaseVersion } from "../lib/release";
+
+const currentYear = new Date().getFullYear();
+const siteUrl = "https://socai.io";
+const canonicalUrl = `${siteUrl}/connect`;
+const socialImageUrl = `${siteUrl}/social-card.png`;
+const defaultLanguage = "zh";
+const defaultHtmlLanguage =
+    defaultLanguage === "zh" ? "zh-CN" : defaultLanguage;
+
+const messages = {
+    en: {
+        meta: {
+            title: "socai · connect Chrome",
+            description:
+                "connect your Chrome to socai in about 30 seconds: enable remote debugging, then allow the connection.",
+            socialImageAlt: "socai connect-Chrome setup guide",
+        },
+        nav: {
+            primaryAria: "primary navigation",
+            homeAria: "socai home",
+            linksAria: "site links",
+            github: "github",
+            connect: "connect chrome",
+            contact: "contact",
+            languageAria: "language",
+            releaseLabel: "release version {version}",
+        },
+        setup: {
+            eyebrow: "setup · connect chrome",
+            title: "connect your Chrome to socai",
+            subtitle:
+                "socai drives the real Chrome you're already signed into through the Chrome DevTools Protocol (<code>CDP</code>). Turn it on once — it takes about 30 seconds.",
+            step1Title: "enable remote debugging",
+            step1Desc:
+                "Open a new Chrome tab, paste <code>chrome://inspect/#remote-debugging</code> into the address bar, and tick <strong>Enable remote debugging</strong>.",
+            step1Alt: "Chrome remote debugging settings page mockup",
+            step1Annot: "tick this",
+            step1Hint:
+                "Paste the address straight into the address bar — it won't show up as a search result.",
+            step2Title: "allow socai to connect",
+            step2Desc:
+                "The first time socai attaches, Chrome shows a permission prompt. Click <strong>Yes</strong> to let socai connect to your browser.",
+            step2Alt: "Chrome remote debugging permission popup mockup",
+            dialogText:
+                "socai wants to connect to Chrome to run your task. It only opens its own tabs.",
+            step2Annot: "click Yes",
+            step2Hint:
+                'You confirm once per session. After that, socai shows "chrome · connected" at the top.',
+            copy: "copy",
+            copied: "copied",
+            reassure:
+                "<strong>Your browser stays yours.</strong> socai only opens its own temporary tabs and closes them when it's done. Your existing tabs, history, and logins are left untouched.",
+        },
+        footer: {
+            linksAria: "footer links",
+            download: "download",
+            connect: "connect",
+            contact: "contact",
+        },
+    },
+    zh: {
+        meta: {
+            title: "socai · 连接 Chrome",
+            description:
+                "教你在 30 秒内把 Chrome 连接到 socai：开启远程调试，并允许连接。",
+            socialImageAlt: "把 Chrome 连接到 socai 的设置引导",
+        },
+        nav: {
+            primaryAria: "主导航",
+            homeAria: "socai 首页",
+            linksAria: "站点链接",
+            github: "github",
+            connect: "连接 Chrome",
+            contact: "联系",
+            languageAria: "语言",
+            releaseLabel: "发布版本 {version}",
+        },
+        setup: {
+            eyebrow: "设置 · 连接 Chrome",
+            title: "把 Chrome 连接到 socai",
+            subtitle:
+                "socai 通过 Chrome DevTools Protocol（<code>CDP</code>）驱动你已经登录的真实 Chrome。只需开启一次，大约 30 秒。",
+            step1Title: "开启远程调试",
+            step1Desc:
+                "在 Chrome 中新建一个标签页，把 <code>chrome://inspect/#remote-debugging</code> 粘贴到地址栏并回车，然后勾选 <strong>Enable remote debugging</strong>（开启远程调试）。",
+            step1Alt: "Chrome 远程调试设置页示意",
+            step1Annot: "勾选这里",
+            step1Hint: "地址要直接粘贴到地址栏 —— 它不会出现在搜索结果里。",
+            step2Title: "允许 socai 连接",
+            step2Desc:
+                "socai 首次接入时，Chrome 会弹出授权提示。点击 <strong>Yes</strong> 即可让 socai 接入你的浏览器。",
+            step2Alt: "Chrome 远程调试授权弹窗示意",
+            dialogText:
+                "socai 想要连接到 Chrome 来运行你的任务。它只会打开属于自己的标签页。",
+            step2Annot: "点击 Yes",
+            step2Hint:
+                "每次会话只需确认一次。确认后 socai 顶部会显示 “chrome · 已连接”。",
+            copy: "复制",
+            copied: "已复制",
+            reassure:
+                "<strong>不会动你现有的浏览器。</strong> socai 只打开属于自己的临时标签页，用完即关。你已有的标签、历史和登录状态都保持原样。",
+        },
+        footer: {
+            linksAria: "页脚链接",
+            download: "下载",
+            connect: "连接",
+            contact: "联系",
+        },
+    },
+};
+
+const message = (path: string, language = defaultLanguage) =>
+    messageFor(messages, path, language);
+
+const pageTitle = message("meta.title");
+const pageDescription = message("meta.description");
+const socialImageAlt = message("meta.socialImageAlt");
+const releaseVersion = await resolveReleaseVersion();
+---
+
+<html lang={defaultHtmlLanguage} data-language={defaultLanguage}>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{pageTitle}</title>
+        <meta
+            name="description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta name="robots" content="index, follow" />
+        <link rel="canonical" href={canonicalUrl} />
+
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="socai" />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta
+            property="og:title"
+            content={pageTitle}
+            data-i18n-content="meta.title"
+        />
+        <meta
+            property="og:description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta property="og:image" content={socialImageUrl} />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+            property="og:image:alt"
+            content={socialImageAlt}
+            data-i18n-content="meta.socialImageAlt"
+        />
+
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta
+            name="twitter:title"
+            content={pageTitle}
+            data-i18n-content="meta.title"
+        />
+        <meta
+            name="twitter:description"
+            content={pageDescription}
+            data-i18n-content="meta.description"
+        />
+        <meta name="twitter:image" content={socialImageUrl} />
+        <meta
+            name="twitter:image:alt"
+            content={socialImageAlt}
+            data-i18n-content="meta.socialImageAlt"
+        />
+
+        <meta name="theme-color" content="#fafaf9" />
+        <meta name="application-name" content="socai" />
+        <meta name="apple-mobile-web-app-title" content="socai" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="/apple-touch-icon.png"
+        />
+        <link rel="manifest" href="/site.webmanifest" />
+    </head>
+    <body>
+        <div class="site-shell">
+            <SiteHeader
+                messages={messages}
+                language={defaultLanguage}
+                releaseVersion={releaseVersion}
+            />
+
+            <main class="setup-main">
+                <section class="setup" aria-labelledby="setup-title">
+                    <div class="setup__head">
+                        <span class="setup__eyebrow" data-i18n="setup.eyebrow"
+                            >{message("setup.eyebrow")}</span
+                        >
+                        <h1 id="setup-title" data-i18n="setup.title">
+                            {message("setup.title")}
+                        </h1>
+                        <p
+                            class="setup__subtitle"
+                            data-i18n-html="setup.subtitle"
+                            set:html={message("setup.subtitle")}
+                        />
+                    </div>
+
+                    <div class="steps">
+                        <!-- Step 01 -->
+                        <div class="step">
+                            <div class="step__rail">
+                                <span class="step__marker">01</span>
+                                <span class="step__line" aria-hidden="true"
+                                ></span>
+                            </div>
+                            <div class="step__body">
+                                <h2
+                                    class="step__title"
+                                    data-i18n="setup.step1Title"
+                                >
+                                    {message("setup.step1Title")}
+                                </h2>
+                                <p
+                                    class="step__desc"
+                                    data-i18n-html="setup.step1Desc"
+                                    set:html={message("setup.step1Desc")}
+                                />
+
+                                <div
+                                    class="bwin"
+                                    role="img"
+                                    aria-label={message("setup.step1Alt")}
+                                    data-i18n-aria-label="setup.step1Alt"
+                                >
+                                    <div class="bwin__bar">
+                                        <span
+                                            class="bwin__lights"
+                                            aria-hidden="true"
+                                            ><i></i><i></i><i></i></span
+                                        >
+                                        <span class="bwin__tab"
+                                            >Inspect with Chrome Developer Tools</span
+                                        >
+                                    </div>
+                                    <div class="bwin__omni">
+                                        <span class="bwin__url">
+                                            <svg
+                                                viewBox="0 0 16 16"
+                                                width="12"
+                                                height="12"
+                                                fill="none"
+                                                aria-hidden="true"
+                                            >
+                                                <rect
+                                                    x="2.5"
+                                                    y="6.5"
+                                                    width="11"
+                                                    height="7"
+                                                    rx="1.5"
+                                                    stroke="currentColor"
+                                                    stroke-width="1.2"></rect>
+                                                <path
+                                                    d="M5 6.5V5a3 3 0 0 1 6 0v1.5"
+                                                    stroke="currentColor"
+                                                    stroke-width="1.2"></path>
+                                            </svg>
+                                            <span
+                                                >chrome://inspect/#remote-debugging</span
+                                            >
+                                        </span>
+                                        <button
+                                            class="bwin__copy"
+                                            type="button"
+                                            data-copy="chrome://inspect/#remote-debugging"
+                                            data-i18n="setup.copy"
+                                            data-i18n-copied="setup.copied"
+                                            >{message("setup.copy")}</button
+                                        >
+                                    </div>
+                                    <div class="bwin__body">
+                                        <div class="inspect">
+                                            <div
+                                                class="inspect__nav"
+                                                aria-hidden="true"
+                                            >
+                                                <span>Devices</span>
+                                                <span>Pages</span>
+                                                <span>Extensions</span>
+                                                <span class="is-active"
+                                                    >Remote debugging</span
+                                                >
+                                            </div>
+                                            <div class="inspect__panel">
+                                                <p class="inspect__panel-title"
+                                                    >Remote debugging</p
+                                                >
+                                                <div class="setting-row">
+                                                    <span
+                                                        class="checkbox is-checked"
+                                                        aria-hidden="true"
+                                                        >✓</span
+                                                    >
+                                                    <span
+                                                        class="setting-row__text"
+                                                    >
+                                                        <span
+                                                            class="setting-row__label"
+                                                            >Enable remote
+                                                            debugging</span
+                                                        >
+                                                        <span
+                                                            class="setting-row__sub"
+                                                            >Allow apps on this
+                                                            device to connect to
+                                                            Chrome.</span
+                                                        >
+                                                    </span>
+                                                </div>
+                                                <div class="mock-annot">
+                                                    <span class="annot"
+                                                        ><span aria-hidden="true"
+                                                            >←</span
+                                                        >
+                                                        <span
+                                                            data-i18n="setup.step1Annot"
+                                                            >{
+                                                                message(
+                                                                    "setup.step1Annot",
+                                                                )
+                                                            }</span
+                                                        ></span
+                                                    >
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <p
+                                    class="step__hint"
+                                    data-i18n="setup.step1Hint"
+                                >
+                                    {message("setup.step1Hint")}
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Step 02 -->
+                        <div class="step">
+                            <div class="step__rail">
+                                <span class="step__marker">02</span>
+                                <span class="step__line" aria-hidden="true"
+                                ></span>
+                            </div>
+                            <div class="step__body">
+                                <h2
+                                    class="step__title"
+                                    data-i18n="setup.step2Title"
+                                >
+                                    {message("setup.step2Title")}
+                                </h2>
+                                <p
+                                    class="step__desc"
+                                    data-i18n-html="setup.step2Desc"
+                                    set:html={message("setup.step2Desc")}
+                                />
+
+                                <div
+                                    class="bwin"
+                                    role="img"
+                                    aria-label={message("setup.step2Alt")}
+                                    data-i18n-aria-label="setup.step2Alt"
+                                >
+                                    <div class="bwin__bar">
+                                        <span
+                                            class="bwin__lights"
+                                            aria-hidden="true"
+                                            ><i></i><i></i><i></i></span
+                                        >
+                                        <span class="bwin__tab"
+                                            >小红书 · xiaohongshu.com</span
+                                        >
+                                    </div>
+                                    <div class="bwin__body bwin__body--dialog">
+                                        <div class="dialog">
+                                            <p class="dialog__title"
+                                                >Allow remote debugging?</p
+                                            >
+                                            <p
+                                                class="dialog__text"
+                                                data-i18n="setup.dialogText"
+                                                >{
+                                                    message("setup.dialogText")
+                                                }</p
+                                            >
+                                            <div class="dialog__url"
+                                                >socai · localhost:9222</div
+                                            >
+                                            <div class="dialog__actions">
+                                                <span class="dialog__btn"
+                                                    >No</span
+                                                >
+                                                <span
+                                                    class="dialog__btn dialog__btn--primary"
+                                                    >Yes</span
+                                                >
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="dialog-annot">
+                                    <span class="annot"
+                                        ><span aria-hidden="true">↑</span>
+                                        <span data-i18n="setup.step2Annot"
+                                            >{
+                                                message("setup.step2Annot")
+                                            }</span
+                                        ></span
+                                    >
+                                </div>
+
+                                <p
+                                    class="step__hint"
+                                    data-i18n="setup.step2Hint"
+                                >
+                                    {message("setup.step2Hint")}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="setup-note">
+                        <svg
+                            class="setup-note__mark"
+                            viewBox="0 0 16 16"
+                            width="16"
+                            height="16"
+                            fill="none"
+                            aria-hidden="true"
+                        >
+                            <circle
+                                cx="8"
+                                cy="8"
+                                r="6.5"
+                                stroke="currentColor"
+                                stroke-width="1.3"></circle>
+                            <path
+                                d="M5.2 8.2 7 10l3.8-4"
+                                stroke="currentColor"
+                                stroke-width="1.4"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"></path>
+                        </svg>
+                        <p
+                            data-i18n-html="setup.reassure"
+                            set:html={message("setup.reassure")}
+                        />
+                    </div>
+                </section>
+            </main>
+
+            <SiteFooter
+                messages={messages}
+                language={defaultLanguage}
+                currentYear={currentYear}
+            />
+        </div>
+
+        <script
+            id="site-i18n"
+            type="application/json"
+            set:html={JSON.stringify(messages)}
+        />
+        <script>
+            import "../scripts/site.ts";
+        </script>
+    </body>
+</html>
