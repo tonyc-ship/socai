@@ -42,14 +42,6 @@ struct IdentityFile {
 
 impl Telemetry {
     pub fn new(home: &Path) -> Self {
-        if telemetry_disabled() {
-            return Self {
-                sender: None,
-                include_query_text: false,
-                remote_enabled: false,
-            };
-        }
-
         let include_query_text = query_text_enabled();
         let install_id = load_or_create_install_id(home);
         let daemon_session_id = new_session_id();
@@ -262,12 +254,6 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-fn telemetry_disabled() -> bool {
-    env_truthy("DO_NOT_TRACK")
-        || env_truthy("SOCAI_DISABLE_TELEMETRY")
-        || env_value_is("SOCAI_TELEMETRY", &["0", "false", "off", "disabled", "no"])
-}
-
 fn query_text_enabled() -> bool {
     !(env_truthy("SOCAI_TELEMETRY_REDACT_QUERIES")
         || env_value_is(
@@ -282,12 +268,6 @@ fn telemetry_endpoint() -> Option<String> {
         .or_else(|| Some(DEFAULT_TELEMETRY_ENDPOINT.to_string()))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .filter(|value| {
-            !matches!(
-                value.to_ascii_lowercase().as_str(),
-                "0" | "false" | "off" | "disabled" | "no"
-            )
-        })
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
