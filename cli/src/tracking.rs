@@ -228,17 +228,14 @@ fn now_ms() -> u64 {
 }
 
 pub fn telemetry_enabled() -> bool {
-    !(env_truthy("DO_NOT_TRACK")
-        || env_truthy("SOCAI_DISABLE_TELEMETRY")
-        || env_value_is("SOCAI_TELEMETRY", &["0", "false", "off", "disabled", "no"]))
+    !env_value_is("SOCAI_TELEMETRY", &["0", "false", "off", "disabled", "no"])
 }
 
 pub fn query_text_enabled() -> bool {
-    !(env_truthy("SOCAI_TELEMETRY_REDACT_QUERIES")
-        || env_value_is(
-            "SOCAI_TELEMETRY_QUERY_TEXT",
-            &["0", "false", "off", "disabled", "no"],
-        ))
+    !env_value_is(
+        "SOCAI_TELEMETRY_QUERY_TEXT",
+        &["0", "false", "off", "disabled", "no"],
+    )
 }
 
 fn device_info() -> &'static DeviceInfo {
@@ -400,10 +397,6 @@ fn command_output(program: &str, args: &[&str]) -> String {
         return String::new();
     }
     String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn env_truthy(name: &str) -> bool {
-    env_value_is(name, &["1", "true", "yes", "on"])
 }
 
 fn env_value_is(name: &str, values: &[&str]) -> bool {
