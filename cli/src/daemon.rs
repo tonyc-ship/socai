@@ -360,18 +360,24 @@ fn command_arg_summary(telemetry: &DaemonTelemetry, args: &Value) -> Value {
     if let Some(query) = args.get("query").and_then(Value::as_str) {
         insert_query_props(&mut props, telemetry, query);
     }
-    insert_optional_str_prop(&mut props, args, "tab_label");
-    insert_optional_i64_prop(&mut props, args, "num_notes");
+    if let Some(metadata) = explicit_param_metadata(args) {
+        props.insert("metadata".into(), Value::Object(metadata));
+    }
     if args.get("note_id").and_then(Value::as_str).is_some() {
         props.insert("note_id_present".into(), json!(true));
     }
-    if let Some(object) = args.as_object() {
-        props.insert(
-            "arg_keys".into(),
-            Value::Array(object.keys().map(|key| json!(key)).collect()),
-        );
-    }
     Value::Object(props)
+}
+
+fn explicit_param_metadata(args: &Value) -> Option<Map<String, Value>> {
+    let mut metadata = Map::new();
+    insert_optional_str_metadata(&mut metadata, args, "tab_label", "tab");
+    insert_optional_i64_metadata(&mut metadata, args, "num_notes", "num_notes");
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
 }
 
 fn insert_query_props(props: &mut Map<String, Value>, telemetry: &DaemonTelemetry, query: &str) {
@@ -385,23 +391,33 @@ fn insert_query_props(props: &mut Map<String, Value>, telemetry: &DaemonTelemetr
     }
 }
 
-fn insert_optional_str_prop(props: &mut Map<String, Value>, args: &Value, key: &str) {
+fn insert_optional_str_metadata(
+    metadata: &mut Map<String, Value>,
+    args: &Value,
+    arg_key: &str,
+    metadata_key: &str,
+) {
     let Some(value) = args
-        .get(key)
+        .get(arg_key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return;
     };
-    props.insert(key.to_string(), json!(value));
+    metadata.insert(metadata_key.to_string(), json!(value));
 }
 
-fn insert_optional_i64_prop(props: &mut Map<String, Value>, args: &Value, key: &str) {
-    let Some(value) = args.get(key).and_then(Value::as_i64) else {
+fn insert_optional_i64_metadata(
+    metadata: &mut Map<String, Value>,
+    args: &Value,
+    arg_key: &str,
+    metadata_key: &str,
+) {
+    let Some(value) = args.get(arg_key).and_then(Value::as_i64) else {
         return;
     };
-    props.insert(key.to_string(), json!(value));
+    metadata.insert(metadata_key.to_string(), json!(value));
 }
 
 fn merge_object(target: &mut Map<String, Value>, value: Value) {
@@ -450,6 +466,35 @@ fn error_summary(err: &anyhow::Error) -> String {
     let rendered = format!("{err:#}");
     let first = rendered.lines().next().unwrap_or("command failed").trim();
     first.chars().take(240).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_summary_omits_defaulted_optional_params() {
+        let summary = command_arg_summary(&DaemonTelemetry::default(), &json!({ "query": "x" }));
+        let object = summary.as_object().expect("summary is an object");
+        assert!(!object.contains_key("metadata"));
+    }
+
+    #[test]
+    fn command_summary_tracks_explicit_optional_params_as_metadata() {
+        let summary = command_arg_summary(
+            &DaemonTelemetry::default(),
+            &json!({ "query": "x", "tab_label": "latest", "num_notes": 12 }),
+        );
+        let object = summary.as_object().expect("summary is an object");
+        let metadata = object
+            .get("metadata")
+            .and_then(Value::as_object)
+            .expect("metadata object");
+        assert_eq!(metadata.get("tab"), Some(&json!("latest")));
+        assert_eq!(metadata.get("num_notes"), Some(&json!(12)));
+        assert!(!object.contains_key("tab_label"));
+        assert!(!object.contains_key("num_notes"));
+    }
 }
 
 async fn send_request(command: &str, args: Value, request_timeout: Duration) -> Result<Value> {

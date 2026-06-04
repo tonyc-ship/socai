@@ -3,6 +3,8 @@ const DEFAULT_DATASET = 'socai-cli-prod';
 const MAX_BODY_BYTES = 128 * 1024;
 const MAX_EVENTS_PER_REQUEST = 100;
 const MAX_STRING_CHARS = 2_000;
+const MAX_METADATA_FIELDS = 20;
+const MAX_METADATA_KEY_CHARS = 80;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_EVENTS = 1_200;
 
@@ -28,8 +30,7 @@ const ALLOWED_FIELDS = new Set([
   'query_text',
   'query_len',
   'query_text_enabled',
-  'tab_label',
-  'num_notes',
+  'metadata',
   'duration_ms',
   'ok',
   'error',
@@ -169,7 +170,7 @@ function sanitizeEvent(raw) {
     if (!ALLOWED_FIELDS.has(key)) {
       continue;
     }
-    const safe = sanitizeValue(value);
+    const safe = key === 'metadata' ? sanitizeMetadata(value) : sanitizeValue(value);
     if (safe !== undefined) {
       out[key] = safe;
     }
@@ -198,6 +199,26 @@ function flattenEvent(raw) {
   return flattened;
 }
 
+function sanitizeMetadata(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const out = {};
+  for (const [rawKey, rawValue] of Object.entries(value).slice(0, MAX_METADATA_FIELDS)) {
+    const key = cleanMetadataKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    const safe = sanitizeValue(rawValue);
+    if (safe !== undefined) {
+      out[key] = safe;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function sanitizeValue(value) {
   if (value === null) {
     return null;
@@ -212,6 +233,17 @@ function sanitizeValue(value) {
     default:
       return undefined;
   }
+}
+
+function cleanMetadataKey(value) {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const key = value.trim().slice(0, MAX_METADATA_KEY_CHARS);
+  if (!/^[A-Za-z0-9_.-]+$/.test(key)) {
+    return undefined;
+  }
+  return key;
 }
 
 function cleanString(value) {
