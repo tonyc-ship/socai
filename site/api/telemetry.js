@@ -11,7 +11,7 @@ const ALLOWED_FIELDS = new Set([
   'event',
   'install_id',
   'distinct_id',
-  'daemon_session_id',
+  'session_id',
   'request_id',
   'schema_version',
   'app',
@@ -200,6 +200,10 @@ function flattenEvent(raw) {
   if (flattened.install_id === undefined && typeof flattened.distinct_id === 'string') {
     flattened.install_id = flattened.distinct_id;
   }
+  if (flattened.session_id === undefined && typeof flattened.daemon_session_id === 'string') {
+    flattened.session_id = flattened.daemon_session_id;
+  }
+  delete flattened.daemon_session_id;
   return flattened;
 }
 

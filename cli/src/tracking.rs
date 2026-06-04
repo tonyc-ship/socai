@@ -6,6 +6,7 @@ use serde_json::{json, Map, Value};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
+use uuid::Uuid;
 
 const EVENT_SCHEMA_VERSION: u32 = 1;
 const TELEMETRY_ENDPOINT: &str = "https://socai.io/v1/events";
@@ -27,7 +28,7 @@ struct QueuedEvent {
 #[derive(Clone)]
 struct WorkerConfig {
     install_id: String,
-    daemon_session_id: String,
+    session_id: String,
     local_path: PathBuf,
     include_query_text: bool,
 }
@@ -41,13 +42,13 @@ impl Telemetry {
     pub fn new(home: &Path) -> Self {
         let include_query_text = query_text_enabled();
         let install_id = load_or_create_install_id(home);
-        let daemon_session_id = new_session_id();
+        let session_id = new_session_id();
         let local_path = home.join("telemetry/events.jsonl");
 
         let (sender, receiver) = mpsc::channel(CHANNEL_CAPACITY);
         let config = WorkerConfig {
             install_id,
-            daemon_session_id,
+            session_id,
             local_path,
             include_query_text,
         };
@@ -117,7 +118,7 @@ fn enrich_properties(properties: Value, config: &WorkerConfig, timestamp_ms: u64
     map.insert("app_version".into(), json!(env!("CARGO_PKG_VERSION")));
     map.insert("platform".into(), json!(std::env::consts::OS));
     map.insert("arch".into(), json!(std::env::consts::ARCH));
-    map.insert("daemon_session_id".into(), json!(config.daemon_session_id));
+    map.insert("session_id".into(), json!(config.session_id));
     if !map.contains_key("query_text_enabled") {
         map.insert(
             "query_text_enabled".into(),
@@ -182,7 +183,7 @@ fn load_or_create_install_id(home: &Path) -> String {
     if let Ok(bytes) = std::fs::read(&path) {
         if let Ok(identity) = serde_json::from_slice::<IdentityFile>(&bytes) {
             let id = identity.install_id.trim();
-            if !id.is_empty() {
+            if Uuid::parse_str(id).is_ok() {
                 return id.to_string();
             }
         }
@@ -203,18 +204,11 @@ fn load_or_create_install_id(home: &Path) -> String {
 }
 
 fn new_install_id() -> String {
-    format!(
-        "socai-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    )
+    Uuid::new_v4().to_string()
 }
 
 fn new_session_id() -> String {
-    format!("daemon-{}-{}", std::process::id(), now_ms())
+    Uuid::new_v4().to_string()
 }
 
 fn now_ms() -> u64 {
