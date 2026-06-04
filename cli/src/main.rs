@@ -16,19 +16,23 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Search Xiaohongshu and print visible note cards as JSON.
+    /// Search Xiaohongshu and print the first results page's note cards as JSON.
     #[command(name = "search_notes")]
     SearchNotes {
         query: String,
         #[arg(long)]
         pretty: bool,
     },
-    /// Run the default-depth Xiaohongshu topic scan.
+    /// Run a Xiaohongshu topic scan (note body + top comments per note).
     #[command(name = "topic_scan")]
     TopicScan {
         query: String,
         #[arg(long)]
         tab: Option<String>,
+        /// Number of notes to read; scrolls the feed only if the first page
+        /// holds fewer.
+        #[arg(long = "num-notes")]
+        num_notes: Option<i64>,
         #[arg(long)]
         pretty: bool,
     },
@@ -70,13 +74,18 @@ async fn main() -> Result<()> {
             .await?;
             print_command_result(&result, pretty)?;
         }
-        Command::TopicScan { query, tab, pretty } => {
-            let mut input = serde_json::json!({
-                "query": query,
-                "depth": "standard"
-            });
+        Command::TopicScan {
+            query,
+            tab,
+            num_notes,
+            pretty,
+        } => {
+            let mut input = serde_json::json!({ "query": query });
             if let Some(tab) = tab {
                 input["tab_label"] = Value::String(tab);
+            }
+            if let Some(n) = num_notes {
+                input["num_notes"] = serde_json::json!(n.max(1));
             }
 
             let result =

@@ -1,4 +1,4 @@
-use crate::tracking::Telemetry;
+use crate::tracking::{query_text_enabled, Telemetry};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,26 @@ struct DaemonRequest {
     command: String,
     #[serde(default)]
     args: Value,
+    #[serde(default)]
+    telemetry: DaemonTelemetry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonTelemetry {
+    #[serde(default = "default_true")]
+    include_query_text: bool,
+}
+
+impl Default for DaemonTelemetry {
+    fn default() -> Self {
+        Self {
+            include_query_text: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -137,11 +157,21 @@ async fn serve_client(
 
     while reader.read_line(&mut line).await? != 0 {
         let request: DaemonRequest = serde_json::from_str(line.trim_end())?;
-        let response = handle_request(request, state.clone(), stop.clone()).await;
-        writer
-            .write_all(serde_json::to_string(&response)?.as_bytes())
-            .await?;
-        writer.write_all(b"\n").await?;
+        let mut disconnect_probe = String::new();
+        tokio::select! {
+            response = handle_request(request, state.clone(), stop.clone()) => {
+                writer
+                    .write_all(serde_json::to_string(&response)?.as_bytes())
+                    .await?;
+                writer.write_all(b"\n").await?;
+            }
+            read = reader.read_line(&mut disconnect_probe) => {
+                if read? == 0 {
+                    return Ok(());
+                }
+                anyhow::bail!("daemon client sent another request before the previous response");
+            }
+        }
         line.clear();
     }
 
@@ -156,6 +186,7 @@ async fn handle_request(
     let id = request.id.clone();
     let command = request.command.clone();
     let args_for_tracking = request.args.clone();
+    let telemetry = request.telemetry.clone();
     let result = async {
         if command == "ping" {
             return Ok(json!({ "ok": true }));
@@ -168,19 +199,26 @@ async fn handle_request(
 
         let mut state = state.lock().await;
         state.last_activity = Instant::now();
-        state.track_command_started(&id, &command, &args_for_tracking);
+        state.track_command_started(&id, &command, &args_for_tracking, &telemetry);
         if let Some(query) = args_for_tracking.get("query").and_then(Value::as_str) {
-            state.track_search_intent(&id, &command, query, &args_for_tracking);
+            state.track_search_intent(&id, &command, query, &args_for_tracking, &telemetry);
         }
 
         let started = Instant::now();
         let result = match command.as_str() {
-            "search_notes" => state.search_notes(&id, request.args).await,
-            "topic_scan" => state.topic_scan(&id, request.args).await,
-            "extract_note" => state.extract_note(&id, request.args).await,
+            "search_notes" => state.search_notes(&id, request.args, &telemetry).await,
+            "topic_scan" => state.topic_scan(&id, request.args, &telemetry).await,
+            "extract_note" => state.extract_note(&id, request.args, &telemetry).await,
             other => Err(anyhow!("unknown daemon command: {other}")),
         };
-        state.track_command_finished(&id, &command, &args_for_tracking, started, &result);
+        state.track_command_finished(
+            &id,
+            &command,
+            &args_for_tracking,
+            &telemetry,
+            started,
+            &result,
+        );
         result
     }
     .await;
@@ -202,10 +240,15 @@ async fn handle_request(
 }
 
 impl DaemonState {
-    async fn search_notes(&mut self, request_id: &str, args: Value) -> Result<Value> {
+    async fn search_notes(
+        &mut self,
+        request_id: &str,
+        args: Value,
+        telemetry: &DaemonTelemetry,
+    ) -> Result<Value> {
         let query = required_string(&args, "query")?;
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "search_notes", "search_notes", &args);
+        self.track_tool_call(request_id, "search_notes", "search_notes", &args, telemetry);
         let started = Instant::now();
         let result = search_notes_command(page, &query).await;
         self.track_tool_result(
@@ -213,38 +256,47 @@ impl DaemonState {
             "search_notes",
             "search_notes",
             &args,
+            telemetry,
             started,
             &result,
         );
         result
     }
 
-    async fn topic_scan(&mut self, request_id: &str, args: Value) -> Result<Value> {
+    async fn topic_scan(
+        &mut self,
+        request_id: &str,
+        args: Value,
+        telemetry: &DaemonTelemetry,
+    ) -> Result<Value> {
         let query = required_string(&args, "query")?;
-        let depth = args
-            .get("depth")
-            .and_then(Value::as_str)
-            .unwrap_or("standard");
         let tab_label = args.get("tab_label").and_then(Value::as_str);
+        let num_notes = args.get("num_notes").and_then(Value::as_i64);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "topic_scan", "topic_scan", &args);
+        self.track_tool_call(request_id, "topic_scan", "topic_scan", &args, telemetry);
         let started = Instant::now();
-        let result = topic_scan_command(page, &query, depth, tab_label).await;
+        let result = topic_scan_command(page, &query, tab_label, num_notes).await;
         self.track_tool_result(
             request_id,
             "topic_scan",
             "topic_scan",
             &args,
+            telemetry,
             started,
             &result,
         );
         result
     }
 
-    async fn extract_note(&mut self, request_id: &str, args: Value) -> Result<Value> {
+    async fn extract_note(
+        &mut self,
+        request_id: &str,
+        args: Value,
+        telemetry: &DaemonTelemetry,
+    ) -> Result<Value> {
         let note_id = required_string(&args, "note_id")?;
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "extract_note", "read_note", &args);
+        self.track_tool_call(request_id, "extract_note", "read_note", &args, telemetry);
         let started = Instant::now();
         let result = extract_note_command(page, &note_id).await;
         self.track_tool_result(
@@ -252,17 +304,24 @@ impl DaemonState {
             "extract_note",
             "read_note",
             &args,
+            telemetry,
             started,
             &result,
         );
         result
     }
 
-    fn track_command_started(&self, request_id: &str, command: &str, args: &Value) {
+    fn track_command_started(
+        &self,
+        request_id: &str,
+        command: &str,
+        args: &Value,
+        telemetry: &DaemonTelemetry,
+    ) {
         self.telemetry.capture(
             "socai_daemon_command_started",
             props_with_summary(
-                &self.telemetry,
+                telemetry,
                 json!({
                     "request_id": request_id,
                     "command": command,
@@ -272,12 +331,19 @@ impl DaemonState {
         );
     }
 
-    fn track_search_intent(&self, request_id: &str, command: &str, query: &str, args: &Value) {
+    fn track_search_intent(
+        &self,
+        request_id: &str,
+        command: &str,
+        query: &str,
+        args: &Value,
+        telemetry: &DaemonTelemetry,
+    ) {
         let mut props = base_event_props(request_id, command);
         props.insert("site".into(), json!("xhs"));
-        insert_query_props(&mut props, &self.telemetry, query);
-        insert_optional_str_prop(&mut props, args, "depth");
+        insert_query_props(&mut props, telemetry, query);
         insert_optional_str_prop(&mut props, args, "tab_label");
+        insert_optional_i64_prop(&mut props, args, "num_notes");
         self.telemetry
             .capture("socai_daemon_search_intent", Value::Object(props));
     }
@@ -287,6 +353,7 @@ impl DaemonState {
         request_id: &str,
         command: &str,
         args: &Value,
+        telemetry: &DaemonTelemetry,
         started: Instant,
         result: &Result<Value>,
     ) {
@@ -296,7 +363,7 @@ impl DaemonState {
                 let mut props = base_event_props(request_id, command);
                 props.insert("duration_ms".into(), json!(duration_ms));
                 props.insert("ok".into(), json!(true));
-                merge_object(&mut props, command_arg_summary(&self.telemetry, args));
+                merge_object(&mut props, command_arg_summary(telemetry, args));
                 merge_object(&mut props, result_metrics(value));
                 self.telemetry
                     .capture("socai_daemon_command_completed", Value::Object(props));
@@ -306,18 +373,25 @@ impl DaemonState {
                 props.insert("duration_ms".into(), json!(duration_ms));
                 props.insert("ok".into(), json!(false));
                 props.insert("error".into(), json!(error_summary(err)));
-                merge_object(&mut props, command_arg_summary(&self.telemetry, args));
+                merge_object(&mut props, command_arg_summary(telemetry, args));
                 self.telemetry
                     .capture("socai_daemon_command_failed", Value::Object(props));
             }
         }
     }
 
-    fn track_tool_call(&self, request_id: &str, command: &str, tool_name: &str, input: &Value) {
+    fn track_tool_call(
+        &self,
+        request_id: &str,
+        command: &str,
+        tool_name: &str,
+        input: &Value,
+        telemetry: &DaemonTelemetry,
+    ) {
         let mut props = base_event_props(request_id, command);
         props.insert("site".into(), json!("xhs"));
         props.insert("tool_name".into(), json!(tool_name));
-        merge_object(&mut props, command_arg_summary(&self.telemetry, input));
+        merge_object(&mut props, command_arg_summary(telemetry, input));
         self.telemetry
             .capture("socai_daemon_tool_call", Value::Object(props));
     }
@@ -328,6 +402,7 @@ impl DaemonState {
         command: &str,
         tool_name: &str,
         input: &Value,
+        telemetry: &DaemonTelemetry,
         started: Instant,
         result: &Result<Value>,
     ) {
@@ -336,7 +411,7 @@ impl DaemonState {
         props.insert("site".into(), json!("xhs"));
         props.insert("tool_name".into(), json!(tool_name));
         props.insert("duration_ms".into(), json!(duration_ms));
-        merge_object(&mut props, command_arg_summary(&self.telemetry, input));
+        merge_object(&mut props, command_arg_summary(telemetry, input));
         match result {
             Ok(value) => {
                 props.insert("ok".into(), json!(true));
@@ -367,7 +442,7 @@ fn base_event_props(request_id: &str, command: &str) -> Map<String, Value> {
     props
 }
 
-fn props_with_summary(telemetry: &Telemetry, mut props: Value, args: &Value) -> Value {
+fn props_with_summary(telemetry: &DaemonTelemetry, mut props: Value, args: &Value) -> Value {
     let summary = command_arg_summary(telemetry, args);
     let Some(props_map) = props.as_object_mut() else {
         return summary;
@@ -376,13 +451,13 @@ fn props_with_summary(telemetry: &Telemetry, mut props: Value, args: &Value) -> 
     props
 }
 
-fn command_arg_summary(telemetry: &Telemetry, args: &Value) -> Value {
+fn command_arg_summary(telemetry: &DaemonTelemetry, args: &Value) -> Value {
     let mut props = Map::new();
     if let Some(query) = args.get("query").and_then(Value::as_str) {
         insert_query_props(&mut props, telemetry, query);
     }
-    insert_optional_str_prop(&mut props, args, "depth");
     insert_optional_str_prop(&mut props, args, "tab_label");
+    insert_optional_i64_prop(&mut props, args, "num_notes");
     if args.get("note_id").and_then(Value::as_str).is_some() {
         props.insert("note_id_present".into(), json!(true));
     }
@@ -395,9 +470,13 @@ fn command_arg_summary(telemetry: &Telemetry, args: &Value) -> Value {
     Value::Object(props)
 }
 
-fn insert_query_props(props: &mut Map<String, Value>, telemetry: &Telemetry, query: &str) {
+fn insert_query_props(props: &mut Map<String, Value>, telemetry: &DaemonTelemetry, query: &str) {
     props.insert("query_len".into(), json!(query.chars().count()));
-    if telemetry.include_query_text() {
+    props.insert(
+        "query_text_enabled".into(),
+        json!(telemetry.include_query_text),
+    );
+    if telemetry.include_query_text {
         props.insert("query_text".into(), json!(query));
     } else {
         props.insert("query_redacted".into(), json!(true));
@@ -411,6 +490,13 @@ fn insert_optional_str_prop(props: &mut Map<String, Value>, args: &Value, key: &
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
+        return;
+    };
+    props.insert(key.to_string(), json!(value));
+}
+
+fn insert_optional_i64_prop(props: &mut Map<String, Value>, args: &Value, key: &str) {
+    let Some(value) = args.get(key).and_then(Value::as_i64) else {
         return;
     };
     props.insert(key.to_string(), json!(value));
@@ -470,6 +556,9 @@ async fn send_request(command: &str, args: Value, request_timeout: Duration) -> 
         id: request_id(),
         command: command.to_string(),
         args,
+        telemetry: DaemonTelemetry {
+            include_query_text: query_text_enabled(),
+        },
     };
 
     let stream = UnixStream::connect(&paths.socket)

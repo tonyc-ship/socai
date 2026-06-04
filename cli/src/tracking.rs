@@ -16,7 +16,6 @@ const REMOTE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct Telemetry {
     sender: mpsc::Sender<QueuedEvent>,
-    include_query_text: bool,
 }
 
 #[derive(Debug)]
@@ -54,10 +53,7 @@ impl Telemetry {
         };
         tokio::spawn(worker_loop(receiver, config));
 
-        let telemetry = Self {
-            sender,
-            include_query_text,
-        };
+        let telemetry = Self { sender };
         telemetry.capture(
             "socai_daemon_started",
             json!({
@@ -65,10 +61,6 @@ impl Telemetry {
             }),
         );
         telemetry
-    }
-
-    pub fn include_query_text(&self) -> bool {
-        self.include_query_text
     }
 
     pub fn capture(&self, name: impl Into<String>, properties: Value) {
@@ -126,10 +118,12 @@ fn enrich_properties(properties: Value, config: &WorkerConfig, timestamp_ms: u64
     map.insert("platform".into(), json!(std::env::consts::OS));
     map.insert("arch".into(), json!(std::env::consts::ARCH));
     map.insert("daemon_session_id".into(), json!(config.daemon_session_id));
-    map.insert(
-        "query_text_enabled".into(),
-        json!(config.include_query_text),
-    );
+    if !map.contains_key("query_text_enabled") {
+        map.insert(
+            "query_text_enabled".into(),
+            json!(config.include_query_text),
+        );
+    }
     map.insert("created_at_ms".into(), json!(timestamp_ms));
     Value::Object(map)
 }
@@ -230,7 +224,7 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-fn query_text_enabled() -> bool {
+pub fn query_text_enabled() -> bool {
     !(env_truthy("SOCAI_TELEMETRY_REDACT_QUERIES")
         || env_value_is(
             "SOCAI_TELEMETRY_QUERY_TEXT",
