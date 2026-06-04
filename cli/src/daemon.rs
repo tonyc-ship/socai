@@ -199,22 +199,25 @@ async fn handle_request(
 impl DaemonState {
     async fn search_notes(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
+        let debug_snapshot = debug_snapshot_flag(&args);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        search_notes_command(page, &query).await
+        search_notes_command(page, &query, debug_snapshot).await
     }
 
     async fn topic_scan(&mut self, args: Value) -> Result<Value> {
         let query = required_string(&args, "query")?;
         let tab_label = args.get("tab_label").and_then(Value::as_str);
         let num_notes = args.get("num_notes").and_then(Value::as_i64);
+        let debug_snapshot = debug_snapshot_flag(&args);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        topic_scan_command(page, &query, tab_label, num_notes).await
+        topic_scan_command(page, &query, tab_label, num_notes, debug_snapshot).await
     }
 
     async fn extract_note(&mut self, args: Value) -> Result<Value> {
         let note_id = required_string(&args, "note_id")?;
+        let debug_snapshot = debug_snapshot_flag(&args);
         let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        extract_note_command(page, &note_id).await
+        extract_note_command(page, &note_id, debug_snapshot).await
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -311,6 +314,12 @@ async fn spawn_daemon() -> Result<()> {
         "socai rust daemon did not become ready; see {}",
         paths.log.display()
     ))
+}
+
+fn debug_snapshot_flag(args: &Value) -> bool {
+    args.get("debug_snapshot")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String> {
