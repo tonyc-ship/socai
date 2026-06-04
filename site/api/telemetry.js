@@ -24,7 +24,6 @@ const ALLOWED_FIELDS = new Set([
   'tool_name',
   'query_text',
   'query_len',
-  'query_redacted',
   'query_text_enabled',
   'depth',
   'tab_label',
@@ -38,9 +37,6 @@ const ALLOWED_FIELDS = new Set([
   'notes_count',
   'notes_skipped_count',
   'has_run_dir',
-  'created_at_ms',
-  'client_created_at_ms',
-  'received_at_ms',
   'proxy_version',
 ]);
 
@@ -164,9 +160,8 @@ function sanitizeEvent(raw, now) {
   }
 
   const out = {
-    _time: now.toISOString(),
+    _time: eventTime(flattened, now),
     event: eventName,
-    received_at_ms: now.getTime(),
     proxy_version: 1,
   };
 
@@ -180,11 +175,19 @@ function sanitizeEvent(raw, now) {
     }
   }
 
-  if (out.created_at_ms !== undefined && out.client_created_at_ms === undefined) {
-    out.client_created_at_ms = out.created_at_ms;
-  }
-
   return out;
+}
+
+function eventTime(event, fallback) {
+  const raw = Number(event.client_created_at_ms ?? event.created_at_ms);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallback.toISOString();
+  }
+  const timestamp = new Date(raw);
+  if (Number.isNaN(timestamp.getTime())) {
+    return fallback.toISOString();
+  }
+  return timestamp.toISOString();
 }
 
 function flattenEvent(raw) {

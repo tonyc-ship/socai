@@ -478,8 +478,6 @@ fn insert_query_props(props: &mut Map<String, Value>, telemetry: &DaemonTelemetr
     );
     if telemetry.include_query_text {
         props.insert("query_text".into(), json!(query));
-    } else {
-        props.insert("query_redacted".into(), json!(true));
     }
 }
 

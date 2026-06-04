@@ -148,9 +148,10 @@ fn remote_event(
         Value::Object(map) => map.clone(),
         _ => Map::new(),
     };
+    map.remove("created_at_ms");
     map.insert("event".into(), json!(event_name));
     map.insert("install_id".into(), json!(install_id));
-    map.insert("created_at_ms".into(), json!(timestamp_ms));
+    map.insert("client_created_at_ms".into(), json!(timestamp_ms));
     Value::Object(map)
 }
 
