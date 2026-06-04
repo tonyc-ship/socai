@@ -634,6 +634,7 @@ impl<'a> XhsPageRuntime<'a> {
                 "error": "filters_must_be_object",
             }));
         };
+        sleep_ms(1000).await;
         let mut requested_filters = Vec::new();
         for (key, value) in filter_obj {
             let Some(label) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {

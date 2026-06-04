@@ -70,7 +70,7 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
 
 ## Workflows
 
-- Topic research: call `topic_scan(query=..., filters=..., num_notes=N)`. It
+- Topic research: call `topic_scan(query=..., num_notes=N)`. It
   searches, optionally switches tab, optionally applies search-result filters,
   then reads notes top-to-bottom in feed order — opening each (which pages the
   next cards in as it scrolls), reading its body + top comments, writing

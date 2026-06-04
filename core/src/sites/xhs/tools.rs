@@ -46,6 +46,11 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(ListSearchTabsTool { page: page.clone() }),
         Arc::new(ClickSearchTabTool { page: page.clone() }),
+        Arc::new(ListSearchFiltersTool { page: page.clone() }),
+        Arc::new(ApplySearchFiltersTool {
+            page: page.clone(),
+            history: history.clone(),
+        }),
         Arc::new(OpenNoteTool { page: page.clone() }),
         Arc::new(CloseNoteTool { page: page.clone() }),
         Arc::new(ReadNoteTool {
@@ -758,6 +763,102 @@ impl Tool for ClickSearchTabTool {
     }
 }
 
+/// list_search_filters() -> {ok, groups, ...}
+pub struct ListSearchFiltersTool {
+    page: Arc<PageSession>,
+}
+
+#[async_trait]
+impl Tool for ListSearchFiltersTool {
+    fn name(&self) -> &str {
+        "list_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control and list the \
+         currently available filter groups/options. Use this after \
+         `search_notes` and after any `click_search_tab`, because the filter \
+         panel changes when the active search tab changes."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Seconds to wait for the hover popup to appear",
+                    "default": 1.0
+                }
+            }
+        })
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
+        let xhs = XhsPageRuntime::new(&self.page);
+        let value = xhs.list_search_filters(wait_seconds).await?;
+        Ok(json_result(&value))
+    }
+}
+
+/// apply_search_filters(filters, reset?, wait_seconds?) -> {ok, filters, cards}
+pub struct ApplySearchFiltersTool {
+    page: Arc<PageSession>,
+    history: Arc<XhsHistoryStore>,
+}
+
+#[async_trait]
+impl Tool for ApplySearchFiltersTool {
+    fn name(&self) -> &str {
+        "apply_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control and choose filter \
+         options from the current panel. Each group is single-select, but \
+         different groups can be combined. Call `list_search_filters` first \
+         after switching tabs so you only request groups/options that are \
+         currently visible."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filters": search_filters_schema(),
+                "reset": {
+                    "type": "boolean",
+                    "description": "Click reset before applying the requested filters",
+                    "default": false
+                },
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Seconds to wait for the hover popup/results refresh",
+                    "default": 1.0
+                }
+            },
+            "required": ["filters"]
+        })
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let filters = input
+            .get("filters")
+            .ok_or_else(|| anyhow::anyhow!("missing filters"))?;
+        let reset = get_bool(&input, "reset", false);
+        let wait_seconds = get_f64(&input, "wait_seconds", 1.0);
+        let xhs = XhsPageRuntime::new(&self.page);
+        let mut value = xhs
+            .apply_search_filters(filters, reset, wait_seconds)
+            .await?;
+        if let Some(cards) = value.get_mut("cards") {
+            self.history.annotate_cards(cards);
+        }
+        Ok(json_result(&value))
+    }
+}
+
 /// scroll_in_note(pixels?) -> {ok, scroll_top, ...}
 pub struct ScrollInNoteTool {
     page: Arc<PageSession>,
@@ -1149,6 +1250,24 @@ impl Tool for TopicScanTool {
         // the pre-call snapshot so flags reflect "known before this scan"
         // rather than "known after this scan's own writes".
         let mut search = search;
+        if filter_result
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            if let Some(search_map) = search.as_object_mut() {
+                if let Some(cards) = filter_result.get("cards").cloned() {
+                    search_map.insert("cards".to_string(), cards);
+                }
+                if let Some(count) = filter_result.get("count").cloned() {
+                    search_map.insert("count".to_string(), count);
+                }
+                if let Some(url) = filter_result.get("url").cloned() {
+                    search_map.insert("url".to_string(), url);
+                }
+                search_map.insert("filtered".to_string(), Value::Bool(true));
+            }
+        }
         if let Some(cards) = search.get_mut("cards") {
             history_snapshot.annotate_cards(cards);
         }
