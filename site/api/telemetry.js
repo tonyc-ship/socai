@@ -38,8 +38,6 @@ const ALLOWED_FIELDS = new Set([
   'notes_count',
   'notes_skipped_count',
   'has_run_dir',
-  'telemetry_enabled',
-  'remote_enabled',
   'created_at_ms',
   'client_created_at_ms',
   'received_at_ms',

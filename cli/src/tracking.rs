@@ -8,16 +8,15 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 const EVENT_SCHEMA_VERSION: u32 = 1;
-const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://socai.io/v1/events";
+const TELEMETRY_ENDPOINT: &str = "https://socai.io/v1/events";
 const CHANNEL_CAPACITY: usize = 512;
 const REMOTE_BATCH_SIZE: usize = 25;
 const REMOTE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct Telemetry {
-    sender: Option<mpsc::Sender<QueuedEvent>>,
+    sender: mpsc::Sender<QueuedEvent>,
     include_query_text: bool,
-    remote_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -31,7 +30,6 @@ struct WorkerConfig {
     install_id: String,
     daemon_session_id: String,
     local_path: PathBuf,
-    endpoint: Option<String>,
     include_query_text: bool,
 }
 
@@ -46,51 +44,35 @@ impl Telemetry {
         let install_id = load_or_create_install_id(home);
         let daemon_session_id = new_session_id();
         let local_path = home.join("telemetry/events.jsonl");
-        let endpoint = telemetry_endpoint();
 
         let (sender, receiver) = mpsc::channel(CHANNEL_CAPACITY);
         let config = WorkerConfig {
             install_id,
             daemon_session_id,
             local_path,
-            endpoint,
             include_query_text,
         };
-        let remote_enabled = config.endpoint.is_some();
         tokio::spawn(worker_loop(receiver, config));
 
         let telemetry = Self {
-            sender: Some(sender),
+            sender,
             include_query_text,
-            remote_enabled,
         };
         telemetry.capture(
             "socai_daemon_started",
             json!({
-                "remote_enabled": remote_enabled,
                 "query_text_enabled": include_query_text,
             }),
         );
         telemetry
     }
 
-    pub fn enabled(&self) -> bool {
-        self.sender.is_some()
-    }
-
     pub fn include_query_text(&self) -> bool {
         self.include_query_text
     }
 
-    pub fn remote_enabled(&self) -> bool {
-        self.remote_enabled
-    }
-
     pub fn capture(&self, name: impl Into<String>, properties: Value) {
-        let Some(sender) = &self.sender else {
-            return;
-        };
-        let _ = sender.try_send(QueuedEvent {
+        let _ = self.sender.try_send(QueuedEvent {
             name: name.into(),
             properties,
         });
@@ -114,20 +96,18 @@ async fn worker_loop(mut receiver: mpsc::Receiver<QueuedEvent>, config: WorkerCo
                 let row = local_row(&event.name, &config.install_id, timestamp_ms, &properties);
                 let _ = append_jsonl(&config.local_path, &row).await;
 
-                if config.endpoint.is_some() {
-                    remote_batch.push(remote_event(&event.name, &config.install_id, timestamp_ms, &properties));
-                    if remote_batch.len() >= REMOTE_BATCH_SIZE {
-                        flush_remote(&client, &config, &mut remote_batch).await;
-                    }
+                remote_batch.push(remote_event(&event.name, &config.install_id, timestamp_ms, &properties));
+                if remote_batch.len() >= REMOTE_BATCH_SIZE {
+                    flush_remote(&client, &mut remote_batch).await;
                 }
             }
             _ = flush_tick.tick() => {
-                flush_remote(&client, &config, &mut remote_batch).await;
+                flush_remote(&client, &mut remote_batch).await;
             }
         }
     }
 
-    flush_remote(&client, &config, &mut remote_batch).await;
+    flush_remote(&client, &mut remote_batch).await;
 }
 
 fn enrich_properties(properties: Value, config: &WorkerConfig, timestamp_ms: u64) -> Value {
@@ -179,18 +159,14 @@ fn remote_event(
     Value::Object(map)
 }
 
-async fn flush_remote(client: &reqwest::Client, config: &WorkerConfig, batch: &mut Vec<Value>) {
-    let Some(endpoint) = config.endpoint.as_deref() else {
-        batch.clear();
-        return;
-    };
+async fn flush_remote(client: &reqwest::Client, batch: &mut Vec<Value>) {
     if batch.is_empty() {
         return;
     }
 
     let events = std::mem::take(batch);
     let body = json!({ "events": events });
-    let _ = client.post(endpoint).json(&body).send().await;
+    let _ = client.post(TELEMETRY_ENDPOINT).json(&body).send().await;
 }
 
 async fn append_jsonl(path: &Path, row: &Value) -> std::io::Result<()> {
@@ -260,21 +236,6 @@ fn query_text_enabled() -> bool {
             "SOCAI_TELEMETRY_QUERY_TEXT",
             &["0", "false", "off", "disabled", "no"],
         ))
-}
-
-fn telemetry_endpoint() -> Option<String> {
-    env_nonempty("SOCAI_TELEMETRY_ENDPOINT")
-        .or_else(|| option_env!("SOCAI_TELEMETRY_ENDPOINT").map(str::to_string))
-        .or_else(|| Some(DEFAULT_TELEMETRY_ENDPOINT.to_string()))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn env_truthy(name: &str) -> bool {

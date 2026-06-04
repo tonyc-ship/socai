@@ -266,8 +266,6 @@ impl DaemonState {
                 json!({
                     "request_id": request_id,
                     "command": command,
-                    "telemetry_enabled": self.telemetry.enabled(),
-                    "remote_enabled": self.telemetry.remote_enabled(),
                 }),
                 args,
             ),

@@ -48,7 +48,6 @@ default, but can be redacted. The daemon also writes a local JSONL buffer at
 
 ```bash
 SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
-SOCAI_TELEMETRY_ENDPOINT=http://localhost:3000/v1/events socai search_notes "运营爆款思路"
 ```
 
 `extract_note` is a
