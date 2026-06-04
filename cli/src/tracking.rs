@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,16 @@ struct WorkerConfig {
     install_id: String,
     session_id: String,
     local_path: PathBuf,
-    include_query_text: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeviceInfo {
+    os_version: String,
+    os_kernel_version: String,
+    memory_total_mb: Option<u64>,
+    cpu_count: Option<usize>,
+    terminal_app: String,
+    parent_process: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,7 +50,6 @@ struct IdentityFile {
 
 impl Telemetry {
     pub fn new(home: &Path) -> Self {
-        let include_query_text = query_text_enabled();
         let install_id = load_or_create_install_id(home);
         let session_id = new_session_id();
         let local_path = home.join("telemetry/events.jsonl");
@@ -50,18 +59,10 @@ impl Telemetry {
             install_id,
             session_id,
             local_path,
-            include_query_text,
         };
         tokio::spawn(worker_loop(receiver, config));
 
-        let telemetry = Self { sender };
-        telemetry.capture(
-            "socai_daemon_started",
-            json!({
-                "query_text_enabled": include_query_text,
-            }),
-        );
-        telemetry
+        Self { sender }
     }
 
     pub fn capture(&self, name: impl Into<String>, properties: Value) {
@@ -89,7 +90,7 @@ async fn worker_loop(mut receiver: mpsc::Receiver<QueuedEvent>, config: WorkerCo
                 let row = local_row(&event.name, &config.install_id, timestamp_ms, &properties);
                 let _ = append_jsonl(&config.local_path, &row).await;
 
-                remote_batch.push(remote_event(&event.name, &config.install_id, timestamp_ms, &properties));
+                remote_batch.push(remote_event(&event.name, &config.install_id, &properties));
                 if remote_batch.len() >= REMOTE_BATCH_SIZE {
                     flush_remote(&client, &mut remote_batch).await;
                 }
@@ -117,16 +118,28 @@ fn enrich_properties(properties: Value, config: &WorkerConfig, timestamp_ms: u64
     map.insert("source".into(), json!("cli_daemon"));
     map.insert("app_version".into(), json!(env!("CARGO_PKG_VERSION")));
     map.insert("platform".into(), json!(std::env::consts::OS));
-    map.insert("arch".into(), json!(std::env::consts::ARCH));
     map.insert("session_id".into(), json!(config.session_id));
-    if !map.contains_key("query_text_enabled") {
-        map.insert(
-            "query_text_enabled".into(),
-            json!(config.include_query_text),
-        );
-    }
     map.insert("created_at_ms".into(), json!(timestamp_ms));
+
+    let device = device_info();
+    insert_nonempty(&mut map, "os_version", &device.os_version);
+    insert_nonempty(&mut map, "os_kernel_version", &device.os_kernel_version);
+    insert_nonempty(&mut map, "terminal_app", &device.terminal_app);
+    insert_nonempty(&mut map, "parent_process", &device.parent_process);
+    if let Some(memory_total_mb) = device.memory_total_mb {
+        map.insert("memory_total_mb".into(), json!(memory_total_mb));
+    }
+    if let Some(cpu_count) = device.cpu_count {
+        map.insert("cpu_count".into(), json!(cpu_count));
+    }
+
     Value::Object(map)
+}
+
+fn insert_nonempty(map: &mut Map<String, Value>, key: &str, value: &str) {
+    if !value.trim().is_empty() {
+        map.insert(key.to_string(), json!(value));
+    }
 }
 
 fn local_row(event_name: &str, install_id: &str, timestamp_ms: u64, properties: &Value) -> Value {
@@ -138,20 +151,15 @@ fn local_row(event_name: &str, install_id: &str, timestamp_ms: u64, properties: 
     })
 }
 
-fn remote_event(
-    event_name: &str,
-    install_id: &str,
-    timestamp_ms: u64,
-    properties: &Value,
-) -> Value {
+fn remote_event(event_name: &str, install_id: &str, properties: &Value) -> Value {
     let mut map = match properties {
         Value::Object(map) => map.clone(),
         _ => Map::new(),
     };
-    map.remove("created_at_ms");
+    // The proxy uses this for validation/routing and strips it before Axiom.
     map.insert("event".into(), json!(event_name));
     map.insert("install_id".into(), json!(install_id));
-    map.insert("client_created_at_ms".into(), json!(timestamp_ms));
+    map.remove("created_at_ms");
     Value::Object(map)
 }
 
@@ -219,12 +227,179 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
+pub fn telemetry_enabled() -> bool {
+    !(env_truthy("DO_NOT_TRACK")
+        || env_truthy("SOCAI_DISABLE_TELEMETRY")
+        || env_value_is("SOCAI_TELEMETRY", &["0", "false", "off", "disabled", "no"]))
+}
+
 pub fn query_text_enabled() -> bool {
     !(env_truthy("SOCAI_TELEMETRY_REDACT_QUERIES")
         || env_value_is(
             "SOCAI_TELEMETRY_QUERY_TEXT",
             &["0", "false", "off", "disabled", "no"],
         ))
+}
+
+fn device_info() -> &'static DeviceInfo {
+    static DEVICE_INFO: OnceLock<DeviceInfo> = OnceLock::new();
+    DEVICE_INFO.get_or_init(|| DeviceInfo {
+        os_version: os_version(),
+        os_kernel_version: os_kernel_version(),
+        memory_total_mb: memory_total_mb(),
+        cpu_count: std::thread::available_parallelism()
+            .ok()
+            .map(|count| count.get()),
+        terminal_app: terminal_app(),
+        parent_process: parent_process_name(),
+    })
+}
+
+fn os_version() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return command_output("sw_vers", &["-productVersion"]);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return linux_pretty_name().unwrap_or_default();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return command_output("cmd", &["/C", "ver"]);
+    }
+    #[allow(unreachable_code)]
+    String::new()
+}
+
+fn os_kernel_version() -> String {
+    #[cfg(unix)]
+    {
+        return command_output("uname", &["-r"]);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return command_output("cmd", &["/C", "ver"]);
+    }
+    #[allow(unreachable_code)]
+    String::new()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pretty_name() -> Option<String> {
+    let text = std::fs::read_to_string("/etc/os-release").ok()?;
+    for line in text.lines() {
+        let Some(value) = line.strip_prefix("PRETTY_NAME=") else {
+            continue;
+        };
+        return Some(value.trim_matches('"').to_string());
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn memory_total_mb() -> Option<u64> {
+    use std::ffi::CString;
+    let name = CString::new("hw.memsize").ok()?;
+    let mut value: u64 = 0;
+    let mut size = std::mem::size_of::<u64>();
+    let rc = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            (&mut value as *mut u64).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Some(value / 1024 / 1024)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn memory_total_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("MemTotal:") else {
+            continue;
+        };
+        let kb = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+        return Some(kb / 1024);
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn memory_total_mb() -> Option<u64> {
+    None
+}
+
+fn terminal_app() -> String {
+    if std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+        || std::env::var_os("GHOSTTY_BIN_DIR").is_some()
+    {
+        return "Ghostty".to_string();
+    }
+    if std::env::var_os("WEZTERM_EXECUTABLE").is_some() {
+        return "WezTerm".to_string();
+    }
+    if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+        return "kitty".to_string();
+    }
+    if std::env::var_os("ALACRITTY_WINDOW_ID").is_some() {
+        return "Alacritty".to_string();
+    }
+    if std::env::var_os("VSCODE_PID").is_some() {
+        return "VS Code".to_string();
+    }
+    if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
+        let trimmed = term_program.trim();
+        if !trimmed.is_empty() {
+            return match trimmed {
+                "Apple_Terminal" => "Terminal".to_string(),
+                "iTerm.app" => "iTerm".to_string(),
+                other => other.to_string(),
+            };
+        }
+    }
+    if let Ok(lc_terminal) = std::env::var("LC_TERMINAL") {
+        let trimmed = lc_terminal.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if parent_process_name().to_ascii_lowercase().contains("codex") {
+        return "Codex".to_string();
+    }
+    std::env::var("TERM")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn parent_process_name() -> String {
+    let ppid = unsafe { libc::getppid() };
+    command_output("ps", &["-p", &ppid.to_string(), "-o", "comm="])
+}
+
+#[cfg(not(unix))]
+fn parent_process_name() -> String {
+    String::new()
+}
+
+fn command_output(program: &str, args: &[&str]) -> String {
+    let Ok(output) = std::process::Command::new(program).args(args).output() else {
+        return String::new();
+    };
+    if !output.status.success() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 fn env_truthy(name: &str) -> bool {

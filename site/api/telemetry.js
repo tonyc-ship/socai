@@ -7,8 +7,6 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_EVENTS = 1_200;
 
 const ALLOWED_FIELDS = new Set([
-  '_time',
-  'event',
   'install_id',
   'distinct_id',
   'session_id',
@@ -18,15 +16,20 @@ const ALLOWED_FIELDS = new Set([
   'source',
   'app_version',
   'platform',
-  'arch',
+  'os_version',
+  'os_kernel_version',
+  'memory_total_mb',
+  'cpu_count',
+  'terminal_app',
+  'parent_process',
   'command',
   'site',
   'tool_name',
   'query_text',
   'query_len',
   'query_text_enabled',
-  'depth',
   'tab_label',
+  'num_notes',
   'duration_ms',
   'ok',
   'error',
@@ -80,9 +83,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  const now = new Date();
   const sanitized = events
-    .map((event) => sanitizeEvent(event, now))
+    .map((event) => sanitizeEvent(event))
     .filter((event) => event !== null);
 
   if (sanitized.length === 0) {
@@ -148,7 +150,7 @@ function normalizeEvents(input) {
   return [];
 }
 
-function sanitizeEvent(raw, now) {
+function sanitizeEvent(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
   }
@@ -160,13 +162,11 @@ function sanitizeEvent(raw, now) {
   }
 
   const out = {
-    _time: eventTime(flattened, now),
-    event: eventName,
     proxy_version: 1,
   };
 
   for (const [key, value] of Object.entries(flattened)) {
-    if (!ALLOWED_FIELDS.has(key) || key === '_time' || key === 'event') {
+    if (!ALLOWED_FIELDS.has(key)) {
       continue;
     }
     const safe = sanitizeValue(value);
@@ -176,18 +176,6 @@ function sanitizeEvent(raw, now) {
   }
 
   return out;
-}
-
-function eventTime(event, fallback) {
-  const raw = Number(event.client_created_at_ms ?? event.created_at_ms);
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return fallback.toISOString();
-  }
-  const timestamp = new Date(raw);
-  if (Number.isNaN(timestamp.getTime())) {
-    return fallback.toISOString();
-  }
-  return timestamp.toISOString();
 }
 
 function flattenEvent(raw) {

@@ -1,4 +1,4 @@
-use crate::tracking::{query_text_enabled, Telemetry};
+use crate::tracking::{query_text_enabled, telemetry_enabled, Telemetry};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -41,12 +41,15 @@ struct DaemonRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DaemonTelemetry {
     #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default = "default_true")]
     include_query_text: bool,
 }
 
 impl Default for DaemonTelemetry {
     fn default() -> Self {
         Self {
+            enabled: true,
             include_query_text: true,
         }
     }
@@ -185,7 +188,6 @@ async fn handle_request(
 ) -> DaemonResponse {
     let id = request.id.clone();
     let command = request.command.clone();
-    let args_for_tracking = request.args.clone();
     let telemetry = request.telemetry.clone();
     let result = async {
         if command == "ping" {
@@ -199,27 +201,12 @@ async fn handle_request(
 
         let mut state = state.lock().await;
         state.last_activity = Instant::now();
-        state.track_command_started(&id, &command, &args_for_tracking, &telemetry);
-        if let Some(query) = args_for_tracking.get("query").and_then(Value::as_str) {
-            state.track_search_intent(&id, &command, query, &args_for_tracking, &telemetry);
-        }
-
-        let started = Instant::now();
-        let result = match command.as_str() {
+        match command.as_str() {
             "search_notes" => state.search_notes(&id, request.args, &telemetry).await,
             "topic_scan" => state.topic_scan(&id, request.args, &telemetry).await,
             "extract_note" => state.extract_note(&id, request.args, &telemetry).await,
             other => Err(anyhow!("unknown daemon command: {other}")),
-        };
-        state.track_command_finished(
-            &id,
-            &command,
-            &args_for_tracking,
-            &telemetry,
-            started,
-            &result,
-        );
-        result
+        }
     }
     .await;
 
@@ -246,12 +233,14 @@ impl DaemonState {
         args: Value,
         telemetry: &DaemonTelemetry,
     ) -> Result<Value> {
-        let query = required_string(&args, "query")?;
-        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "search_notes", "search_notes", &args, telemetry);
         let started = Instant::now();
-        let result = search_notes_command(page, &query).await;
-        self.track_tool_result(
+        let result = async {
+            let query = required_string(&args, "query")?;
+            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+            search_notes_command(page, &query).await
+        }
+        .await;
+        self.track_tool_trace(
             request_id,
             "search_notes",
             "search_notes",
@@ -269,14 +258,16 @@ impl DaemonState {
         args: Value,
         telemetry: &DaemonTelemetry,
     ) -> Result<Value> {
-        let query = required_string(&args, "query")?;
-        let tab_label = args.get("tab_label").and_then(Value::as_str);
-        let num_notes = args.get("num_notes").and_then(Value::as_i64);
-        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "topic_scan", "topic_scan", &args, telemetry);
         let started = Instant::now();
-        let result = topic_scan_command(page, &query, tab_label, num_notes).await;
-        self.track_tool_result(
+        let result = async {
+            let query = required_string(&args, "query")?;
+            let tab_label = args.get("tab_label").and_then(Value::as_str);
+            let num_notes = args.get("num_notes").and_then(Value::as_i64);
+            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+            topic_scan_command(page, &query, tab_label, num_notes).await
+        }
+        .await;
+        self.track_tool_trace(
             request_id,
             "topic_scan",
             "topic_scan",
@@ -294,12 +285,14 @@ impl DaemonState {
         args: Value,
         telemetry: &DaemonTelemetry,
     ) -> Result<Value> {
-        let note_id = required_string(&args, "note_id")?;
-        let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-        self.track_tool_call(request_id, "extract_note", "read_note", &args, telemetry);
         let started = Instant::now();
-        let result = extract_note_command(page, &note_id).await;
-        self.track_tool_result(
+        let result = async {
+            let note_id = required_string(&args, "note_id")?;
+            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+            extract_note_command(page, &note_id).await
+        }
+        .await;
+        self.track_tool_trace(
             request_id,
             "extract_note",
             "read_note",
@@ -311,121 +304,39 @@ impl DaemonState {
         result
     }
 
-    fn track_command_started(
+    fn track_tool_trace(
         &self,
         request_id: &str,
         command: &str,
-        args: &Value,
+        tool_name: &str,
+        input: &Value,
         telemetry: &DaemonTelemetry,
+        started: Instant,
+        result: &Result<Value>,
     ) {
-        self.telemetry.capture(
-            "socai_daemon_command_started",
-            props_with_summary(
-                telemetry,
-                json!({
-                    "request_id": request_id,
-                    "command": command,
-                }),
-                args,
-            ),
+        if !telemetry.enabled {
+            return;
+        }
+
+        let mut props = base_trace_props(request_id, command, tool_name);
+        props.insert(
+            "duration_ms".into(),
+            json!(started.elapsed().as_millis() as u64),
         );
-    }
-
-    fn track_search_intent(
-        &self,
-        request_id: &str,
-        command: &str,
-        query: &str,
-        args: &Value,
-        telemetry: &DaemonTelemetry,
-    ) {
-        let mut props = base_event_props(request_id, command);
-        props.insert("site".into(), json!("xhs"));
-        insert_query_props(&mut props, telemetry, query);
-        insert_optional_str_prop(&mut props, args, "tab_label");
-        insert_optional_i64_prop(&mut props, args, "num_notes");
-        self.telemetry
-            .capture("socai_daemon_search_intent", Value::Object(props));
-    }
-
-    fn track_command_finished(
-        &self,
-        request_id: &str,
-        command: &str,
-        args: &Value,
-        telemetry: &DaemonTelemetry,
-        started: Instant,
-        result: &Result<Value>,
-    ) {
-        let duration_ms = started.elapsed().as_millis() as u64;
-        match result {
-            Ok(value) => {
-                let mut props = base_event_props(request_id, command);
-                props.insert("duration_ms".into(), json!(duration_ms));
-                props.insert("ok".into(), json!(true));
-                merge_object(&mut props, command_arg_summary(telemetry, args));
-                merge_object(&mut props, result_metrics(value));
-                self.telemetry
-                    .capture("socai_daemon_command_completed", Value::Object(props));
-            }
-            Err(err) => {
-                let mut props = base_event_props(request_id, command);
-                props.insert("duration_ms".into(), json!(duration_ms));
-                props.insert("ok".into(), json!(false));
-                props.insert("error".into(), json!(error_summary(err)));
-                merge_object(&mut props, command_arg_summary(telemetry, args));
-                self.telemetry
-                    .capture("socai_daemon_command_failed", Value::Object(props));
-            }
-        }
-    }
-
-    fn track_tool_call(
-        &self,
-        request_id: &str,
-        command: &str,
-        tool_name: &str,
-        input: &Value,
-        telemetry: &DaemonTelemetry,
-    ) {
-        let mut props = base_event_props(request_id, command);
-        props.insert("site".into(), json!("xhs"));
-        props.insert("tool_name".into(), json!(tool_name));
-        merge_object(&mut props, command_arg_summary(telemetry, input));
-        self.telemetry
-            .capture("socai_daemon_tool_call", Value::Object(props));
-    }
-
-    fn track_tool_result(
-        &self,
-        request_id: &str,
-        command: &str,
-        tool_name: &str,
-        input: &Value,
-        telemetry: &DaemonTelemetry,
-        started: Instant,
-        result: &Result<Value>,
-    ) {
-        let duration_ms = started.elapsed().as_millis() as u64;
-        let mut props = base_event_props(request_id, command);
-        props.insert("site".into(), json!("xhs"));
-        props.insert("tool_name".into(), json!(tool_name));
-        props.insert("duration_ms".into(), json!(duration_ms));
         merge_object(&mut props, command_arg_summary(telemetry, input));
         match result {
             Ok(value) => {
                 props.insert("ok".into(), json!(true));
                 merge_object(&mut props, result_metrics(value));
-                self.telemetry
-                    .capture("socai_daemon_tool_result", Value::Object(props));
             }
             Err(err) => {
                 props.insert("ok".into(), json!(false));
                 props.insert("error".into(), json!(error_summary(err)));
-                self.telemetry
-                    .capture("socai_daemon_tool_result", Value::Object(props));
             }
         }
+
+        self.telemetry
+            .capture("socai_cli_tool_trace", Value::Object(props));
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -435,19 +346,12 @@ impl DaemonState {
     }
 }
 
-fn base_event_props(request_id: &str, command: &str) -> Map<String, Value> {
+fn base_trace_props(request_id: &str, command: &str, tool_name: &str) -> Map<String, Value> {
     let mut props = Map::new();
     props.insert("request_id".into(), json!(request_id));
     props.insert("command".into(), json!(command));
-    props
-}
-
-fn props_with_summary(telemetry: &DaemonTelemetry, mut props: Value, args: &Value) -> Value {
-    let summary = command_arg_summary(telemetry, args);
-    let Some(props_map) = props.as_object_mut() else {
-        return summary;
-    };
-    merge_object(props_map, summary);
+    props.insert("tool_name".into(), json!(tool_name));
+    props.insert("site".into(), json!("xhs"));
     props
 }
 
@@ -555,6 +459,7 @@ async fn send_request(command: &str, args: Value, request_timeout: Duration) -> 
         command: command.to_string(),
         args,
         telemetry: DaemonTelemetry {
+            enabled: telemetry_enabled(),
             include_query_text: query_text_enabled(),
         },
     };
