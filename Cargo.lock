@@ -4003,6 +4003,7 @@ dependencies = [
  "clap",
  "inquire",
  "libc",
+ "reqwest 0.12.28",
  "rustyline",
  "serde",
  "serde_json",

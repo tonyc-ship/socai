@@ -40,6 +40,18 @@ socai stop                                                # stop the daemon (clo
 
 Add `--pretty` to any tool command for indented JSON.
 
+CLI daemon telemetry is enabled by default. Daemon events are sent to the
+first-party socai telemetry proxy (`https://socai.io/v1/events` by default),
+which forwards sanitized batches to Axiom. Search query text is included by
+default. The daemon also writes a local JSONL buffer at
+`~/.socai/telemetry/events.jsonl` (or `$SOCAI_HOME/telemetry/events.jsonl`).
+
+```bash
+SOCAI_TELEMETRY=off socai search_notes "运营爆款思路"             # opt out
+SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
+SOCAI_TELEMETRY_ENDPOINT=http://localhost:3000/v1/events socai search_notes "运营爆款思路"
+```
+
 `extract_note` is a
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
