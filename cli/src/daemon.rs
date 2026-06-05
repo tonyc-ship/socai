@@ -236,8 +236,9 @@ impl DaemonState {
         let started = Instant::now();
         let result = async {
             let query = required_string(&args, "query")?;
+            let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            search_notes_command(page, &query).await
+            search_notes_command(page, &query, debug_snapshot).await
         }
         .await;
         self.track_tool_trace(
@@ -263,8 +264,9 @@ impl DaemonState {
             let query = required_string(&args, "query")?;
             let tab_label = args.get("tab_label").and_then(Value::as_str);
             let num_notes = args.get("num_notes").and_then(Value::as_i64);
+            let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            topic_scan_command(page, &query, tab_label, num_notes).await
+            topic_scan_command(page, &query, tab_label, num_notes, debug_snapshot).await
         }
         .await;
         self.track_tool_trace(
@@ -288,8 +290,9 @@ impl DaemonState {
         let started = Instant::now();
         let result = async {
             let note_id = required_string(&args, "note_id")?;
+            let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            extract_note_command(page, &note_id).await
+            extract_note_command(page, &note_id, debug_snapshot).await
         }
         .await;
         self.track_tool_trace(
@@ -373,6 +376,7 @@ fn explicit_param_metadata(args: &Value) -> Option<Map<String, Value>> {
     let mut metadata = Map::new();
     insert_optional_str_metadata(&mut metadata, args, "tab_label", "tab");
     insert_optional_i64_metadata(&mut metadata, args, "num_notes", "num_notes");
+    insert_true_bool_metadata(&mut metadata, args, "debug_snapshot", "debug_snapshot");
     if metadata.is_empty() {
         None
     } else {
@@ -418,6 +422,17 @@ fn insert_optional_i64_metadata(
         return;
     };
     metadata.insert(metadata_key.to_string(), json!(value));
+}
+
+fn insert_true_bool_metadata(
+    metadata: &mut Map<String, Value>,
+    args: &Value,
+    arg_key: &str,
+    metadata_key: &str,
+) {
+    if args.get(arg_key).and_then(Value::as_bool) == Some(true) {
+        metadata.insert(metadata_key.to_string(), json!(true));
+    }
 }
 
 fn merge_object(target: &mut Map<String, Value>, value: Value) {
@@ -474,7 +489,10 @@ mod tests {
 
     #[test]
     fn command_summary_omits_defaulted_optional_params() {
-        let summary = command_arg_summary(&DaemonTelemetry::default(), &json!({ "query": "x" }));
+        let summary = command_arg_summary(
+            &DaemonTelemetry::default(),
+            &json!({ "query": "x", "debug_snapshot": false }),
+        );
         let object = summary.as_object().expect("summary is an object");
         assert!(!object.contains_key("metadata"));
     }
@@ -483,7 +501,12 @@ mod tests {
     fn command_summary_tracks_explicit_optional_params_as_metadata() {
         let summary = command_arg_summary(
             &DaemonTelemetry::default(),
-            &json!({ "query": "x", "tab_label": "latest", "num_notes": 12 }),
+            &json!({
+                "query": "x",
+                "tab_label": "latest",
+                "num_notes": 12,
+                "debug_snapshot": true
+            }),
         );
         let object = summary.as_object().expect("summary is an object");
         let metadata = object
@@ -492,6 +515,7 @@ mod tests {
             .expect("metadata object");
         assert_eq!(metadata.get("tab"), Some(&json!("latest")));
         assert_eq!(metadata.get("num_notes"), Some(&json!(12)));
+        assert_eq!(metadata.get("debug_snapshot"), Some(&json!(true)));
         assert!(!object.contains_key("tab_label"));
         assert!(!object.contains_key("num_notes"));
     }
@@ -588,6 +612,12 @@ async fn spawn_daemon() -> Result<()> {
         "socai rust daemon did not become ready; see {}",
         paths.log.display()
     ))
+}
+
+fn debug_snapshot_flag(args: &Value) -> bool {
+    args.get("debug_snapshot")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String> {
