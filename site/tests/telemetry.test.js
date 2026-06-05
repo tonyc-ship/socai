@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { __testing } from './telemetry.js';
+import { __testing } from '../api/telemetry.js';
 
 test('sanitizeEvent strips fields that should not reach Axiom', () => {
   const sanitized = __testing.sanitizeEvent({
