@@ -12,6 +12,14 @@ const SocaiXhsPageScripts = (() => {
     try { return url ? new URL(url, location.href).href : ''; } catch (e) { return ''; }
   };
 
+  function elementCenter(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    };
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const rect = el.getBoundingClientRect();
@@ -135,7 +143,6 @@ const SocaiXhsPageScripts = (() => {
   function searchInput() {
     const input = findSearchInput();
     if (!input) return { ok: false, error: 'search_input_not_found' };
-    const inputRect = input.getBoundingClientRect();
     const root = input.closest(
       'form, header, .search-input, .search-container, .search-bar, .search-box, .wendian-wrapper'
     ) || document;
@@ -146,13 +153,13 @@ const SocaiXhsPageScripts = (() => {
       if (!el) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 12 || r.height < 12) continue;
-      submit = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      submit = elementCenter(el);
       break;
     }
 
     return {
       ok: true,
-      input: { x: Math.round(inputRect.left + inputRect.width / 2), y: Math.round(inputRect.top + inputRect.height / 2) },
+      input: elementCenter(input),
       submit,
     };
   }
@@ -278,7 +285,7 @@ const SocaiXhsPageScripts = (() => {
       const active = el.getAttribute('aria-selected') === 'true'
         || /\bactive\b|current|selected/.test(cls)
         || el.getAttribute('data-active') === 'true';
-      out.push({ label, active, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) });
+      out.push({ label, active, ...elementCenter(el) });
     }
     return out;
   }
@@ -301,68 +308,13 @@ const SocaiXhsPageScripts = (() => {
     { key: 'distance', title: '位置距离', options: ['不限', '同城', '附近'] },
   ];
 
-  const FILTER_TITLES = SEARCH_FILTER_GROUPS.map((g) => g.title);
-  const FILTER_OPTIONS = Array.from(new Set(SEARCH_FILTER_GROUPS.flatMap((g) => g.options)));
-
-  function elementCenter(el) {
-    const rect = el.getBoundingClientRect();
-    return {
-      x: Math.round(rect.left + rect.width / 2),
-      y: Math.round(rect.top + rect.height / 2),
-    };
-  }
-
-  function optionLooksActive(el) {
-    return /\bactive\b/.test(String(el.className || ''));
-  }
-
-  function clickableTextElement(el, label) {
-    let best = el;
-    let cur = el;
-    while (cur?.parentElement) {
-      const parent = cur.parentElement;
-      if (!isVisible(parent)) break;
-      if (text(parent) !== label) break;
-      const rect = parent.getBoundingClientRect();
-      if (rect.width > 240 || rect.height > 90) break;
-      best = parent;
-      cur = parent;
-    }
-    return best;
-  }
-
-  function filterTriggerLabel(el) {
-    return norm([
-      text(el),
-      el?.getAttribute?.('aria-label') || '',
-      el?.getAttribute?.('title') || '',
-    ].filter(Boolean).join(' ')).replace(/\s+/g, '');
-  }
-
   function findSearchFilterTrigger() {
-    const candidates = [];
-    const selector = 'button, a, div, span, [role="button"], [aria-label*="筛选"], [title*="筛选"]';
+    const selector = '.search-layout__top > .filter, .search-layout__top [class~="filter"]';
     for (const el of $$(selector)) {
       if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
-      const label = filterTriggerLabel(el);
-      if (!label.includes('筛选')) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 32 || rect.height < 18) continue;
-      if (rect.width > Math.min(260, innerWidth * 0.35)) continue;
-      if (rect.height > 90) continue;
-      if (rect.top > Math.min(360, innerHeight * 0.55)) continue;
-      if (rect.left < innerWidth * 0.30) continue;
-      const exact = label === '筛选' || label === '已筛选';
-      const starts = label.startsWith('筛选') || label.startsWith('已筛选');
-      const score = rect.left
-        + (exact ? 3000 : 0)
-        + (starts ? 1200 : 0)
-        + (rect.top < 220 ? 600 : 0)
-        - Math.abs(rect.height - 40);
-      candidates.push({ el, rect, label, score });
+      if (text(el).includes('筛选')) return el;
     }
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates[0]?.el || null;
+    return null;
   }
 
   function searchFilterTrigger() {
@@ -370,90 +322,49 @@ const SocaiXhsPageScripts = (() => {
     if (!trigger) {
       return { ok: false, error: 'filter_trigger_not_found' };
     }
-    const label = filterTriggerLabel(trigger) || text(trigger) || '筛选';
+    const value = text(trigger);
+    const label = value.includes('已筛选') ? '已筛选' : '筛选';
     return { ok: true, label, ...elementCenter(trigger) };
   }
 
-  function panelScore(el) {
-    const value = text(el);
-    if (!value) return 0;
-    let score = 0;
-    for (const title of FILTER_TITLES) {
-      if (value.includes(title)) score += 12;
-    }
-    for (const option of FILTER_OPTIONS) {
-      if (value.includes(option)) score += 1;
-    }
-    if (value.includes('重置')) score += 4;
-    if (value.includes('收起')) score += 4;
-    return score;
-  }
-
   function findSearchFilterPanel() {
-    const candidates = [];
-    for (const el of $$('div, section, aside, [role="dialog"], [class*="filter"], [class*="popover"], [class*="dropdown"]')) {
+    for (const el of $$('.filter-panel, .filter-container')) {
       if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 260 || rect.height < 120) continue;
-      if (rect.width > Math.min(innerWidth - 20, 820)) continue;
-      if (rect.left < innerWidth * 0.30) continue;
-      const score = panelScore(el);
-      if (score < 24) continue;
-      candidates.push({ el, rect, score, area: rect.width * rect.height });
+      const value = text(el);
+      if (value.includes('排序依据') && value.includes('发布时间')) {
+        return el;
+      }
     }
-    candidates.sort((a, b) => (b.score - a.score) || (a.area - b.area));
-    return candidates[0]?.el || null;
+    return null;
   }
 
-  function findExactTextElement(root, label, { top = -Infinity, bottom = Infinity } = {}) {
-    const matches = [];
-    for (const el of $$('button, a, div, span', root)) {
+  function findFilterOperation(panel, label) {
+    for (const el of $$('.operation-container .operation', panel)) {
       if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
-      if (text(el) !== label) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.top < top || rect.top >= bottom) continue;
-      const style = window.getComputedStyle(el);
-      const opacity = Number(style.opacity);
-      const hidden = el.closest('[aria-hidden="true"]') ? 1 : 0;
-      const lowOpacity = Number.isFinite(opacity) && opacity < 0.01 ? 1 : 0;
-      const bound = el.closest('[data-hp-bound="1"]') ? 1 : 0;
-      matches.push({ el, rect, area: rect.width * rect.height, hidden, lowOpacity, bound });
+      if (text(el) === label) return el;
     }
-    matches.sort((a, b) => (a.hidden - b.hidden)
-      || (a.lowOpacity - b.lowOpacity)
-      || (b.bound - a.bound)
-      || (b.area - a.area));
-    return matches[0]?.el || null;
+    return null;
   }
 
   function searchFilters() {
     const panel = findSearchFilterPanel();
     if (!panel) return { ok: false, error: 'filter_panel_not_found' };
 
-    const headings = SEARCH_FILTER_GROUPS
-      .map((group) => {
-        const el = findExactTextElement(panel, group.title);
-        if (!el) return null;
-        return { group, el, rect: el.getBoundingClientRect() };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.rect.top - b.rect.top);
-
     const groups = [];
-    for (let i = 0; i < headings.length; i += 1) {
-      const { group, rect } = headings[i];
-      const bottom = headings[i + 1]?.rect.top ?? panel.getBoundingClientRect().bottom;
+    for (const groupEl of $$('.filters-wrapper .filters', panel)) {
+      if (!(groupEl instanceof HTMLElement) || !isVisible(groupEl)) continue;
+      const title = text($('span', groupEl));
+      const group = SEARCH_FILTER_GROUPS.find((item) => item.title === title);
+      if (!group) continue;
       const options = [];
       for (const label of group.options) {
-        const optionEl = findExactTextElement(panel, label, { top: rect.bottom - 6, bottom });
-        if (!optionEl) continue;
-        const target = clickableTextElement(optionEl, label);
-        const targetRect = target.getBoundingClientRect();
+        const tag = $$('.tag-container .tags', groupEl)
+          .find((el) => el instanceof HTMLElement && isVisible(el) && text(el) === label);
+        if (!tag) continue;
         options.push({
           label,
-          active: optionLooksActive(optionEl) || optionLooksActive(target),
-          x: Math.round(targetRect.left + targetRect.width / 2),
-          y: Math.round(targetRect.top + targetRect.height / 2),
+          active: /\bactive\b/.test(String(tag.className || '')),
+          ...elementCenter(tag),
         });
       }
       if (options.length) {
@@ -466,13 +377,13 @@ const SocaiXhsPageScripts = (() => {
       }
     }
 
-    const resetEl = findExactTextElement(panel, '重置');
-    const closeEl = findExactTextElement(panel, '收起');
+    const resetEl = findFilterOperation(panel, '重置');
+    const closeEl = findFilterOperation(panel, '收起');
     return {
       ok: true,
       groups,
-      reset: resetEl ? elementCenter(clickableTextElement(resetEl, '重置')) : null,
-      close: closeEl ? elementCenter(clickableTextElement(closeEl, '收起')) : null,
+      reset: resetEl ? elementCenter(resetEl) : null,
+      close: closeEl ? elementCenter(closeEl) : null,
     };
   }
 
@@ -546,8 +457,7 @@ const SocaiXhsPageScripts = (() => {
       return {
         ok: true,
         target: target === cover ? 'cover' : 'card',
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2),
+        ...elementCenter(target),
         note_id: card.dataset?.noteId || '',
       };
     }
@@ -567,7 +477,7 @@ const SocaiXhsPageScripts = (() => {
       if (!(el instanceof HTMLElement || el instanceof SVGElement)) continue;
       const rect = el.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        return { ok: true, selector: sel, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        return { ok: true, selector: sel, ...elementCenter(el) };
       }
     }
     return { ok: false, error: 'close_button_not_found' };
