@@ -2,7 +2,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-.env.local
 .socai/
 .claude/*
 !.claude/skills/
