@@ -143,16 +143,25 @@ else:
 PY
 }
 
-wait_for_count() {
+wait_for_exact_count() {
   local expected="$1"
   local deadline=$((SECONDS + 30))
+  local observed
   while [[ "$SECONDS" -lt "$deadline" ]]; do
-    if [[ "$(json_count)" -ge "$expected" ]]; then
+    observed="$(json_count)"
+    if (( observed > expected )); then
+      fail "expected exactly $expected local telemetry row(s), found $observed in $EVENTS_FILE"
+    fi
+    if (( observed == expected )); then
+      sleep 3
+      observed="$(json_count)"
+      [[ "$observed" == "$expected" ]] || fail "expected exactly $expected local telemetry row(s), found $observed in $EVENTS_FILE"
       return 0
     fi
     sleep 1
   done
-  fail "timed out waiting for at least $expected local telemetry row(s) in $EVENTS_FILE"
+  observed="$(json_count)"
+  fail "timed out waiting for exactly $expected local telemetry row(s); found $observed in $EVENTS_FILE"
 }
 
 last_request_id() {
@@ -243,7 +252,7 @@ log "using isolated SOCAI_HOME=$SOCAI_HOME"
 
 DEFAULT_QUERY="${QUERY}-default"
 run_search_notes "default" "$DEFAULT_QUERY" env
-wait_for_count 1
+wait_for_exact_count 1
 DEFAULT_REQUEST_ID="$(validate_last_default_query "$DEFAULT_QUERY")"
 log "default telemetry request_id=$DEFAULT_REQUEST_ID"
 if [[ "$SKIP_AXIOM" -eq 0 ]]; then
@@ -264,7 +273,7 @@ log "opt-out check passed"
 REDACTED_QUERY="${QUERY}-redacted"
 EXPECTED_COUNT=$((AFTER_OPTOUT + 1))
 run_search_notes "redacted" "$REDACTED_QUERY" env SOCAI_TELEMETRY_QUERY_TEXT=off
-wait_for_count "$EXPECTED_COUNT"
+wait_for_exact_count "$EXPECTED_COUNT"
 REDACTED_REQUEST_ID="$(validate_last_redacted_query)"
 log "redacted telemetry request_id=$REDACTED_REQUEST_ID"
 if [[ "$SKIP_AXIOM" -eq 0 ]]; then
