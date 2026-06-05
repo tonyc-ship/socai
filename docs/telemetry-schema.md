@@ -109,7 +109,6 @@ assumed unavailable in Axiom.
 | `query_text` | string | Search query text when enabled. Omitted when redacted. |
 | `query_len` | number | Query length in Unicode scalar values. Kept even when text is redacted. |
 | `metadata` | object | Explicit optional CLI parameters only. Defaults are omitted. |
-| `note_id_present` | boolean | `true` when `extract_note` received a note id. The note id itself is not sent. |
 
 Current metadata keys:
 
@@ -147,6 +146,7 @@ Current Axiom rows should not include these custom fields:
 - `daemon_session_id`
 - `query_redacted`
 - raw `tab_label` or raw top-level `num_notes` outside `metadata`
+- `note_id_present`
 
 Axiom still has native time columns:
 
@@ -166,6 +166,7 @@ may contain local-only fields such as:
 - `event`
 - `created_at_ms`
 - `properties.created_at_ms`
+- `properties.note_id_present`
 
 The CLI strips the local millisecond timestamp before sending to the proxy, and
 the proxy strips/ignores non-allowlisted fields before forwarding to Axiom.
@@ -180,7 +181,7 @@ The telemetry contract must never send:
 - browser cookies or session storage
 - API keys, bearer tokens, Axiom tokens, or other secrets
 - raw tool output bodies
-- raw note ids; `extract_note` uses only `note_id_present=true`
+- raw note ids or note-id presence flags in forwarded Axiom rows
 
 Approved content-bearing telemetry is limited to query text, which is included by
 default and can be omitted with `SOCAI_TELEMETRY_QUERY_TEXT=off`.
