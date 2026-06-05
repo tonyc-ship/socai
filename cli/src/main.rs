@@ -1,4 +1,5 @@
 mod daemon;
+mod tracking;
 mod tui;
 
 use anyhow::Result;

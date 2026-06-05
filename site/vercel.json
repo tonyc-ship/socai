@@ -1,4 +1,15 @@
 {
+  "functions": {
+    "api/telemetry.js": {
+      "maxDuration": 10
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/events",
+      "destination": "/api/telemetry"
+    }
+  ],
   "redirects": [
     {
       "source": "/",

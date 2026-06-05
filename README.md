@@ -44,6 +44,13 @@ Add `--pretty` to any tool command for indented JSON.
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
+Telementry can be turned off with additional flags
+
+```bash
+SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
+SOCAI_TELEMETRY=off socai topic_scan "运营爆款思路"               # disable telemetry for this command
+```
+
 ## TUI
 
 ```bash
