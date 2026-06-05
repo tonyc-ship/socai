@@ -11,8 +11,9 @@ use crate::agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, Tool
 use crate::cdp::{with_snapshot_recording, PageSession};
 use crate::media::{timing_delta, MediaProcessor, TimingSnapshot};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
+use crate::sites::xhs::page::XHS_SEARCH_FILTERS;
 use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime};
 
 /// Default number of notes `topic_scan` reads when the caller doesn't specify.
@@ -46,7 +47,6 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(ListSearchTabsTool { page: page.clone() }),
         Arc::new(ClickSearchTabTool { page: page.clone() }),
-        Arc::new(ListSearchFiltersTool { page: page.clone() }),
         Arc::new(ResetSearchFiltersTool { page: page.clone() }),
         Arc::new(ApplySearchFiltersTool { page: page.clone() }),
         Arc::new(OpenNoteTool { page: page.clone() }),
@@ -793,34 +793,6 @@ impl Tool for ClickSearchTabTool {
     }
 }
 
-/// list_search_filters() -> {ok, groups, ...}
-pub struct ListSearchFiltersTool {
-    page: Arc<PageSession>,
-}
-
-#[async_trait]
-impl Tool for ListSearchFiltersTool {
-    fn name(&self) -> &str {
-        "list_search_filters"
-    }
-
-    fn description(&self) -> &str {
-        "Hover the Xiaohongshu search page's `筛选` control and list the \
-         current filter groups/options. Use this when you need to inspect \
-         available filters before applying them."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({"type": "object", "properties": {}})
-    }
-
-    async fn call(&self, _input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let xhs = XhsPageRuntime::new(&self.page);
-        let value = xhs.list_search_filters(1.0).await?;
-        Ok(json_result(&value))
-    }
-}
-
 /// reset_search_filters() -> {ok, reset}
 pub struct ResetSearchFiltersTool {
     page: Arc<PageSession>,
@@ -1297,31 +1269,23 @@ impl Tool for TopicScanTool {
 }
 
 fn search_filters_schema() -> Value {
+    let properties: Map<String, Value> = XHS_SEARCH_FILTERS
+        .iter()
+        .map(|(key, options)| {
+            (
+                key.to_string(),
+                json!({
+                    "type": "string",
+                    "enum": options,
+                }),
+            )
+        })
+        .collect();
+
     json!({
         "type": "object",
         "description": "Search filter selections by group key.",
-        "properties": {
-            "sort": {
-                "type": "string",
-                "enum": ["综合", "最新", "最多点赞", "最多评论", "最多收藏"]
-            },
-            "note_type": {
-                "type": "string",
-                "enum": ["不限", "视频", "图文"]
-            },
-            "publish_time": {
-                "type": "string",
-                "enum": ["不限", "一天内", "一周内", "半年内"]
-            },
-            "search_scope": {
-                "type": "string",
-                "enum": ["不限", "已看过", "未看过", "已关注"]
-            },
-            "distance": {
-                "type": "string",
-                "enum": ["不限", "同城", "附近"]
-            }
-        },
+        "properties": properties,
         "minProperties": 1,
         "additionalProperties": false
     })

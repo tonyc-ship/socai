@@ -37,6 +37,17 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "profileCards",
 ];
 
+pub(crate) const XHS_SEARCH_FILTERS: &[(&str, &[&str])] = &[
+    (
+        "sort",
+        &["综合", "最新", "最多点赞", "最多评论", "最多收藏"],
+    ),
+    ("note_type", &["不限", "视频", "图文"]),
+    ("publish_time", &["不限", "一天内", "一周内", "半年内"]),
+    ("search_scope", &["不限", "已看过", "未看过", "已关注"]),
+    ("distance", &["不限", "同城", "附近"]),
+];
+
 #[derive(Debug, Clone)]
 pub struct ReadNoteOptions {
     pub level: String,
@@ -604,26 +615,23 @@ impl<'a> XhsPageRuntime<'a> {
         }))
     }
 
-    /// Hover the search page's filter trigger and return the currently
-    /// available filter groups/options, then close the popup.
-    pub async fn list_search_filters(&self, wait_seconds: f64) -> Result<Value> {
-        self.ensure_xhs(false).await?;
-        let filters = self.open_search_filter_panel(wait_seconds).await?;
-        self.close_search_filter_panel().await?;
-        Ok(filters)
-    }
-
     /// Apply search-result filters from the hover popup and return the
     /// current filter state.
     pub async fn apply_search_filters(&self, filters: &Value, wait_seconds: f64) -> Result<Value> {
+        let target_filters = normalize_search_filter_targets(filters)?;
+        self.apply_search_filter_targets(&target_filters, wait_seconds)
+            .await
+    }
+
+    async fn apply_search_filter_targets(
+        &self,
+        target_filters: &[(String, String)],
+        wait_seconds: f64,
+    ) -> Result<Value> {
         self.ensure_xhs(false).await?;
-        let Some(filter_obj) = filters.as_object() else {
-            anyhow::bail!("filters must be object");
-        };
-        if filter_obj.is_empty() {
-            anyhow::bail!("filters must include at least one selection");
+        if target_filters.is_empty() {
+            anyhow::bail!("filter targets must include at least one selection");
         }
-        let target_filters = normalize_search_filter_targets(filter_obj)?;
         // Let the initial search results settle before opening the hover-only
         // filter panel; applying filters too early can leave old cards visible.
         sleep_ms(1000).await;
@@ -1036,37 +1044,40 @@ impl<'a> XhsPageRuntime<'a> {
     }
 }
 
-fn normalize_search_filter_targets(
-    input: &Map<String, Value>,
-) -> Result<Vec<(&'static str, String)>> {
-    let defaults = [
-        ("sort", "综合"),
-        ("note_type", "不限"),
-        ("publish_time", "不限"),
-        ("search_scope", "不限"),
-        ("distance", "不限"),
-    ];
+fn normalize_search_filter_targets(filters: &Value) -> Result<Vec<(String, String)>> {
+    let Some(input) = filters.as_object() else {
+        anyhow::bail!("filters must be object");
+    };
+    if input.is_empty() {
+        anyhow::bail!("filters must include at least one selection");
+    }
 
     for key in input.keys() {
-        if !defaults.iter().any(|(group, _)| *group == key.as_str()) {
+        if !XHS_SEARCH_FILTERS
+            .iter()
+            .any(|(filter_key, _)| *filter_key == key.as_str())
+        {
             anyhow::bail!("unsupported filter group: {key}");
         }
     }
 
-    defaults
-        .into_iter()
-        .map(|(group, default_label)| {
-            let label = match input.get(group) {
+    XHS_SEARCH_FILTERS
+        .iter()
+        .map(|(key, options)| {
+            let label = match input.get(*key) {
                 Some(value) => value
                     .as_str()
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| {
-                        anyhow::anyhow!("filter option must be a non-empty string: {group}")
+                        anyhow::anyhow!("filter option must be a non-empty string: {}", key)
                     })?,
-                None => default_label,
+                None => options.first().copied().unwrap_or(""),
             };
-            Ok((group, label.to_string()))
+            if !options.contains(&label) {
+                anyhow::bail!("unsupported filter option for {}: {label}", key);
+            }
+            Ok((key.to_string(), label.to_string()))
         })
         .collect()
 }

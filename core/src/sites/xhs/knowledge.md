@@ -17,9 +17,8 @@ user's task and ground your answer in tool output.
 ## Tools
 
 `search_notes`, `extract_search_cards`, `list_search_tabs`,
-`click_search_tab`, `list_search_filters`, `reset_search_filters`,
-`apply_search_filters`, `open_note`, `close_note`, `read_note`,
-`extract_note`, `extract_comments`, `scroll_in_note`,
+`click_search_tab`, `reset_search_filters`, `apply_search_filters`,
+`open_note`, `close_note`, `read_note`, `extract_note`, `extract_comments`, `scroll_in_note`,
 `collect_carousel_images`, `extract_profile`, `topic_scan`, `page_state`.
 
 Prefer `topic_scan` for any "research a topic" task — it bundles search,
