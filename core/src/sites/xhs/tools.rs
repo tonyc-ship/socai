@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, ToolResult};
-use crate::cdp::PageSession;
+use crate::cdp::{with_snapshot_recording, PageSession};
 use crate::media::{timing_delta, MediaProcessor, TimingSnapshot};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -128,8 +128,18 @@ const EXTRACT_NOTE_COMMAND: XhsCommandSpec = XhsCommandSpec {
     after: CommandPageAction::CloseOpenNote,
 };
 
-pub async fn search_notes_command(page: Arc<PageSession>, query: &str) -> anyhow::Result<Value> {
-    run_xhs_tool_command(page, SEARCH_NOTES_COMMAND, search_notes_input(query)?).await
+pub async fn search_notes_command(
+    page: Arc<PageSession>,
+    query: &str,
+    debug_snapshot: bool,
+) -> anyhow::Result<Value> {
+    run_xhs_tool_command(
+        page,
+        SEARCH_NOTES_COMMAND,
+        search_notes_input(query)?,
+        debug_snapshot,
+    )
+    .await
 }
 
 pub async fn topic_scan_command(
@@ -138,17 +148,29 @@ pub async fn topic_scan_command(
     tab_label: Option<&str>,
     filters: Option<&Value>,
     num_notes: Option<i64>,
+    debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
         topic_scan_input(query, tab_label, filters, num_notes)?,
+        debug_snapshot,
     )
     .await
 }
 
-pub async fn extract_note_command(page: Arc<PageSession>, note_id: &str) -> anyhow::Result<Value> {
-    run_xhs_tool_command(page, EXTRACT_NOTE_COMMAND, extract_note_input(note_id)?).await
+pub async fn extract_note_command(
+    page: Arc<PageSession>,
+    note_id: &str,
+    debug_snapshot: bool,
+) -> anyhow::Result<Value> {
+    run_xhs_tool_command(
+        page,
+        EXTRACT_NOTE_COMMAND,
+        extract_note_input(note_id)?,
+        debug_snapshot,
+    )
+    .await
 }
 
 fn search_notes_input(query: &str) -> anyhow::Result<Value> {
@@ -188,11 +210,21 @@ async fn run_xhs_tool_command(
     page: Arc<PageSession>,
     spec: XhsCommandSpec,
     input: Value,
+    debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
-    apply_command_page_action(spec.before, &page).await?;
     let (run_dir, ctx) = command_context(spec.command_name);
-    let data = call_xhs_tool(page.clone(), spec.tool_name, input, &ctx).await?;
-    apply_command_page_action(spec.after, &page).await?;
+    // Snapshot recording (when `--debug-snapshot` is on) wraps the whole
+    // command — setup navigation, the tool's clicks/scrolls, and teardown. All
+    // recorder machinery lives in the generic CDP layer; this is the only hook
+    // a site command runner needs.
+    let data = with_snapshot_recording(&page, &ctx.run_dir, debug_snapshot, async {
+        apply_command_page_action(spec.before, &page).await?;
+        let data = call_xhs_tool(page.clone(), spec.tool_name, input, &ctx).await?;
+        apply_command_page_action(spec.after, &page).await?;
+        Ok::<Value, anyhow::Error>(data)
+    })
+    .await?;
+
     Ok(json!({
         "command": spec.command_name,
         "run_dir": run_dir,

@@ -1,21 +1,51 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+use chromiumoxide::cdp::browser_protocol::accessibility::EnableParams;
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, InsertTextParams,
 };
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::layout::Point;
 use chromiumoxide::page::ScreenshotParams;
+use chromiumoxide::types::{Command, Method, MethodId};
 use chromiumoxide::Page;
+use serde::Serialize;
 use serde_json::Value;
+
+/// Raw `Accessibility.getFullAXTree` command whose response is left as
+/// untyped JSON. chromiumoxide's generated `GetFullAxTreeParams` deserializes
+/// the reply into its own `AxNode` structs, which lag the live Chrome AX
+/// schema and fail (the historical `uninteresting` serde error). We only want
+/// the JSON for the debug snapshot, so we skip the typed round-trip entirely.
+#[derive(Debug, Serialize)]
+struct GetFullAxTreeRaw {}
+
+impl Method for GetFullAxTreeRaw {
+    fn identifier(&self) -> MethodId {
+        "Accessibility.getFullAXTree".into()
+    }
+}
+
+impl Command for GetFullAxTreeRaw {
+    type Response = Value;
+}
+
+use super::snapshot::SnapshotRecorder;
 
 /// A tab-scoped session. Wraps a chromiumoxide `Page` with the small set of
 /// primitives the agent layer needs: `evaluate_json` (the JS-extractor entry
 /// point), `navigate`, and `page_info`. Higher-level tools (selector waits,
 /// click-by-selector, fill, etc.) live in the sites module.
+///
+/// `recorder` is an optional debug hook: when set (via `--debug-snapshot`),
+/// every `evaluate_json` — the universal perception point for the tools —
+/// first lets the recorder capture a DOM/a11y/screenshot bundle if the page
+/// changed since the last capture. See [`SnapshotRecorder`].
 pub struct PageSession {
     page: Page,
+    recorder: StdMutex<Option<Arc<SnapshotRecorder>>>,
 }
 
 const PAGE_INFO_JS: &str = r#"
@@ -34,11 +64,43 @@ return {
 
 impl PageSession {
     pub(crate) fn new(page: Page) -> Self {
-        Self { page }
+        Self {
+            page,
+            recorder: StdMutex::new(None),
+        }
     }
 
     pub fn target_id(&self) -> &str {
         self.page.target_id().inner()
+    }
+
+    /// Attach a debug snapshot recorder. Captures begin on the next
+    /// `evaluate_json`. Replacing or clearing it is cheap and lock-guarded.
+    pub fn set_recorder(&self, recorder: Arc<SnapshotRecorder>) {
+        if let Ok(mut guard) = self.recorder.lock() {
+            *guard = Some(recorder);
+        }
+    }
+
+    pub fn clear_recorder(&self) {
+        if let Ok(mut guard) = self.recorder.lock() {
+            *guard = None;
+        }
+    }
+
+    fn recorder(&self) -> Option<Arc<SnapshotRecorder>> {
+        self.recorder.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    /// Let an attached recorder capture the page *before* an operation runs.
+    /// Called at the top of every action (`navigate`, `click`, `type_text`,
+    /// `press_key`) and every `evaluate_json`, so the snapshot timeline has a
+    /// frame for each tool operation, showing the state it acted on. Cheap and
+    /// a no-op when no recorder is attached; content-deduped downstream.
+    async fn snapshot_before(&self) {
+        if let Some(recorder) = self.recorder() {
+            recorder.before_operation(self).await;
+        }
     }
 
     /// Navigate to `url` and wait for DOM readiness.
@@ -51,6 +113,7 @@ impl PageSession {
         url: &str,
         timeout_seconds: f64,
     ) -> anyhow::Result<()> {
+        self.snapshot_before().await;
         let timeout = seconds(timeout_seconds);
         tokio::time::timeout(timeout, self.page.goto(url)).await??;
         self.wait_for_load_state("domcontentloaded", timeout_seconds)
@@ -89,11 +152,43 @@ impl PageSession {
     /// `serde_json::Value`. The expression is wrapped in an IIFE when it
     /// contains a top-level `return`, so callers can pass function-body style
     /// snippets.
+    ///
+    /// This is the tools' universal perception point. Before running the
+    /// caller's snippet, it lets an attached [`SnapshotRecorder`] capture the
+    /// *current* DOM — i.e. the state the tool is about to read or act on —
+    /// gated on whether the page changed since the last capture. Capturing
+    /// *before* (not after) means the snapshot reflects exactly what the tool
+    /// saw going into this operation; any change the operation causes is
+    /// captured before the next one.
     pub async fn evaluate_json(&self, expression: &str) -> anyhow::Result<Value> {
+        self.snapshot_before().await;
+        self.evaluate_json_raw(expression).await
+    }
+
+    /// Uninstrumented `evaluate_json`. Used internally by the snapshot recorder
+    /// so its own DOM reads don't recurse back into capture.
+    pub(crate) async fn evaluate_json_raw(&self, expression: &str) -> anyhow::Result<Value> {
         let wrapped = wrap_expression(expression);
         let result = self.page.evaluate(wrapped.as_str()).await?;
         let value: Value = result.into_value()?;
         Ok(value)
+    }
+
+    /// Turn on the CDP Accessibility domain. Not required for `getFullAXTree`
+    /// to return data, but it keeps `AXNodeId`s stable across calls, which makes
+    /// the per-node a11y dumps comparable between snapshots. The recorder calls
+    /// it once. Idempotent; persists across navigations within the target.
+    pub(crate) async fn enable_accessibility(&self) -> anyhow::Result<()> {
+        self.page.execute(EnableParams::default()).await?;
+        Ok(())
+    }
+
+    /// Full accessibility tree for the document as JSON (`{ "nodes": [...] }`).
+    /// Used by the snapshot recorder; backed by CDP `Accessibility.getFullAXTree`
+    /// with an untyped response (see [`GetFullAxTreeRaw`]).
+    pub(crate) async fn ax_tree_json(&self) -> anyhow::Result<Value> {
+        let resp = self.page.execute(GetFullAxTreeRaw {}).await?;
+        Ok(resp.result)
     }
 
     pub async fn page_info(&self) -> anyhow::Result<Value> {
@@ -101,6 +196,7 @@ impl PageSession {
     }
 
     pub async fn click(&self, x: f64, y: f64) -> anyhow::Result<()> {
+        self.snapshot_before().await;
         self.page.click(Point::new(x, y)).await?;
         Ok(())
     }
@@ -111,11 +207,13 @@ impl PageSession {
     }
 
     pub async fn type_text(&self, text: &str) -> anyhow::Result<()> {
+        self.snapshot_before().await;
         self.page.execute(InsertTextParams::new(text)).await?;
         Ok(())
     }
 
     pub async fn press_key(&self, key: &str) -> anyhow::Result<()> {
+        self.snapshot_before().await;
         let (vk, code, text) = key_definition(key);
         let base = |event_type| {
             let mut builder = DispatchKeyEventParams::builder()

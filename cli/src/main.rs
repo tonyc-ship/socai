@@ -21,6 +21,10 @@ enum Command {
         query: String,
         #[arg(long)]
         pretty: bool,
+        /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
+        /// at every page change between tool operations.
+        #[arg(long = "debug-snapshot")]
+        debug_snapshot: bool,
     },
     /// Run a Xiaohongshu topic scan (note body + top comments per note).
     #[command(name = "topic_scan")]
@@ -34,6 +38,10 @@ enum Command {
         num_notes: Option<i64>,
         #[arg(long)]
         pretty: bool,
+        /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
+        /// at every page change between tool operations.
+        #[arg(long = "debug-snapshot")]
+        debug_snapshot: bool,
     },
     /// Open a note from the current search/topic page and print the parsed note.
     #[command(name = "extract_note")]
@@ -42,6 +50,10 @@ enum Command {
         note_id: String,
         #[arg(long)]
         pretty: bool,
+        /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
+        /// at every page change between tool operations.
+        #[arg(long = "debug-snapshot")]
+        debug_snapshot: bool,
     },
     /// Stop the background socai rust daemon.
     Stop,
@@ -64,10 +76,14 @@ async fn main() -> Result<()> {
         return Ok(());
     };
     match command {
-        Command::SearchNotes { query, pretty } => {
+        Command::SearchNotes {
+            query,
+            pretty,
+            debug_snapshot,
+        } => {
             let result = daemon::send_or_spawn(
                 "search_notes",
-                serde_json::json!({ "query": query }),
+                serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot }),
                 daemon::DEFAULT_COMMAND_TIMEOUT,
             )
             .await?;
@@ -78,8 +94,9 @@ async fn main() -> Result<()> {
             tab,
             num_notes,
             pretty,
+            debug_snapshot,
         } => {
-            let mut input = serde_json::json!({ "query": query });
+            let mut input = serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
             if let Some(tab) = tab {
                 input["tab_label"] = Value::String(tab);
             }
@@ -91,10 +108,14 @@ async fn main() -> Result<()> {
                 daemon::send_or_spawn("topic_scan", input, daemon::LONG_COMMAND_TIMEOUT).await?;
             print_command_result(&result, pretty)?;
         }
-        Command::ExtractNote { note_id, pretty } => {
+        Command::ExtractNote {
+            note_id,
+            pretty,
+            debug_snapshot,
+        } => {
             let result = daemon::send_or_spawn(
                 "extract_note",
-                serde_json::json!({ "note_id": note_id }),
+                serde_json::json!({ "note_id": note_id, "debug_snapshot": debug_snapshot }),
                 daemon::DEFAULT_COMMAND_TIMEOUT,
             )
             .await?;
