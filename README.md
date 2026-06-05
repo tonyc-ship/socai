@@ -9,7 +9,7 @@
 
 ## Desktop App
 
-[Download .dmg for Mac](https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg). 
+[Download .dmg for Mac](https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg).
 
 For local development:
 
@@ -44,7 +44,9 @@ Add `--pretty` to any tool command for indented JSON.
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
-Telementry can be turned off with additional flags
+CLI telemetry is enabled by default, and search query text is included by
+default. Use these environment variables when you want to redact query text or
+disable telemetry for a command:
 
 ```bash
 SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
