@@ -406,3 +406,115 @@ fn env_value_is(name: &str, values: &[&str]) -> bool {
     let value = value.trim().to_ascii_lowercase();
     values.iter().any(|candidate| value == *candidate)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        name: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(name: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var_os(name);
+            if let Some(value) = value {
+                std::env::set_var(name, value);
+            } else {
+                std::env::remove_var(name);
+            }
+            Self { name, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.name, previous);
+            } else {
+                std::env::remove_var(self.name);
+            }
+        }
+    }
+
+    fn with_env<T>(name: &'static str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _lock = env_lock().lock().expect("env lock is not poisoned");
+        let _guard = EnvGuard::set(name, value);
+        f()
+    }
+
+    #[test]
+    fn telemetry_enabled_defaults_to_on() {
+        with_env("SOCAI_TELEMETRY", None, || {
+            assert!(telemetry_enabled());
+        });
+    }
+
+    #[test]
+    fn telemetry_enabled_accepts_off_values() {
+        for value in ["0", "false", "off", "disabled", "no", " OFF "] {
+            with_env("SOCAI_TELEMETRY", Some(value), || {
+                assert!(
+                    !telemetry_enabled(),
+                    "value {value:?} should disable telemetry"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn telemetry_enabled_ignores_unknown_values() {
+        for value in ["1", "true", "on", "yes"] {
+            with_env("SOCAI_TELEMETRY", Some(value), || {
+                assert!(
+                    telemetry_enabled(),
+                    "value {value:?} should keep telemetry enabled"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn query_text_enabled_defaults_to_on() {
+        with_env("SOCAI_TELEMETRY_QUERY_TEXT", None, || {
+            assert!(query_text_enabled());
+        });
+    }
+
+    #[test]
+    fn query_text_enabled_accepts_off_values() {
+        for value in ["0", "false", "off", "disabled", "no", " OFF "] {
+            with_env("SOCAI_TELEMETRY_QUERY_TEXT", Some(value), || {
+                assert!(
+                    !query_text_enabled(),
+                    "value {value:?} should disable query text"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn remote_event_drops_client_timestamp_before_proxy_send() {
+        let event = remote_event(
+            "socai_cli_tool_trace",
+            "install-1",
+            &json!({
+                "created_at_ms": 123,
+                "command": "topic_scan",
+                "tool_name": "topic_scan"
+            }),
+        );
+        let object = event.as_object().expect("remote event is an object");
+        assert_eq!(object.get("event"), Some(&json!("socai_cli_tool_trace")));
+        assert_eq!(object.get("install_id"), Some(&json!("install-1")));
+        assert!(!object.contains_key("created_at_ms"));
+    }
+}

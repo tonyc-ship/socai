@@ -488,6 +488,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn command_summary_includes_query_text_by_default() {
+        let summary = command_arg_summary(
+            &DaemonTelemetry::default(),
+            &json!({ "query": "运营爆款思路" }),
+        );
+        let object = summary.as_object().expect("summary is an object");
+        assert_eq!(object.get("query_text"), Some(&json!("运营爆款思路")));
+        assert_eq!(object.get("query_text_enabled"), Some(&json!(true)));
+        assert_eq!(object.get("query_len"), Some(&json!(6)));
+    }
+
+    #[test]
+    fn command_summary_redacts_query_text_when_disabled() {
+        let telemetry = DaemonTelemetry {
+            enabled: true,
+            include_query_text: false,
+        };
+        let summary = command_arg_summary(&telemetry, &json!({ "query": "运营爆款思路" }));
+        let object = summary.as_object().expect("summary is an object");
+        assert!(!object.contains_key("query_text"));
+        assert_eq!(object.get("query_text_enabled"), Some(&json!(false)));
+        assert_eq!(object.get("query_len"), Some(&json!(6)));
+    }
+
+    #[test]
     fn command_summary_omits_defaulted_optional_params() {
         let summary = command_arg_summary(
             &DaemonTelemetry::default(),
@@ -518,6 +543,34 @@ mod tests {
         assert_eq!(metadata.get("debug_snapshot"), Some(&json!(true)));
         assert!(!object.contains_key("tab_label"));
         assert!(!object.contains_key("num_notes"));
+    }
+
+    #[test]
+    fn result_metrics_extracts_safe_counts() {
+        let metrics = result_metrics(&json!({
+            "run_dir": "/tmp/socai-run",
+            "data": {
+                "ok": true,
+                "cards": [{}, {}],
+                "search": { "cards": [{}, {}, {}] },
+                "selected_cards": [{}],
+                "notes": [
+                    { "id": "1", "body": "must not be copied" },
+                    { "skipped": "missing note" },
+                    { "skipped": true, "comments": ["must not be copied"] }
+                ]
+            }
+        }));
+        let object = metrics.as_object().expect("metrics is an object");
+        assert_eq!(object.get("result_ok"), Some(&json!(true)));
+        assert_eq!(object.get("cards_count"), Some(&json!(2)));
+        assert_eq!(object.get("search_cards_count"), Some(&json!(3)));
+        assert_eq!(object.get("selected_cards_count"), Some(&json!(1)));
+        assert_eq!(object.get("notes_count"), Some(&json!(3)));
+        assert_eq!(object.get("notes_skipped_count"), Some(&json!(2)));
+        assert_eq!(object.get("has_run_dir"), Some(&json!(true)));
+        assert!(!object.contains_key("body"));
+        assert!(!object.contains_key("comments"));
     }
 }
 
