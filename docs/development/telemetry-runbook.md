@@ -1,13 +1,14 @@
-# socai telemetry runbook
+# socai telemetry maintainer runbook
 
-This page describes socai CLI telemetry for users and maintainers. The final
-implementation sends one sanitized trace per top-level CLI tool command through
-the first-party endpoint at `https://socai.io/v1/events`.
+This is development/maintainer documentation for operating socai CLI telemetry.
+It intentionally lives outside the README: the README should stay focused on
+what CLI users need to run socai and control telemetry.
 
-For the exact field contract, see the telemetry schema doc when issue #55 lands.
-This runbook focuses on user controls and operational procedures.
+The final implementation sends one sanitized trace per top-level CLI tool
+command through the first-party endpoint at `https://socai.io/v1/events`.
+For the exact field contract, see [`../telemetry-schema.md`](../telemetry-schema.md).
 
-## User-facing behavior
+## Product behavior summary
 
 socai uses telemetry to understand whether CLI commands work reliably, how long
 they take, which tools are used, and what result sizes look like. This helps us
@@ -31,6 +32,8 @@ socai does not intentionally send note bodies, comments, images, browser cookies
 API keys, raw tool output bodies, or Axiom credentials.
 
 ## User controls
+
+The README should document only these user controls, not proxy/Axiom internals.
 
 Disable telemetry for a single command:
 
@@ -133,7 +136,7 @@ Do not put environment variable values in the repo, in docs, in PR comments, or
 in public build logs.
 
 Deployment details for the site project live in
-[`docs/website-deployment.md`](website-deployment.md).
+[`../website-deployment.md`](../website-deployment.md).
 
 ## Axiom datasets
 

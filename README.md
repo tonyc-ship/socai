@@ -44,17 +44,14 @@ Add `--pretty` to any tool command for indented JSON.
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
-CLI telemetry sends one sanitized trace per tool command to the first-party
-socai proxy. Query text is included by default; use these environment variables
-when you want to redact or disable telemetry for a command:
+CLI telemetry is enabled by default, and search query text is included by
+default. Use these environment variables when you want to redact query text or
+disable telemetry for a command:
 
 ```bash
 SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
 SOCAI_TELEMETRY=off socai topic_scan "运营爆款思路"               # disable telemetry for this command
 ```
-
-See the [telemetry runbook](docs/telemetry-runbook.md) for user-facing behavior,
-local buffer paths, maintainer operations, and smoke-test steps.
 
 ## TUI
 
@@ -81,7 +78,6 @@ The build output is written to `site/dist/`. Deployment settings are documented 
 ## Documentation
 
 - [Data model](docs/data-model.md) — run artifacts, desktop task index, and timeline replay.
-- [Telemetry runbook](docs/telemetry-runbook.md) — CLI telemetry controls, local buffer, and maintainer operations.
 
 ## 欢迎加群交流
 
