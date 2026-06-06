@@ -15,6 +15,10 @@ use tokio::time::timeout as tokio_timeout;
 const RELEASE_API_URL: &str = "https://api.github.com/repos/tonyc-ship/socai/releases/latest";
 const RELEASE_HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 const CDP_WS_REACHABILITY_TIMEOUT: Duration = Duration::from_secs(2);
+// Managed CLI release asset. The repo also cuts app-only releases whose tag is
+// newer than the CLI but that ship no CLI tarball; those must not be reported as
+// a CLI update.
+const CLI_RELEASE_ASSET: &str = "socai-cli-macos-universal.tar.gz";
 
 pub(crate) async fn run() -> Result<bool> {
     let mut report = DoctorReport::default();
@@ -92,6 +96,12 @@ async fn add_daemon_rows(report: &mut DoctorReport) {
                 ExistingDaemonStatus::Missing { reason } => report.add(DiagnosticRow::ok(
                     "daemon",
                     format!("not running ({reason}); socai commands start it on demand"),
+                )),
+                ExistingDaemonStatus::Unreachable { reason } => report.add(DiagnosticRow::warn(
+                    "daemon",
+                    format!(
+                        "stale socket ({reason}); the next socai command clears it and spawns a fresh daemon (no action needed)"
+                    ),
                 )),
                 ExistingDaemonStatus::Incompatible { reason } => report.add(DiagnosticRow::error(
                     "daemon",
@@ -201,7 +211,7 @@ async fn validate_websocket_tcp_reachable(raw_url: &str) -> Result<()> {
 }
 
 async fn add_release_rows(report: &mut DoctorReport, install_mode: InstallMode) {
-    match fetch_latest_release_version().await {
+    match fetch_latest_release().await {
         Ok(latest) => {
             let current = env!("CARGO_PKG_VERSION");
             let (status, message) = latest_release_message(&latest, current);
@@ -340,9 +350,22 @@ fn update_hint(mode: InstallMode) -> &'static str {
 struct GitHubRelease {
     tag_name: Option<String>,
     name: Option<String>,
+    #[serde(default)]
+    assets: Vec<GitHubReleaseAsset>,
 }
 
-async fn fetch_latest_release_version() -> Result<String> {
+#[derive(Debug, Deserialize)]
+struct GitHubReleaseAsset {
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LatestRelease {
+    version: String,
+    has_cli_asset: bool,
+}
+
+async fn fetch_latest_release() -> Result<LatestRelease> {
     let client = reqwest::Client::builder()
         .timeout(RELEASE_HTTP_TIMEOUT)
         .build()
@@ -360,28 +383,57 @@ async fn fetch_latest_release_version() -> Result<String> {
         .await
         .context("decode latest GitHub release")?;
 
-    release
+    let version = release
         .tag_name
         .or(release.name)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .context("latest GitHub release did not include tag_name or name")
+        .context("latest GitHub release did not include tag_name or name")?;
+    let has_cli_asset = release.assets.iter().any(|asset| {
+        asset
+            .name
+            .as_deref()
+            .is_some_and(|name| name == CLI_RELEASE_ASSET)
+    });
+
+    Ok(LatestRelease {
+        version,
+        has_cli_asset,
+    })
 }
 
-fn latest_release_message(latest: &str, current: &str) -> (RowStatus, String) {
-    match compare_release_versions(latest, current) {
+fn latest_release_message(latest: &LatestRelease, current: &str) -> (RowStatus, String) {
+    // App-only releases ship no CLI tarball; comparing their (newer) tag to the
+    // CLI version would falsely claim a CLI update is available.
+    if !latest.has_cli_asset {
+        return (
+            RowStatus::Ok,
+            format!(
+                "latest release {} ships no managed CLI asset ({CLI_RELEASE_ASSET}); CLI update check skipped (non-fatal)",
+                latest.version
+            ),
+        );
+    }
+
+    match compare_release_versions(&latest.version, current) {
         Some(Ordering::Greater) => (
             RowStatus::Warn,
-            format!("update available: {latest} (current {current})"),
+            format!("update available: {} (current {current})", latest.version),
         ),
-        Some(Ordering::Equal) => (RowStatus::Ok, format!("up to date: {latest}")),
+        Some(Ordering::Equal) => (RowStatus::Ok, format!("up to date: {}", latest.version)),
         Some(Ordering::Less) => (
             RowStatus::Ok,
-            format!("current {current} is newer than latest release {latest}"),
+            format!(
+                "current {current} is newer than latest release {}",
+                latest.version
+            ),
         ),
         None => (
             RowStatus::Warn,
-            format!("latest release {latest}; could not compare with current {current}"),
+            format!(
+                "latest release {}; could not compare with current {current}",
+                latest.version
+            ),
         ),
     }
 }
@@ -595,10 +647,41 @@ mod tests {
 
     #[test]
     fn latest_release_message_warns_when_update_available() {
-        let (status, message) = latest_release_message("v0.2.0", "0.1.0");
+        let latest = LatestRelease {
+            version: "v0.2.0".to_string(),
+            has_cli_asset: true,
+        };
+        let (status, message) = latest_release_message(&latest, "0.1.0");
 
         assert_eq!(status, RowStatus::Warn);
         assert!(message.contains("update available"));
+    }
+
+    #[test]
+    fn latest_release_message_skips_update_when_no_cli_asset() {
+        // App-only release: newer tag than the CLI, but no CLI tarball.
+        let latest = LatestRelease {
+            version: "v0.1.5".to_string(),
+            has_cli_asset: false,
+        };
+        let (status, message) = latest_release_message(&latest, "0.1.0");
+
+        assert_eq!(status, RowStatus::Ok);
+        assert!(!message.contains("update available"));
+        assert!(message.contains("no managed CLI asset"));
+        assert!(message.contains(CLI_RELEASE_ASSET));
+    }
+
+    #[test]
+    fn latest_release_message_reports_update_when_cli_asset_present() {
+        let latest = LatestRelease {
+            version: "v0.1.0".to_string(),
+            has_cli_asset: true,
+        };
+        let (status, message) = latest_release_message(&latest, "0.1.0");
+
+        assert_eq!(status, RowStatus::Ok);
+        assert!(message.contains("up to date"));
     }
 
     #[test]

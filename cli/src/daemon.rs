@@ -80,8 +80,18 @@ enum DaemonCompatibility {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExistingDaemonStatus {
     Compatible,
-    Missing { reason: String },
-    Incompatible { reason: String },
+    Missing {
+        reason: String,
+    },
+    /// Socket exists but the daemon cannot be pinged (crashed/interrupted
+    /// upgrade left a stale socket). A fresh spawn clears it, so this is
+    /// recoverable rather than a hard incompatibility.
+    Unreachable {
+        reason: String,
+    },
+    Incompatible {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -633,7 +643,11 @@ fn daemon_compatibility(ping_result: &Value, client: &VersionMetadata) -> Daemon
 fn daemon_recovery_action(status: ExistingDaemonStatus) -> DaemonRecoveryAction {
     match status {
         ExistingDaemonStatus::Compatible => DaemonRecoveryAction::UseExisting,
-        ExistingDaemonStatus::Missing { .. } => DaemonRecoveryAction::SpawnFresh,
+        // A stale/unreachable socket has no live daemon to shut down; spawning
+        // fresh removes the dead socket and starts a usable daemon.
+        ExistingDaemonStatus::Missing { .. } | ExistingDaemonStatus::Unreachable { .. } => {
+            DaemonRecoveryAction::SpawnFresh
+        }
         ExistingDaemonStatus::Incompatible { reason } => {
             DaemonRecoveryAction::RestartExisting { reason }
         }
@@ -926,6 +940,16 @@ mod tests {
     }
 
     #[test]
+    fn daemon_recovery_action_spawns_when_daemon_unreachable() {
+        assert_eq!(
+            daemon_recovery_action(ExistingDaemonStatus::Unreachable {
+                reason: "daemon ping failed: connection refused".to_string(),
+            }),
+            DaemonRecoveryAction::SpawnFresh
+        );
+    }
+
+    #[test]
     fn daemon_recovery_action_restarts_when_daemon_incompatible() {
         assert_eq!(
             daemon_recovery_action(ExistingDaemonStatus::Incompatible {
@@ -979,7 +1003,7 @@ pub(crate) async fn inspect_existing_daemon() -> Result<DaemonInspection> {
         }
         Err(err) => Ok(DaemonInspection {
             paths: path_info,
-            status: ExistingDaemonStatus::Incompatible {
+            status: ExistingDaemonStatus::Unreachable {
                 reason: format!("daemon ping failed: {err:#}"),
             },
             ping: None,
