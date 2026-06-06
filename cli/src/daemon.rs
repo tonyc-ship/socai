@@ -78,7 +78,7 @@ enum DaemonCompatibility {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ExistingDaemonStatus {
+pub(crate) enum ExistingDaemonStatus {
     Compatible,
     Missing { reason: String },
     Incompatible { reason: String },
@@ -101,11 +101,26 @@ struct DaemonResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonPathInfo {
+    pub(crate) home: PathBuf,
+    pub(crate) socket: PathBuf,
+    pub(crate) pid: PathBuf,
+    pub(crate) log: PathBuf,
+}
+
 struct DaemonPaths {
     home: PathBuf,
     socket: PathBuf,
     pid: PathBuf,
     log: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonInspection {
+    pub(crate) paths: DaemonPathInfo,
+    pub(crate) status: ExistingDaemonStatus,
+    pub(crate) ping: Option<Value>,
 }
 
 struct DaemonState {
@@ -932,23 +947,54 @@ async fn ensure_compatible_daemon() -> Result<()> {
 }
 
 async fn probe_existing_daemon() -> Result<ExistingDaemonStatus> {
+    Ok(inspect_existing_daemon().await?.status)
+}
+
+pub(crate) async fn inspect_existing_daemon() -> Result<DaemonInspection> {
     let paths = daemon_paths()?;
+    let path_info = DaemonPathInfo::from(&paths);
     if !paths.socket.exists() {
-        return Ok(ExistingDaemonStatus::Missing {
-            reason: format!("daemon socket {} does not exist", paths.socket.display()),
+        return Ok(DaemonInspection {
+            paths: path_info,
+            status: ExistingDaemonStatus::Missing {
+                reason: format!("daemon socket {} does not exist", paths.socket.display()),
+            },
+            ping: None,
         });
     }
 
     match ping_daemon().await {
-        Ok(result) => match daemon_compatibility(&result, &current_version_metadata()) {
-            DaemonCompatibility::Compatible => Ok(ExistingDaemonStatus::Compatible),
-            DaemonCompatibility::Incompatible { reason } => {
-                Ok(ExistingDaemonStatus::Incompatible { reason })
-            }
-        },
-        Err(err) => Ok(ExistingDaemonStatus::Incompatible {
-            reason: format!("daemon ping failed: {err:#}"),
+        Ok(result) => {
+            let status = match daemon_compatibility(&result, &current_version_metadata()) {
+                DaemonCompatibility::Compatible => ExistingDaemonStatus::Compatible,
+                DaemonCompatibility::Incompatible { reason } => {
+                    ExistingDaemonStatus::Incompatible { reason }
+                }
+            };
+            Ok(DaemonInspection {
+                paths: path_info,
+                status,
+                ping: Some(result),
+            })
+        }
+        Err(err) => Ok(DaemonInspection {
+            paths: path_info,
+            status: ExistingDaemonStatus::Incompatible {
+                reason: format!("daemon ping failed: {err:#}"),
+            },
+            ping: None,
         }),
+    }
+}
+
+impl From<&DaemonPaths> for DaemonPathInfo {
+    fn from(paths: &DaemonPaths) -> Self {
+        Self {
+            home: paths.home.clone(),
+            socket: paths.socket.clone(),
+            pid: paths.pid.clone(),
+            log: paths.log.clone(),
+        }
     }
 }
 
