@@ -832,14 +832,12 @@ impl Tool for ApplySearchFiltersTool {
     }
 
     fn description(&self) -> &str {
-        "Hover the Xiaohongshu search page's `筛选` control and choose filter \
-         options from the current panel. Groups omitted from `filters` are \
-         applied as their default options, so old choices from previous \
-         searches do not leak into the result. Each group is single-select, \
-         but different groups can be combined. Use `extract_search_cards` \
-         after applying filters to read the current cards."
+        "Hover the Xiaohongshu search page's `筛选` control and select filter \
+        options from the current panel. Omitted groups are reset to defaults, \
+        preventing filters from previous searches from leaking into the results. \
+        Each group is single-select, but multiple groups can be combined. Use \
+        `extract_search_cards` after applying filters to read the current cards."
     }
-
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
