@@ -83,7 +83,7 @@ if socai --help | grep -q 'doctor'; then socai doctor; else socai --help; fi
 After install or update, run diagnostics first when available:
 
 ```bash
-socai doctor                                                              # inspect install/browser/daemon health when available
+if socai --help | grep -q 'doctor'; then socai doctor; fi                  # inspect install/browser/daemon health when the build includes doctor
 socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个获取帖子
 socai search_notes "运营爆款思路" --filter sort=最新                          # 只打开搜索结果页
 socai extract_note --note-id <id>                                          # open a note from the current page
