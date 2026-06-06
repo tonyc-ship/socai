@@ -13,6 +13,9 @@ set up or repair `socai`.
 - Use the source/Cargo fallback only when no compatible release binary exists,
   the platform is unsupported, or the user explicitly asks for a source or
   development install.
+- WSL follows the Linux/source guidance. Native Windows is not a verified
+  managed path yet because the daemon currently uses Unix-domain sockets;
+  native Windows IPC porting is tracked by issue #80.
 - Do not implement missing commands while installing. In particular, `socai
   doctor`, daemon version handshake, and release packaging are tracked by
   separate issues. Use the best available released CLI and the manual checks
@@ -22,12 +25,15 @@ set up or repair `socai`.
 
 Agents should keep the user's install in one of these modes:
 
-- `managed-binary` — preferred when a compatible GitHub Release CLI asset exists.
-  The stable executable path is `~/.socai/bin/socai`. Agent docs are copied to
+- `managed-binary` — preferred when a compatible GitHub Release CLI asset exists
+  for the detected OS and CPU. The stable executable path is
+  `~/.socai/bin/socai`. Agent docs are copied to
   `~/.socai/share/socai/SKILL.md` and `~/.socai/share/socai/install.md`.
-- `source-cargo` — fallback for unsupported platforms or explicit development
-  installs. Clone the repo to a durable path, update with `git pull --ff-only`,
-  and install with `cargo install --path cli --force`.
+- `source-cargo` — fallback for unsupported platforms, missing release assets,
+  or explicit development/source installs. It is the practical agent-run path on
+  macOS, Linux, and WSL when Git plus Rust/Cargo are available. Clone the repo
+  to a durable path, update with `git pull --ff-only`, and install with
+  `cargo install --path cli --force`.
 - `unknown` — diagnostic state for any ambiguous executable path or install that
   cannot be tied to the two known modes. Do not guess an update procedure;
   reinstall through `managed-binary` or `source-cargo`.
@@ -46,24 +52,38 @@ esac
 
 ## choose an install path
 
-1. Detect the platform:
+1. Detect the platform and whether a Linux shell is WSL:
 
    ```sh
-   uname -s
-   uname -m
+   os="$(uname -s 2>/dev/null || printf unknown)"
+   arch="$(uname -m 2>/dev/null || printf unknown)"
+   is_wsl="no"
+   if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
+     is_wsl="yes"
+   fi
+   printf 'os=%s arch=%s wsl=%s\n' "$os" "$arch" "$is_wsl"
    ```
 
-2. On macOS (`Darwin`, `arm64` or `x86_64`), try `managed-binary` first using
-   the latest GitHub Release asset named `socai-cli-macos-universal.tar.gz` and
-   its checksum file `socai-cli-macos-universal.tar.gz.sha256`.
-3. If that asset is missing, the download fails, or the platform is not covered
-   by a release asset, use `source-cargo`.
-4. On Windows, distinguish WSL from native Windows:
-   - WSL: use the Linux/source fallback unless a verified release asset exists.
-   - Native Windows: treat as unverified until issue #77 is resolved. The
-     current daemon path uses Unix sockets, so prefer WSL or another verified
-     environment instead of promising native Windows support.
-5. If an existing `socai` is on an unexpected path, treat it as `unknown` and
+   If `uname` is unavailable and the shell is PowerShell or `cmd.exe`, treat the
+   session as native Windows, not WSL.
+2. Prefer `managed-binary` whenever a compatible GitHub Release CLI asset exists
+   for the detected OS and CPU. Do not require Rust/Cargo for this path.
+3. Use `source-cargo` when no compatible CLI release asset exists, the release
+   download/checksum fails, or the user asks for a development/source install.
+   Do not download the desktop app `.dmg` as a CLI substitute.
+4. On macOS (`Darwin`, `arm64` or `x86_64`), the current managed-binary asset to
+   try first is `socai-cli-macos-universal.tar.gz` with checksum file
+   `socai-cli-macos-universal.tar.gz.sha256`.
+5. On Linux and WSL, use `source-cargo` unless a Linux release asset is added and
+   verified. WSL is a Linux userland and can use the current Unix-socket daemon;
+   keep source checkouts under the WSL filesystem, such as `$HOME/.socai/src`,
+   rather than under `/mnt/c`.
+6. On native Windows, do not claim a managed daemon path yet. Current code in
+   `cli/src/daemon.rs` imports and uses `tokio::net::{UnixListener,
+   UnixStream}` for `$HOME/.socai/rust-daemon.sock`, so native Windows support
+   must be ported and verified before agents install it as a supported path.
+   Track that work in issue #80 and prefer WSL for Windows users today.
+7. If an existing `socai` is on an unexpected path, treat it as `unknown` and
    reinstall through a known mode. Avoid deleting unknown binaries unless the
    user explicitly approves.
 
@@ -135,12 +155,71 @@ with the user before changing quarantine metadata, then run:
 xattr -d com.apple.quarantine "$HOME/.socai/bin/socai" 2>/dev/null || true
 ```
 
+## source-cargo prerequisites by platform
+
+Use these commands only for `source-cargo`. Ask before installing missing system
+packages if the session policy requires permission.
+
+macOS:
+
+```sh
+set -euo pipefail
+if ! command -v git >/dev/null 2>&1; then
+  xcode-select --install
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  . "$HOME/.cargo/env"
+fi
+git --version
+cargo --version
+```
+
+Linux or WSL:
+
+```sh
+set -euo pipefail
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y git curl ca-certificates build-essential pkg-config libssl-dev
+elif command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y git curl ca-certificates gcc gcc-c++ make pkgconf-pkg-config openssl-devel
+elif command -v pacman >/dev/null 2>&1; then
+  sudo pacman -Sy --needed git curl base-devel pkgconf openssl
+else
+  echo "Install Git, curl, C/C++ build tools, pkg-config, and OpenSSL headers." >&2
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  . "$HOME/.cargo/env"
+fi
+git --version
+cargo --version
+```
+
+Native Windows caveat:
+
+- Prefer WSL and the Linux commands above until issue #80 ports and verifies
+  native Windows daemon IPC.
+- If a user explicitly asks to experiment on native Windows anyway, install Git
+  for Windows and rustup in PowerShell, but warn that the current daemon path is
+  not supported there:
+
+  ```powershell
+  winget install --id Git.Git -e
+  winget install --id Rustlang.Rustup -e
+  rustup default stable
+  git --version
+  cargo --version
+  ```
+
 ## source-cargo fallback install
 
-Use this path when no compatible release binary exists, the user asked for a
-source/development install, or the platform is not yet covered by a managed
-binary. This path requires Git plus Rust/Cargo. Ask before installing missing
-system dependencies if the session policy requires permission.
+Use this path on macOS, Linux, or WSL when no compatible release binary exists,
+the user asked for a source/development install, or the platform is not yet
+covered by a managed binary. This path requires Git plus Rust/Cargo. Ask before
+installing missing system dependencies if the session policy requires
+permission.
 
 ```sh
 set -euo pipefail
@@ -165,7 +244,11 @@ install -m 0644 install.md "$HOME/.socai/share/socai/install.md"
 export PATH="$HOME/.cargo/bin:$PATH"
 # Stop any daemon left from a previous build before validating the new CLI.
 socai stop || true
-socai --help
+if socai --help | grep -q 'doctor'; then
+  socai doctor
+else
+  socai --help
+fi
 ```
 
 Make `~/.cargo/bin` persistent if needed:
