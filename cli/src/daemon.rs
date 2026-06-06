@@ -27,6 +27,10 @@ const PID_NAME: &str = "rust-daemon.pid";
 const LOG_NAME: &str = "rust-daemon.log";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const PING_TIMEOUT: Duration = Duration::from_secs(2);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const RESTART_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+const DAEMON_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct DaemonRequest {
@@ -57,6 +61,34 @@ impl Default for DaemonTelemetry {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct VersionMetadata {
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_sha: Option<String>,
+    protocol_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonCompatibility {
+    Compatible,
+    Incompatible { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExistingDaemonStatus {
+    Compatible,
+    Missing { reason: String },
+    Incompatible { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonRecoveryAction {
+    UseExisting,
+    SpawnFresh,
+    RestartExisting { reason: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,6 +165,8 @@ pub async fn run_daemon() -> Result<()> {
 }
 
 pub async fn send_or_spawn(command: &str, args: Value, command_timeout: Duration) -> Result<Value> {
+    ensure_compatible_daemon().await?;
+
     match send_request(command, args.clone(), command_timeout).await {
         Ok(result) => Ok(result),
         Err(_) => {
@@ -191,7 +225,7 @@ async fn handle_request(
     let telemetry = request.telemetry.clone();
     let result = async {
         if command == "ping" {
-            return Ok(json!({ "ok": true }));
+            return Ok(ping_response(&request.args));
         }
 
         if command == "shutdown" {
@@ -485,6 +519,112 @@ fn error_summary(err: &anyhow::Error) -> String {
     first.chars().take(240).collect()
 }
 
+fn current_version_metadata() -> VersionMetadata {
+    VersionMetadata {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        build_sha: compile_time_build_sha(),
+        protocol_version: DAEMON_PROTOCOL_VERSION,
+    }
+}
+
+fn compile_time_build_sha() -> Option<String> {
+    option_env!("SOCAI_BUILD_SHA").and_then(normalize_build_sha)
+}
+
+fn normalize_build_sha(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn ping_args() -> Value {
+    json!({ "client": current_version_metadata() })
+}
+
+fn ping_response(args: &Value) -> Value {
+    let client = args
+        .get("client")
+        .cloned()
+        .unwrap_or_else(|| json!(current_version_metadata()));
+
+    json!({
+        "ok": true,
+        "protocol_version": DAEMON_PROTOCOL_VERSION,
+        "daemon": current_version_metadata(),
+        "client": client,
+    })
+}
+
+fn daemon_compatibility(ping_result: &Value, client: &VersionMetadata) -> DaemonCompatibility {
+    let Some(daemon_value) = ping_result.get("daemon") else {
+        return DaemonCompatibility::Incompatible {
+            reason: "daemon ping response missing daemon version metadata".to_string(),
+        };
+    };
+
+    let daemon: VersionMetadata = match serde_json::from_value(daemon_value.clone()) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return DaemonCompatibility::Incompatible {
+                reason: format!("daemon ping response has invalid version metadata: {err}"),
+            };
+        }
+    };
+
+    if daemon.protocol_version != client.protocol_version {
+        return DaemonCompatibility::Incompatible {
+            reason: format!(
+                "daemon protocol {} does not match client protocol {}",
+                daemon.protocol_version, client.protocol_version
+            ),
+        };
+    }
+
+    if daemon.version != client.version {
+        return DaemonCompatibility::Incompatible {
+            reason: format!(
+                "daemon version {} does not match client version {}",
+                daemon.version, client.version
+            ),
+        };
+    }
+
+    match (&daemon.build_sha, &client.build_sha) {
+        (Some(daemon_sha), Some(client_sha)) if daemon_sha == client_sha => {}
+        (None, None) => {}
+        (Some(_), Some(_)) => {
+            return DaemonCompatibility::Incompatible {
+                reason: "daemon build SHA does not match client build SHA".to_string(),
+            };
+        }
+        (None, Some(_)) => {
+            return DaemonCompatibility::Incompatible {
+                reason: "daemon build SHA is missing".to_string(),
+            };
+        }
+        (Some(_), None) => {
+            return DaemonCompatibility::Incompatible {
+                reason: "client build SHA is missing".to_string(),
+            };
+        }
+    }
+
+    DaemonCompatibility::Compatible
+}
+
+fn daemon_recovery_action(status: ExistingDaemonStatus) -> DaemonRecoveryAction {
+    match status {
+        ExistingDaemonStatus::Compatible => DaemonRecoveryAction::UseExisting,
+        ExistingDaemonStatus::Missing { .. } => DaemonRecoveryAction::SpawnFresh,
+        ExistingDaemonStatus::Incompatible { reason } => {
+            DaemonRecoveryAction::RestartExisting { reason }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,6 +714,292 @@ mod tests {
         assert!(!object.contains_key("body"));
         assert!(!object.contains_key("comments"));
     }
+
+    #[test]
+    fn ping_response_includes_daemon_client_and_protocol_metadata() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 1,
+        };
+
+        let response = ping_response(&json!({ "client": client }));
+
+        assert_eq!(response.get("protocol_version"), Some(&json!(1)));
+        assert_eq!(
+            response
+                .get("daemon")
+                .and_then(|daemon| daemon.get("version")),
+            Some(&json!(env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(
+            response
+                .get("daemon")
+                .and_then(|daemon| daemon.get("protocol_version")),
+            Some(&json!(DAEMON_PROTOCOL_VERSION))
+        );
+        assert_eq!(
+            response
+                .get("client")
+                .and_then(|client| client.get("version")),
+            Some(&json!("0.1.0"))
+        );
+        assert_eq!(
+            response
+                .get("client")
+                .and_then(|client| client.get("build_sha")),
+            Some(&json!("abc123"))
+        );
+    }
+
+    #[test]
+    fn daemon_compatibility_accepts_matching_metadata() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 1,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "build_sha": "abc123",
+                "protocol_version": 1
+            }
+        });
+
+        assert_eq!(
+            daemon_compatibility(&ping, &client),
+            DaemonCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn daemon_compatibility_accepts_when_build_sha_unavailable_on_both_sides() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: None,
+            protocol_version: 1,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "protocol_version": 1
+            }
+        });
+
+        assert_eq!(
+            daemon_compatibility(&ping, &client),
+            DaemonCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn daemon_compatibility_rejects_missing_daemon_metadata() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 1,
+        };
+
+        let decision = daemon_compatibility(&json!({ "ok": true }), &client);
+
+        assert!(matches!(
+            decision,
+            DaemonCompatibility::Incompatible { reason } if reason.contains("missing daemon version metadata")
+        ));
+    }
+
+    #[test]
+    fn daemon_compatibility_rejects_mismatched_version() {
+        let client = VersionMetadata {
+            version: "0.2.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 1,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "build_sha": "abc123",
+                "protocol_version": 1
+            }
+        });
+
+        let decision = daemon_compatibility(&ping, &client);
+
+        assert!(matches!(
+            decision,
+            DaemonCompatibility::Incompatible { reason } if reason.contains("daemon version 0.1.0")
+        ));
+    }
+
+    #[test]
+    fn daemon_compatibility_rejects_mismatched_protocol() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 2,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "build_sha": "abc123",
+                "protocol_version": 1
+            }
+        });
+
+        let decision = daemon_compatibility(&ping, &client);
+
+        assert!(matches!(
+            decision,
+            DaemonCompatibility::Incompatible { reason } if reason.contains("daemon protocol 1")
+        ));
+    }
+
+    #[test]
+    fn daemon_compatibility_rejects_mismatched_build_sha() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("new-sha".to_string()),
+            protocol_version: 1,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "build_sha": "old-sha",
+                "protocol_version": 1
+            }
+        });
+
+        let decision = daemon_compatibility(&ping, &client);
+
+        assert!(matches!(
+            decision,
+            DaemonCompatibility::Incompatible { reason } if reason.contains("build SHA")
+        ));
+    }
+
+    #[test]
+    fn daemon_compatibility_rejects_missing_build_sha_when_client_has_one() {
+        let client = VersionMetadata {
+            version: "0.1.0".to_string(),
+            build_sha: Some("abc123".to_string()),
+            protocol_version: 1,
+        };
+        let ping = json!({
+            "daemon": {
+                "version": "0.1.0",
+                "protocol_version": 1
+            }
+        });
+
+        let decision = daemon_compatibility(&ping, &client);
+
+        assert!(matches!(
+            decision,
+            DaemonCompatibility::Incompatible { reason } if reason.contains("daemon build SHA is missing")
+        ));
+    }
+
+    #[test]
+    fn daemon_recovery_action_spawns_when_daemon_missing() {
+        assert_eq!(
+            daemon_recovery_action(ExistingDaemonStatus::Missing {
+                reason: "socket not found".to_string(),
+            }),
+            DaemonRecoveryAction::SpawnFresh
+        );
+    }
+
+    #[test]
+    fn daemon_recovery_action_restarts_when_daemon_incompatible() {
+        assert_eq!(
+            daemon_recovery_action(ExistingDaemonStatus::Incompatible {
+                reason: "stale version".to_string(),
+            }),
+            DaemonRecoveryAction::RestartExisting {
+                reason: "stale version".to_string(),
+            }
+        );
+    }
+}
+
+async fn ensure_compatible_daemon() -> Result<()> {
+    match daemon_recovery_action(probe_existing_daemon().await?) {
+        DaemonRecoveryAction::UseExisting => Ok(()),
+        DaemonRecoveryAction::SpawnFresh => spawn_daemon().await,
+        DaemonRecoveryAction::RestartExisting { reason } => restart_daemon(&reason).await,
+    }
+}
+
+async fn probe_existing_daemon() -> Result<ExistingDaemonStatus> {
+    let paths = daemon_paths()?;
+    if !paths.socket.exists() {
+        return Ok(ExistingDaemonStatus::Missing {
+            reason: format!("daemon socket {} does not exist", paths.socket.display()),
+        });
+    }
+
+    match ping_daemon().await {
+        Ok(result) => match daemon_compatibility(&result, &current_version_metadata()) {
+            DaemonCompatibility::Compatible => Ok(ExistingDaemonStatus::Compatible),
+            DaemonCompatibility::Incompatible { reason } => {
+                Ok(ExistingDaemonStatus::Incompatible { reason })
+            }
+        },
+        Err(err) => Ok(ExistingDaemonStatus::Incompatible {
+            reason: format!("daemon ping failed: {err:#}"),
+        }),
+    }
+}
+
+async fn restart_daemon(reason: &str) -> Result<()> {
+    let paths = daemon_paths()?;
+    eprintln!("socai rust daemon is stale ({reason}); restarting");
+
+    if let Err(err) = send_request("shutdown", json!({}), SHUTDOWN_TIMEOUT).await {
+        eprintln!("socai rust daemon shutdown request failed before restart: {err:#}");
+    }
+
+    if !wait_for_daemon_shutdown(&paths.socket, RESTART_SHUTDOWN_WAIT).await {
+        return Err(anyhow!(
+            "socai rust daemon is stale ({reason}) but did not stop after a shutdown request; {}",
+            daemon_recovery_hint(&paths)
+        ));
+    }
+
+    spawn_daemon().await.with_context(|| {
+        format!(
+            "restart stale socai rust daemon after compatibility mismatch ({reason}); {}",
+            daemon_recovery_hint(&paths)
+        )
+    })
+}
+
+async fn wait_for_daemon_shutdown(socket: &Path, wait: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    loop {
+        match UnixStream::connect(socket).await {
+            Ok(stream) => {
+                drop(stream);
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+            Err(_) => return true,
+        }
+    }
+}
+
+async fn ping_daemon() -> Result<Value> {
+    send_request("ping", ping_args(), PING_TIMEOUT).await
+}
+
+fn daemon_recovery_hint(paths: &DaemonPaths) -> String {
+    format!(
+        "see daemon log at {}; try `socai stop` then retry, or run `socai doctor`",
+        paths.log.display()
+    )
 }
 
 async fn send_request(command: &str, args: Value, request_timeout: Duration) -> Result<Value> {
@@ -632,10 +1058,16 @@ async fn spawn_daemon() -> Result<()> {
         .create(true)
         .append(true)
         .open(&paths.log)
-        .with_context(|| format!("open daemon log {}", paths.log.display()))?;
+        .with_context(|| {
+            format!(
+                "open daemon log at {}; try `socai stop` then retry, or run `socai doctor`",
+                paths.log.display()
+            )
+        })?;
     let stderr = log.try_clone()?;
 
-    let mut command = std::process::Command::new(std::env::current_exe()?);
+    let current_exe = std::env::current_exe().context("resolve current socai executable")?;
+    let mut command = std::process::Command::new(&current_exe);
     command
         .arg("__daemon")
         .stdin(Stdio::null())
@@ -650,22 +1082,35 @@ async fn spawn_daemon() -> Result<()> {
             Ok(())
         });
     }
-    command.spawn().context("spawn socai rust daemon")?;
+    command.spawn().with_context(|| {
+        format!(
+            "spawn socai rust daemon from {}; {}",
+            current_exe.display(),
+            daemon_recovery_hint(&paths)
+        )
+    })?;
 
+    let mut last_error = None;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
-        if send_request("ping", json!({}), Duration::from_secs(2))
-            .await
-            .is_ok()
-        {
-            return Ok(());
+        match ping_daemon().await {
+            Ok(result) => match daemon_compatibility(&result, &current_version_metadata()) {
+                DaemonCompatibility::Compatible => return Ok(()),
+                DaemonCompatibility::Incompatible { reason } => {
+                    last_error = Some(format!("daemon answered incompatible ping: {reason}"));
+                }
+            },
+            Err(err) => {
+                last_error = Some(format!("daemon ping failed: {err:#}"));
+            }
         }
         sleep(Duration::from_millis(250)).await;
     }
 
+    let detail = last_error.unwrap_or_else(|| "daemon never answered ping".to_string());
     Err(anyhow!(
-        "socai rust daemon did not become ready; see {}",
-        paths.log.display()
+        "socai rust daemon did not become ready ({detail}); {}",
+        daemon_recovery_hint(&paths)
     ))
 }
 
