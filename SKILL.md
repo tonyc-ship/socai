@@ -1,3 +1,8 @@
+---
+name: socai-cli
+description: Research Xiaohongshu content with the socai CLI from a coding agent. Use when running socai search_notes, topic_scan, extract_note, or stop, parsing their stdout JSON and stderr run_dir contract, choosing the right command, or installing/updating the socai binary before a research task.
+---
+
 # socai CLI skill
 
 Use this skill when a user asks a coding agent to research Xiaohongshu content
