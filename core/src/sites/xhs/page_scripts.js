@@ -12,6 +12,14 @@ const SocaiXhsPageScripts = (() => {
     try { return url ? new URL(url, location.href).href : ''; } catch (e) { return ''; }
   };
 
+  function elementCenter(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    };
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const rect = el.getBoundingClientRect();
@@ -135,7 +143,6 @@ const SocaiXhsPageScripts = (() => {
   function searchInput() {
     const input = findSearchInput();
     if (!input) return { ok: false, error: 'search_input_not_found' };
-    const inputRect = input.getBoundingClientRect();
     const root = input.closest(
       'form, header, .search-input, .search-container, .search-bar, .search-box, .wendian-wrapper'
     ) || document;
@@ -146,13 +153,13 @@ const SocaiXhsPageScripts = (() => {
       if (!el) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 12 || r.height < 12) continue;
-      submit = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      submit = elementCenter(el);
       break;
     }
 
     return {
       ok: true,
-      input: { x: Math.round(inputRect.left + inputRect.width / 2), y: Math.round(inputRect.top + inputRect.height / 2) },
+      input: elementCenter(input),
       submit,
     };
   }
@@ -278,7 +285,7 @@ const SocaiXhsPageScripts = (() => {
       const active = el.getAttribute('aria-selected') === 'true'
         || /\bactive\b|current|selected/.test(cls)
         || el.getAttribute('data-active') === 'true';
-      out.push({ label, active, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) });
+      out.push({ label, active, ...elementCenter(el) });
     }
     return out;
   }
@@ -290,6 +297,96 @@ const SocaiXhsPageScripts = (() => {
     const tab = searchTabs().find((t) => t.label === label);
     if (!tab) return { ok: false, error: 'tab_not_found' };
     return { ok: true, label, x: tab.x, y: tab.y, was_active: tab.active };
+  }
+
+  // ── search filter popup (hover-triggered 筛选 panel) ─────────
+  // This script only reports the panel as the DOM presents it — each group's
+  // visible title plus its visible tags. The canonical key/option vocabulary
+  // lives Rust-side (XHS_SEARCH_FILTERS); keeping it out of here avoids two
+  // lists drifting apart.
+
+  function findSearchFilterTrigger() {
+    // The 筛选 trigger sits in the results header normally, but when the
+    // 问点点 AI summary panel shows up for a query the layout shifts and the
+    // trigger moves into the AI section (`.filter.ai-chat-filter`). Try the
+    // header first, then progressively broaden so both layouts work; in every
+    // case require a visible, filter-classed element whose text is 筛选.
+    const selectors = [
+      '.search-layout__top > .filter, .search-layout__top [class~="filter"]',
+      '.search-layout [class~="filter"]',
+      '.ai-chat-filter, [class~="filter"]',
+    ];
+    for (const selector of selectors) {
+      for (const el of $$(selector)) {
+        if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+        if (text(el).includes('筛选')) return el;
+      }
+    }
+    return null;
+  }
+
+  function searchFilterTrigger() {
+    const trigger = findSearchFilterTrigger();
+    if (!trigger) {
+      return { ok: false, error: 'filter_trigger_not_found' };
+    }
+    const value = text(trigger);
+    const label = value.includes('已筛选') ? '已筛选' : '筛选';
+    return { ok: true, label, ...elementCenter(trigger) };
+  }
+
+  function findSearchFilterPanel() {
+    for (const el of $$('.filter-panel, .filter-container')) {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+      const value = text(el);
+      if (value.includes('排序依据') && value.includes('发布时间')) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  function findFilterOperation(panel, label) {
+    for (const el of $$('.operation-container .operation', panel)) {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+      if (text(el) === label) return el;
+    }
+    return null;
+  }
+
+  function searchFilters() {
+    const panel = findSearchFilterPanel();
+    if (!panel) return { ok: false, error: 'filter_panel_not_found' };
+
+    const groups = [];
+    for (const groupEl of $$('.filters-wrapper .filters', panel)) {
+      if (!(groupEl instanceof HTMLElement) || !isVisible(groupEl)) continue;
+      const title = text($('span', groupEl));
+      if (!title) continue;
+      const options = [];
+      for (const tag of $$('.tag-container .tags', groupEl)) {
+        if (!(tag instanceof HTMLElement) || !isVisible(tag)) continue;
+        const label = text(tag);
+        if (!label) continue;
+        options.push({
+          label,
+          active: /\bactive\b/.test(String(tag.className || '')),
+          ...elementCenter(tag),
+        });
+      }
+      if (options.length) {
+        groups.push({ title, options });
+      }
+    }
+
+    const resetEl = findFilterOperation(panel, '重置');
+    const closeEl = findFilterOperation(panel, '收起');
+    return {
+      ok: true,
+      groups,
+      reset: resetEl ? elementCenter(resetEl) : null,
+      close: closeEl ? elementCenter(closeEl) : null,
+    };
   }
 
   // ── card click / note open / note close ──────────────────────
@@ -322,8 +419,7 @@ const SocaiXhsPageScripts = (() => {
       return {
         ok: true,
         target: target === cover ? 'cover' : 'card',
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2),
+        ...elementCenter(target),
         note_id: card.dataset?.noteId || '',
       };
     }
@@ -343,7 +439,7 @@ const SocaiXhsPageScripts = (() => {
       if (!(el instanceof HTMLElement || el instanceof SVGElement)) continue;
       const rect = el.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        return { ok: true, selector: sel, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        return { ok: true, selector: sel, ...elementCenter(el) };
       }
     }
     return { ok: false, error: 'close_button_not_found' };
@@ -855,6 +951,8 @@ const SocaiXhsPageScripts = (() => {
     searchState,
     searchTabs,
     clickSearchTab,
+    searchFilterTrigger,
+    searchFilters,
     clickCard,
     closeNote,
     noteOpen,

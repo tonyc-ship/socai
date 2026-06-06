@@ -11,8 +11,9 @@ use crate::agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, Tool
 use crate::cdp::{with_snapshot_recording, PageSession};
 use crate::media::{timing_delta, MediaProcessor, TimingSnapshot};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
+use crate::sites::xhs::page::XHS_SEARCH_FILTERS;
 use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime};
 
 /// Default number of notes `topic_scan` reads when the caller doesn't specify.
@@ -46,6 +47,8 @@ pub fn xhs_tools_with_llm_provider(
         }),
         Arc::new(ListSearchTabsTool { page: page.clone() }),
         Arc::new(ClickSearchTabTool { page: page.clone() }),
+        Arc::new(ResetSearchFiltersTool { page: page.clone() }),
+        Arc::new(ApplySearchFiltersTool { page: page.clone() }),
         Arc::new(OpenNoteTool { page: page.clone() }),
         Arc::new(CloseNoteTool { page: page.clone() }),
         Arc::new(ReadNoteTool {
@@ -128,12 +131,13 @@ const EXTRACT_NOTE_COMMAND: XhsCommandSpec = XhsCommandSpec {
 pub async fn search_notes_command(
     page: Arc<PageSession>,
     query: &str,
+    filters: Option<&Value>,
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         SEARCH_NOTES_COMMAND,
-        search_notes_input(query)?,
+        search_notes_input(query, filters)?,
         debug_snapshot,
     )
     .await
@@ -143,13 +147,14 @@ pub async fn topic_scan_command(
     page: Arc<PageSession>,
     query: &str,
     tab_label: Option<&str>,
+    filters: Option<&Value>,
     num_notes: Option<i64>,
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
-        topic_scan_input(query, tab_label, num_notes)?,
+        topic_scan_input(query, tab_label, filters, num_notes)?,
         debug_snapshot,
     )
     .await
@@ -169,22 +174,30 @@ pub async fn extract_note_command(
     .await
 }
 
-fn search_notes_input(query: &str) -> anyhow::Result<Value> {
-    Ok(json!({
+fn search_notes_input(query: &str, filters: Option<&Value>) -> anyhow::Result<Value> {
+    let mut input = json!({
         "query": trimmed_required(query, "query")?,
         "wait_seconds": 2.0,
-    }))
+    });
+    if let Some(filters) = filters {
+        input["filters"] = filters.clone();
+    }
+    Ok(input)
 }
 
 fn topic_scan_input(
     query: &str,
     tab_label: Option<&str>,
+    filters: Option<&Value>,
     num_notes: Option<i64>,
 ) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
     });
     insert_optional_str(&mut input, "tab_label", tab_label);
+    if let Some(filters) = filters {
+        input["filters"] = filters.clone();
+    }
     if let Some(n) = num_notes {
         input["num_notes"] = json!(n.max(1));
     }
@@ -205,6 +218,18 @@ async fn run_xhs_tool_command(
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     let (run_dir, ctx) = command_context(spec.command_name);
+    // Persist the full command input up front (best-effort) so a run is
+    // debuggable from its dir alone — including the exact args — even when the
+    // tool errors out partway.
+    let invocation = json!({
+        "command": spec.command_name,
+        "tool": spec.tool_name,
+        "input": input.clone(),
+    });
+    let _ = std::fs::create_dir_all(&ctx.run_dir);
+    if let Ok(bytes) = serde_json::to_vec_pretty(&invocation) {
+        let _ = std::fs::write(ctx.run_dir.join("command_input.json"), bytes);
+    }
     // Snapshot recording (when `--debug-snapshot` is on) wraps the whole
     // command — setup navigation, the tool's clicks/scrolls, and teardown. All
     // recorder machinery lives in the generic CDP layer; this is the only hook
@@ -220,6 +245,7 @@ async fn run_xhs_tool_command(
     Ok(json!({
         "command": spec.command_name,
         "run_dir": run_dir,
+        "input": invocation.get("input").cloned().unwrap_or(Value::Null),
         "data": data,
     }))
 }
@@ -378,8 +404,10 @@ impl Tool for SearchNotesTool {
     fn description(&self) -> &str {
         "Search Xiaohongshu for notes matching `query`. Atomic: submits the \
          search and returns the first results page's cards (id, title, author, \
-         image) without scrolling. Use this before `open_note` to pick which \
-         note to read; to research a topic in one call use `topic_scan`."
+         image) without scrolling. Optionally applies search-result `filters` \
+         (omitted groups reset to defaults); each group is single-select. Use \
+         this before `open_note` to pick which note to read; to research a topic \
+         in one call use `topic_scan`."
     }
 
     fn input_schema(&self) -> Value {
@@ -387,6 +415,7 @@ impl Tool for SearchNotesTool {
             "type": "object",
             "properties": {
                 "query": { "type": "string", "description": "Search query (Chinese works fine)" },
+                "filters": search_filters_schema(),
                 "wait_seconds": {
                     "type": "number",
                     "description": "Extra seconds to wait for cards to load",
@@ -401,9 +430,12 @@ impl Tool for SearchNotesTool {
         let query = get_str(&input, "query")
             .ok_or_else(|| anyhow::anyhow!("missing query"))?
             .to_string();
+        let filters = input.get("filters").filter(|value| !value.is_null()).cloned();
         let wait_seconds = get_f64(&input, "wait_seconds", 2.0);
         let xhs = XhsPageRuntime::new(&self.page);
-        let mut value = xhs.search_notes(&query, wait_seconds).await?;
+        let mut value = xhs
+            .search_notes(&query, filters.as_ref(), wait_seconds)
+            .await?;
         if let Some(cards) = value.get_mut("cards") {
             self.history.annotate_cards(cards);
         }
@@ -785,6 +817,71 @@ impl Tool for ClickSearchTabTool {
     }
 }
 
+/// reset_search_filters() -> {ok, reset}
+pub struct ResetSearchFiltersTool {
+    page: Arc<PageSession>,
+}
+
+#[async_trait]
+impl Tool for ResetSearchFiltersTool {
+    fn name(&self) -> &str {
+        "reset_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control, reset active \
+         search filters to their defaults."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+    }
+
+    async fn call(&self, _input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let xhs = XhsPageRuntime::new(&self.page);
+        let value = xhs.reset_search_filters(1.0).await?;
+        Ok(json_result(&value))
+    }
+}
+
+/// apply_search_filters(filters) -> {ok, changed, filters}
+pub struct ApplySearchFiltersTool {
+    page: Arc<PageSession>,
+}
+
+#[async_trait]
+impl Tool for ApplySearchFiltersTool {
+    fn name(&self) -> &str {
+        "apply_search_filters"
+    }
+
+    fn description(&self) -> &str {
+        "Hover the Xiaohongshu search page's `筛选` control and select filter \
+        options from the current panel. Omitted groups are reset to defaults, \
+        preventing filters from previous searches from leaking into the results. \
+        Each group is single-select, but multiple groups can be combined. Use \
+        `extract_search_cards` after applying filters to read the current cards."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filters": search_filters_schema()
+            },
+            "required": ["filters"]
+        })
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let filters = input
+            .get("filters")
+            .ok_or_else(|| anyhow::anyhow!("missing filters"))?;
+        let xhs = XhsPageRuntime::new(&self.page);
+        let value = xhs.apply_search_filters(filters, 1.0).await?;
+        Ok(json_result(&value))
+    }
+}
+
 /// scroll_in_note(pixels?) -> {ok, scroll_top, ...}
 pub struct ScrollInNoteTool {
     page: Arc<PageSession>,
@@ -889,14 +986,14 @@ impl Tool for ExtractProfileTool {
     }
 }
 
-/// topic_scan(query, tab_label?, num_notes?) -> aggregated topic bundle
+/// topic_scan(query, tab_label?, filters?, num_notes?) -> aggregated topic bundle
 ///
-/// Composite macro: search → optional tab switch → collect up to `num_notes`
-/// cards in page order (scrolling the feed only when the first page is too
-/// small) → open each note and extract its body + top comments → bundle into
-/// one artifact. Prefer this for any "research a topic on XHS" task — it
-/// returns search results plus the note bodies plus comments in one tool
-/// call, so the agent doesn't have to chain 10+ tools by hand.
+/// Composite macro: search → optional tab switch → optional search filters →
+/// collect up to `num_notes` cards in page order (scrolling the feed only when
+/// the first page is too small) → open each note and extract its body + top
+/// comments → bundle into one artifact. Prefer this for any "research a topic
+/// on XHS" task — it returns search results plus the note bodies plus comments
+/// in one tool call, so the agent doesn't have to chain 10+ tools by hand.
 ///
 /// Defaults to `DEFAULT_NUM_NOTES` notes; pass a larger `num_notes` to scan
 /// more (each note is opened, so latency grows roughly linearly).
@@ -919,6 +1016,7 @@ impl Tool for TopicScanTool {
 
     fn description(&self) -> &str {
         "Xiaohongshu topic research macro: search → optional tab switch → \
+         optional search filters → \
          collect up to `num_notes` cards in page order (scrolling only if the \
          first page is too small) → open each note and read its body + top \
          comments → return one compact bundle (search results + selected cards \
@@ -937,6 +1035,7 @@ impl Tool for TopicScanTool {
                     "type": "string",
                     "enum": ["全部", "图文", "视频", "用户"]
                 },
+                "filters": search_filters_schema(),
                 "num_notes": {
                     "type": "integer",
                     "description": "Number of notes to read (body + top comments each). The first results page is used directly; only if it holds fewer than this does the feed scroll for more. Each note is opened, so latency scales with this.",
@@ -954,6 +1053,10 @@ impl Tool for TopicScanTool {
             .to_string();
         let num_notes = get_i64(&input, "num_notes", DEFAULT_NUM_NOTES).max(1);
         let tab_label = get_str(&input, "tab_label").unwrap_or("").to_string();
+        let filters = input
+            .get("filters")
+            .filter(|value| !value.is_null())
+            .cloned();
         // Every scanned note is read the same way: open it, extract the body,
         // and pull top comments. Per-note image vision is off (it's the one
         // genuinely expensive enrichment and not needed for topic research).
@@ -969,12 +1072,20 @@ impl Tool for TopicScanTool {
         // labels its own freshly-read cards as `already_analyzed`.
         let history_snapshot = self.history.snapshot();
 
-        let search = xhs.search_notes(&query, 2.0).await?;
+        // Filters are applied after the optional tab switch below (tab switch
+        // re-runs the search and would drop them), so don't pass them here.
+        let search = xhs.search_notes(&query, None, 2.0).await?;
 
-        // Optional tab switch (re-runs the search under the chosen tab).
+        // Optional tab switch (re-runs the search under the chosen tab), then
+        // optional filter application.
         let mut tab_result = Value::Object(serde_json::Map::new());
         if !tab_label.is_empty() {
             tab_result = xhs.click_search_tab(&tab_label, 1.5).await?;
+        }
+
+        let mut filter_result = Value::Object(serde_json::Map::new());
+        if let Some(filters) = filters {
+            filter_result = xhs.apply_search_filters(&filters, 1.5).await?;
         }
 
         // Every sampled note is read with the same extraction level (body +
@@ -1144,6 +1255,7 @@ impl Tool for TopicScanTool {
             "ok": search.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "query": query,
             "tab": tab_result,
+            "filters": filter_result,
             "search": search,
             "selected_cards": selected_cards,
             "notes": notes,
@@ -1178,6 +1290,29 @@ impl Tool for TopicScanTool {
 
         Ok(json_result(&payload))
     }
+}
+
+fn search_filters_schema() -> Value {
+    let properties: Map<String, Value> = XHS_SEARCH_FILTERS
+        .iter()
+        .map(|(key, _title, options)| {
+            (
+                key.to_string(),
+                json!({
+                    "type": "string",
+                    "enum": options,
+                }),
+            )
+        })
+        .collect();
+
+    json!({
+        "type": "object",
+        "description": "Search filter selections by group key.",
+        "properties": properties,
+        "minProperties": 1,
+        "additionalProperties": false
+    })
 }
 
 fn sanitize_for_filename(value: &str) -> String {

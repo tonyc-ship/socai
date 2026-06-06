@@ -32,13 +32,24 @@ From the repo root:
 ```bash
 cargo install --path cli
 
-socai topic_scan "运营爆款思路" --num-notes 30            # 搜索并逐个获取帖子
-socai search_notes "运营爆款思路"                         # 只打开搜索结果页
-socai extract_note --note-id <id>                       # open a note from the current page
-socai stop                                              # stop the daemon (closes the tool tab)
+socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个获取帖子
+socai search_notes "运营爆款思路" --filter sort=最新                          # 只打开搜索结果页
+socai extract_note --note-id <id>                                          # open a note from the current page
+socai stop                                                                 # stop the daemon (closes the tool tab)
 ```
 
-Add `--pretty` to any tool command for indented JSON.
+Options:
+
+- `--filter <GROUP=OPTION>` — search-result filter, repeatable
+  (`topic_scan` & `search_notes`). Groups & options:
+  `sort` (综合/最新/最多点赞/最多评论/最多收藏), `note_type` (不限/视频/图文),
+  `publish_time` (不限/一天内/一周内/半年内), `search_scope` (不限/已看过/未看过/已关注),
+  `distance` (不限/同城/附近). Omitted groups reset to default.
+  e.g. `--filter publish_time=一天内 --filter note_type=图文`
+- `--tab <TAB>` — search tab to switch to, `topic_scan` only (`全部` / `图文` / `视频` / `用户`).
+- `--num-notes <N>` — notes to read, `topic_scan` only (scrolls only if the first page holds fewer).
+- `--pretty` — indented JSON (any tool command).
+- `--debug-snapshot` — record DOM + a11y tree + screenshots per page change.
 
 `extract_note` is a
 continuation command: a prior `search_notes` / `topic_scan` must have left the

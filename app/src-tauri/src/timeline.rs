@@ -362,6 +362,8 @@ pub(crate) fn user_label(name: &str) -> String {
         "extract_search_cards" => "read search cards",
         "list_search_tabs" => "listed search tabs",
         "click_search_tab" => "switched search tab",
+        "reset_search_filters" => "reset search filters",
+        "apply_search_filters" => "applied search filters",
         "open_note" => "opened note",
         "close_note" => "closed note",
         "read_note" => "reading note",

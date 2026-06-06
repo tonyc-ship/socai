@@ -20,6 +20,11 @@ enum Command {
     #[command(name = "search_notes")]
     SearchNotes {
         query: String,
+        /// Search-result filter as `group=option` (repeatable), e.g.
+        /// `--filter publish_time=一天内 --filter note_type=图文`. Groups:
+        /// sort, note_type, publish_time, search_scope, distance.
+        #[arg(long = "filter", value_name = "GROUP=OPTION")]
+        filter: Vec<String>,
         #[arg(long)]
         pretty: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
@@ -33,6 +38,11 @@ enum Command {
         query: String,
         #[arg(long)]
         tab: Option<String>,
+        /// Search-result filter as `group=option` (repeatable), e.g.
+        /// `--filter publish_time=一天内 --filter note_type=图文`. Groups:
+        /// sort, note_type, publish_time, search_scope, distance.
+        #[arg(long = "filter", value_name = "GROUP=OPTION")]
+        filter: Vec<String>,
         /// Number of notes to read; scrolls the feed only if the first page
         /// holds fewer.
         #[arg(long = "num-notes")]
@@ -79,12 +89,18 @@ async fn main() -> Result<()> {
     match command {
         Command::SearchNotes {
             query,
+            filter,
             pretty,
             debug_snapshot,
         } => {
+            let mut input =
+                serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
+            if !filter.is_empty() {
+                input["filters"] = Value::Object(parse_filters(&filter)?);
+            }
             let result = daemon::send_or_spawn(
                 "search_notes",
-                serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot }),
+                input,
                 daemon::DEFAULT_COMMAND_TIMEOUT,
             )
             .await?;
@@ -93,6 +109,7 @@ async fn main() -> Result<()> {
         Command::TopicScan {
             query,
             tab,
+            filter,
             num_notes,
             pretty,
             debug_snapshot,
@@ -100,6 +117,9 @@ async fn main() -> Result<()> {
             let mut input = serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
             if let Some(tab) = tab {
                 input["tab_label"] = Value::String(tab);
+            }
+            if !filter.is_empty() {
+                input["filters"] = Value::Object(parse_filters(&filter)?);
             }
             if let Some(n) = num_notes {
                 input["num_notes"] = serde_json::json!(n.max(1));
@@ -133,6 +153,23 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse repeated `--filter group=option` args into a `{group: option}` object.
+/// Group/option validity is enforced by the core tool, so this only splits on
+/// the first `=` and rejects a missing one.
+fn parse_filters(filters: &[String]) -> Result<serde_json::Map<String, Value>> {
+    let mut map = serde_json::Map::new();
+    for raw in filters {
+        let (group, option) = raw
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--filter expects group=option, got: {raw}"))?;
+        map.insert(
+            group.trim().to_string(),
+            Value::String(option.trim().to_string()),
+        );
+    }
+    Ok(map)
 }
 
 fn print_command_result(result: &Value, pretty: bool) -> Result<()> {

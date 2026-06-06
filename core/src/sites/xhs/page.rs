@@ -23,6 +23,8 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "searchState",
     "searchTabs",
     "clickSearchTab",
+    "searchFilterTrigger",
+    "searchFilters",
     "clickCard",
     "closeNote",
     "noteOpen",
@@ -32,6 +34,23 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "carouselImages",
     "profileInfo",
     "profileCards",
+];
+
+/// Single source of truth for the XHS search-filter vocabulary: canonical group
+/// `key`, the group's visible Chinese `title` (used to join against the DOM the
+/// page script reads), and the allowed option labels in panel order. The page
+/// script no longer carries this vocabulary — it just reports whatever tags it
+/// sees by title — so this table is the only place to keep in sync.
+pub(crate) const XHS_SEARCH_FILTERS: &[(&str, &str, &[&str])] = &[
+    (
+        "sort",
+        "排序依据",
+        &["综合", "最新", "最多点赞", "最多评论", "最多收藏"],
+    ),
+    ("note_type", "笔记类型", &["不限", "视频", "图文"]),
+    ("publish_time", "发布时间", &["不限", "一天内", "一周内", "半年内"]),
+    ("search_scope", "搜索范围", &["不限", "已看过", "未看过", "已关注"]),
+    ("distance", "位置距离", &["不限", "同城", "附近"]),
 ];
 
 #[derive(Debug, Clone)]
@@ -137,7 +156,12 @@ impl<'a> XhsPageRuntime<'a> {
         self.expect_object("pageState", None).await
     }
 
-    pub async fn search_notes(&self, query: &str, wait_seconds: f64) -> Result<Value> {
+    pub async fn search_notes(
+        &self,
+        query: &str,
+        filters: Option<&Value>,
+        wait_seconds: f64,
+    ) -> Result<Value> {
         let keyword = query.trim();
         if keyword.is_empty() {
             anyhow::bail!("query is required");
@@ -145,7 +169,15 @@ impl<'a> XhsPageRuntime<'a> {
 
         self.ensure_xhs(true).await?;
         let submit = self.submit_search(keyword, wait_seconds).await?;
-        let ok = submit.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let ok = script_ok(&submit);
+        // Apply any search-result filters before reading cards, so the returned
+        // page reflects the filtered feed.
+        let mut filter_result = Value::Object(Map::new());
+        if ok {
+            if let Some(filters) = filters {
+                filter_result = self.apply_search_filters(filters, wait_seconds).await?;
+            }
+        }
         let cards = if ok {
             self.extract_search_cards().await?
         } else {
@@ -159,6 +191,7 @@ impl<'a> XhsPageRuntime<'a> {
             "ok": ok,
             "query": keyword,
             "submit": submit,
+            "filters": filter_result,
             "url": self.current_url().await?,
             "count": cards.len(),
             "cards": cards,
@@ -168,7 +201,7 @@ impl<'a> XhsPageRuntime<'a> {
 
     pub async fn submit_search(&self, query: &str, wait_seconds: f64) -> Result<Value> {
         let loc = self.expect_object("searchInput", None).await?;
-        if !loc.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        if !script_ok(&loc) {
             return Ok(json!({
                 "ok": false,
                 "strategy": "search_input_unavailable",
@@ -186,11 +219,7 @@ impl<'a> XhsPageRuntime<'a> {
         let set_result = self
             .expect_object("setSearchInput", Some(&json!({ "query": query })))
             .await?;
-        if !set_result
-            .get("ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if !script_ok(&set_result) {
             return Ok(json!({
                 "ok": false,
                 "strategy": "set_search_input_failed",
@@ -295,7 +324,7 @@ impl<'a> XhsPageRuntime<'a> {
         let target = self
             .expect_object("clickCard", Some(&Value::Object(click_arg.clone())))
             .await?;
-        if !target.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        if !script_ok(&target) {
             anyhow::bail!(
                 "Could not locate card to click for note {}: {}",
                 selected.note_id,
@@ -331,7 +360,7 @@ impl<'a> XhsPageRuntime<'a> {
         let retry = self
             .expect_object("clickCard", Some(&Value::Object(click_arg)))
             .await?;
-        if retry.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        if script_ok(&retry) {
             sleep_ms(180).await;
             self.page
                 .click(number(&retry, "x"), number(&retry, "y"))
@@ -392,11 +421,7 @@ impl<'a> XhsPageRuntime<'a> {
         }
 
         let close_btn = self.expect_object("closeNote", None).await?;
-        if close_btn
-            .get("ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if script_ok(&close_btn) {
             self.page
                 .click(number(&close_btn, "x"), number(&close_btn, "y"))
                 .await?;
@@ -463,7 +488,7 @@ impl<'a> XhsPageRuntime<'a> {
         let mut open = None;
         if !note_id.is_empty() || index.is_some() {
             let opened = self.open_note(note_id, index, wait_seconds).await?;
-            if !opened.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            if !script_ok(&opened) {
                 return Ok(
                     json!({ "ok": false, "open": opened, "error": opened.get("error").and_then(Value::as_str).unwrap_or("open_failed") }),
                 );
@@ -555,7 +580,7 @@ impl<'a> XhsPageRuntime<'a> {
         let loc = self
             .expect_object("clickSearchTab", Some(&Value::String(label.to_string())))
             .await?;
-        let ok = loc.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let ok = script_ok(&loc);
         if !ok {
             let error = loc
                 .get("error")
@@ -599,6 +624,170 @@ impl<'a> XhsPageRuntime<'a> {
             "active_filter": active_filter,
             "tabs": tabs,
         }))
+    }
+
+    /// Apply search-result filters from the hover popup and return the
+    /// current filter state.
+    pub async fn apply_search_filters(&self, filters: &Value, wait_seconds: f64) -> Result<Value> {
+        // Normalize filter targets so we can compare the desired active option with the current one,
+        // avoiding unnecessary clicks when they already match.
+        let target_filters = normalize_search_filter_targets(filters)?;
+        self.apply_search_filter_targets(&target_filters, wait_seconds)
+            .await
+    }
+
+    async fn apply_search_filter_targets(
+        &self,
+        target_filters: &[(String, String)],
+        wait_seconds: f64,
+    ) -> Result<Value> {
+        self.ensure_xhs(false).await?;
+        if target_filters.is_empty() {
+            anyhow::bail!("filter targets must include at least one selection");
+        }
+        // Applying filters too early can leave old cards visible.
+        sleep_ms(1000).await;
+
+        let initial_raw = self.open_search_filter_panel(wait_seconds).await?;
+        if !script_ok(&initial_raw) {
+            self.close_search_filter_panel(None).await?;
+            return Ok(initial_raw);
+        }
+        let initial_filters = canonical_filter_state(&initial_raw);
+        let mut changed_filters = false;
+        for (group_key, label) in target_filters {
+            let Some(option) = search_filter_option(&initial_filters, group_key, label) else {
+                self.close_search_filter_panel(Some(&initial_filters))
+                    .await?;
+                return Ok(json!({
+                    "ok": false,
+                    "error": "filter_option_not_found",
+                    "group": group_key,
+                    "label": label,
+                    "filters": initial_filters,
+                }));
+            };
+            if option
+                .get("active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let x = number(option, "x");
+            let y = number(option, "y");
+            self.page.click(x, y).await?;
+            changed_filters = true;
+        }
+
+        let final_raw = self.expect_object("searchFilters", None).await?;
+        if !script_ok(&final_raw) {
+            self.close_search_filter_panel(None).await?;
+            return Ok(final_raw);
+        }
+        let final_filters = canonical_filter_state(&final_raw);
+        self.close_search_filter_panel(Some(&final_filters)).await?;
+        if changed_filters && wait_seconds > 0.0 {
+            tokio::time::sleep(Duration::from_secs_f64(wait_seconds.min(4.0))).await;
+        }
+        Ok(json!({
+            "ok": true,
+            "changed": changed_filters,
+            "filters": final_filters,
+        }))
+    }
+
+    /// Reset search-result filters.
+    pub async fn reset_search_filters(&self, wait_seconds: f64) -> Result<Value> {
+        self.ensure_xhs(false).await?;
+        let current_raw = self.open_search_filter_panel(wait_seconds).await?;
+        if !script_ok(&current_raw) {
+            self.close_search_filter_panel(None).await?;
+            return Ok(current_raw);
+        }
+        let current = canonical_filter_state(&current_raw);
+
+        let Some(target) = current.get("reset").filter(|value| !value.is_null()) else {
+            self.close_search_filter_panel(Some(&current)).await?;
+            return Ok(json!({
+                "ok": false,
+                "error": "filter_reset_not_found",
+                "filters": current,
+            }));
+        };
+        let x = number(target, "x");
+        let y = number(target, "y");
+        self.page.click(x, y).await?;
+        self.close_search_filter_panel(Some(&current)).await?;
+        if wait_seconds > 0.0 {
+            tokio::time::sleep(Duration::from_secs_f64(wait_seconds.min(4.0))).await;
+        }
+        Ok(json!({
+            "ok": true,
+            "reset": true,
+        }))
+    }
+
+    /// Open the search filter panel and return the current filter state. If the
+    /// trigger is off-screen, scroll to the top and retry.
+    async fn open_search_filter_panel(&self, wait_seconds: f64) -> Result<Value> {
+        let visible = self.expect_object("searchFilters", None).await?;
+        if script_ok(&visible) {
+            return Ok(visible);
+        }
+
+        let trigger = self.expect_object("searchFilterTrigger", None).await?;
+        let trigger = if script_ok(&trigger) {
+            trigger
+        } else {
+            self.page
+                .evaluate_json(
+                    "window.scrollTo({ left: 0, top: 0, behavior: 'instant' }); return { ok: true, y: scrollY };",
+                )
+                .await?;
+            sleep_ms(120).await;
+            let retry = self.expect_object("searchFilterTrigger", None).await?;
+            if !script_ok(&retry) {
+                return Ok(retry);
+            }
+            retry
+        };
+
+        self.page
+            .mouse_move(number(&trigger, "x"), number(&trigger, "y"))
+            .await?;
+        let deadline = Instant::now() + Duration::from_secs_f64(wait_seconds.clamp(0.2, 3.0));
+        let mut latest = Value::Object(Map::new());
+        while Instant::now() < deadline {
+            latest = self.expect_object("searchFilters", None).await?;
+            if script_ok(&latest) {
+                return Ok(latest);
+            }
+            sleep_ms(120).await;
+        }
+        if latest.as_object().is_some_and(Map::is_empty) {
+            self.expect_object("searchFilters", None).await
+        } else {
+            Ok(latest)
+        }
+    }
+
+    /// Close the filter popup, preferring the visible `收起` control and
+    /// falling back to moving the mouse away from the popup trigger.
+    async fn close_search_filter_panel(&self, filters: Option<&Value>) -> Result<()> {
+        if let Some(target) = filters
+            .and_then(|value| value.get("close"))
+            .filter(|value| !value.is_null())
+        {
+            let x = number(target, "x");
+            let y = number(target, "y");
+            self.page.click(x, y).await?;
+            sleep_ms(180).await;
+            return Ok(());
+        }
+        self.page.mouse_move(20.0, 20.0).await?;
+        sleep_ms(120).await;
+        Ok(())
     }
 
     /// Read the currently visible profile page. Caller is responsible for
@@ -863,6 +1052,97 @@ impl<'a> XhsPageRuntime<'a> {
     }
 }
 
+fn normalize_search_filter_targets(filters: &Value) -> Result<Vec<(String, String)>> {
+    let Some(input) = filters.as_object() else {
+        anyhow::bail!("filters must be object");
+    };
+    if input.is_empty() {
+        anyhow::bail!("filters must include at least one selection");
+    }
+
+    for key in input.keys() {
+        if !XHS_SEARCH_FILTERS
+            .iter()
+            .any(|(filter_key, _, _)| *filter_key == key.as_str())
+        {
+            anyhow::bail!("unsupported filter group: {key}");
+        }
+    }
+
+    XHS_SEARCH_FILTERS
+        .iter()
+        .map(|(key, _title, options)| {
+            let label = match input.get(*key) {
+                Some(value) => value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("filter option must be a non-empty string: {}", key)
+                    })?,
+                None => options.first().copied().unwrap_or(""),
+            };
+            if !options.contains(&label) {
+                anyhow::bail!("unsupported filter option for {}: {label}", key);
+            }
+            Ok((key.to_string(), label.to_string()))
+        })
+        .collect()
+}
+
+fn search_filter_option<'a>(filters: &'a Value, group_key: &str, label: &str) -> Option<&'a Value> {
+    filters
+        .get("groups")?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("key").and_then(Value::as_str) == Some(group_key))?
+        .get("options")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| item.get("label").and_then(Value::as_str) == Some(label))
+}
+
+/// Re-key the raw filter panel reported by the page script — which only knows
+/// each group's visible Chinese `title` — into socai's canonical group `key`s,
+/// using [`XHS_SEARCH_FILTERS`] for the title↔key join and group order, and
+/// adding a per-group `active` summary. This is where the human-readable panel
+/// is tied back to the schema keys callers used; downstream lookups (and the
+/// reported `filters` payload) can then rely on `key`. Unknown groups/tags are
+/// passed through untouched in `options` so a page-side addition never silently
+/// drops, but only known titles get a canonical key.
+fn canonical_filter_state(raw: &Value) -> Value {
+    let mut out = raw.clone();
+    let Some(groups) = raw.get("groups").and_then(Value::as_array) else {
+        return out;
+    };
+    let canonical: Vec<Value> = XHS_SEARCH_FILTERS
+        .iter()
+        .filter_map(|(key, title, _options)| {
+            let group = groups
+                .iter()
+                .find(|g| g.get("title").and_then(Value::as_str) == Some(*title))?;
+            let active = group
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|o| o.get("active").and_then(Value::as_bool).unwrap_or(false))
+                .and_then(|o| o.get("label").and_then(Value::as_str))
+                .unwrap_or("");
+            let mut group = group.clone();
+            if let Some(map) = group.as_object_mut() {
+                map.insert("key".to_string(), json!(key));
+                map.insert("active".to_string(), json!(active));
+            }
+            Some(group)
+        })
+        .collect();
+    if let Some(map) = out.as_object_mut() {
+        map.insert("groups".to_string(), Value::Array(canonical));
+    }
+    out
+}
+
 /// Parse the JS-side `body` payload into a wire-ready XhsNote. Performs all
 /// normalization up front so serde Serialize alone produces stable output.
 fn parse_note(body: &Value, level: &str) -> XhsNote {
@@ -1084,6 +1364,10 @@ fn note_is_open(state: &Value) -> bool {
 
 fn number(value: &Value, key: &str) -> f64 {
     value.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn script_ok(value: &Value) -> bool {
+    value.get("ok").and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn string_field(obj: &Map<String, Value>, key: &str) -> String {

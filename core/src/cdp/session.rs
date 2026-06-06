@@ -201,6 +201,12 @@ impl PageSession {
         Ok(())
     }
 
+    pub async fn mouse_move(&self, x: f64, y: f64) -> anyhow::Result<()> {
+        self.snapshot_before().await;
+        self.page.move_mouse(Point::new(x, y)).await?;
+        Ok(())
+    }
+
     pub async fn type_text(&self, text: &str) -> anyhow::Result<()> {
         self.snapshot_before().await;
         self.page.execute(InsertTextParams::new(text)).await?;
