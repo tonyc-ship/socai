@@ -55,14 +55,6 @@ Options:
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
-CLI telemetry is enabled by default, and search query text is included by
-default. Use these environment variables when you want to redact query text or
-disable telemetry for a command:
-
-```bash
-SOCAI_TELEMETRY_QUERY_TEXT=off socai topic_scan "运营爆款思路"    # keep telemetry, redact query text
-SOCAI_TELEMETRY=off socai topic_scan "运营爆款思路"               # disable telemetry for this command
-```
 
 ## TUI
 
