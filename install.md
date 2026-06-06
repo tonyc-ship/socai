@@ -163,6 +163,8 @@ install -m 0644 SKILL.md "$HOME/.socai/share/socai/SKILL.md"
 install -m 0644 install.md "$HOME/.socai/share/socai/install.md"
 
 export PATH="$HOME/.cargo/bin:$PATH"
+# Stop any daemon left from a previous build before validating the new CLI.
+socai stop || true
 socai --help
 ```
 
@@ -323,13 +325,28 @@ Useful checks and fixes:
 
 4. If no debug endpoint is running, start Chrome with a remote-debugging port.
    A separate user-data directory avoids profile lock conflicts but may require
-   the user to log in again:
+   the user to log in again.
+
+   macOS only:
 
    ```sh
    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
      --remote-debugging-port=9222 \
      --user-data-dir="$HOME/.socai/chrome-debug-profile"
    ```
+
+   Linux or WSL with a Linux GUI browser:
+
+   ```sh
+   google-chrome \
+     --remote-debugging-port=9222 \
+     --user-data-dir="$HOME/.socai/chrome-debug-profile"
+   ```
+
+   If `google-chrome` is unavailable, try `google-chrome-stable`, `chromium`,
+   or `chromium-browser`. If using Windows Chrome from WSL, ask the user to
+   start Chrome on Windows with `--remote-debugging-port=9222`, then set
+   `SOCAI_CDP_URL` to the reachable local endpoint.
 
 5. If commands still fail, inspect daemon files:
 
