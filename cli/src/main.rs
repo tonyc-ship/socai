@@ -1,4 +1,5 @@
 mod daemon;
+mod doctor;
 mod tracking;
 mod tui;
 
@@ -66,6 +67,8 @@ enum Command {
         #[arg(long = "debug-snapshot")]
         debug_snapshot: bool,
     },
+    /// Run read-only install, daemon, browser, and update diagnostics.
+    Doctor,
     /// Stop the background socai rust daemon.
     Stop,
     #[command(name = "__daemon", hide = true)]
@@ -93,17 +96,13 @@ async fn main() -> Result<()> {
             pretty,
             debug_snapshot,
         } => {
-            let mut input =
-                serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
+            let mut input = serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
             if !filter.is_empty() {
                 input["filters"] = Value::Object(parse_filters(&filter)?);
             }
-            let result = daemon::send_or_spawn(
-                "search_notes",
-                input,
-                daemon::DEFAULT_COMMAND_TIMEOUT,
-            )
-            .await?;
+            let result =
+                daemon::send_or_spawn("search_notes", input, daemon::DEFAULT_COMMAND_TIMEOUT)
+                    .await?;
             print_command_result(&result, pretty)?;
         }
         Command::TopicScan {
@@ -141,6 +140,11 @@ async fn main() -> Result<()> {
             )
             .await?;
             print_command_result(&result, pretty)?;
+        }
+        Command::Doctor => {
+            if !doctor::run().await? {
+                std::process::exit(1);
+            }
         }
         Command::Stop => {
             if daemon::stop_daemon().await? {
