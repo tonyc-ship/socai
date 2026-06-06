@@ -143,9 +143,29 @@ jobs:
           ref: ${{ needs.prepare.outputs.base_sha }}
 
       - name: apply release version
+        shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: python3 .github/scripts/set-app-version.py "${VERSION}"
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/set-app-version.py "${VERSION}"
+
+          # Commit the version bump so the packaged CLI manifest can record the
+          # SHA of the versioned build tree the binary is actually built from,
+          # instead of the pre-bump base SHA. This commit stays local to the
+          # runner; it is never pushed.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo "version files already up to date"
+          else
+            git commit -m "chore: release socai v${VERSION}"
+          fi
+          build_sha="$(git rev-parse HEAD)"
+          echo "build_sha=${build_sha}"
+          echo "SOCAI_BUILD_SHA=${build_sha}" >> "${GITHUB_ENV}"
 
       - name: set up pnpm
         uses: pnpm/action-setup@v4
@@ -186,7 +206,6 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          SOCAI_BUILD_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
 
@@ -424,7 +443,8 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          BUILD_SHA: ${{ needs.prepare.outputs.base_sha }}
+          BUILD_SHA: ${{ env.SOCAI_BUILD_SHA }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
 
@@ -449,6 +469,7 @@ jobs:
             --version "${VERSION}" \
             --target macos-universal \
             --git-sha "${BUILD_SHA}" \
+            --base-sha "${BASE_SHA}" \
             --binary "${cli_binary}" \
             --out-dir dist-artifacts
 
@@ -463,11 +484,11 @@ jobs:
           done
           manifest_path="${RUNNER_TEMP}/socai-cli-manifest.json"
           tar -xOzf dist-artifacts/socai-cli-macos-universal.tar.gz manifest.json > "${manifest_path}"
-          python3 - "${manifest_path}" "${VERSION}" macos-universal "${BUILD_SHA}" <<'PY'
+          python3 - "${manifest_path}" "${VERSION}" macos-universal "${BUILD_SHA}" "${BASE_SHA}" <<'PY'
           import json
           import sys
 
-          manifest_path, version, target, git_sha = sys.argv[1:]
+          manifest_path, version, target, git_sha, base_sha = sys.argv[1:]
           with open(manifest_path) as manifest_file:
               manifest = json.load(manifest_file)
 
@@ -475,6 +496,7 @@ jobs:
               "version": version,
               "target": target,
               "git_sha": git_sha,
+              "base_sha": base_sha,
           }
           for key, value in expected.items():
               if manifest.get(key) != value:

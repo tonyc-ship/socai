@@ -48,7 +48,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="release version without leading v")
     parser.add_argument("--target", default="macos-universal", help="release target label")
-    parser.add_argument("--git-sha", required=True, help="git commit SHA used to build the binary")
+    parser.add_argument(
+        "--git-sha",
+        required=True,
+        help="git SHA of the versioned build tree the binary was built from",
+    )
+    parser.add_argument(
+        "--base-sha",
+        default=None,
+        help="git SHA of the release base commit before the version bump (optional)",
+    )
     parser.add_argument("--binary", required=True, type=existing_file, help="path to the universal socai binary")
     parser.add_argument("--skill", default="SKILL.md", type=existing_file, help="path to SKILL.md")
     parser.add_argument("--install", default="install.md", type=existing_file, help="path to install.md")
@@ -60,14 +69,22 @@ def main() -> None:
         raise SystemExit(f"version must be strict MAJOR.MINOR.PATCH semver, got: {args.version}")
     if not args.git_sha.strip():
         raise SystemExit("git SHA must not be empty")
+    base_sha = args.base_sha.strip() if args.base_sha is not None else None
+    if args.base_sha is not None and not base_sha:
+        raise SystemExit("base SHA must not be empty when provided")
 
     created_at = args.created_at or utc_timestamp()
+    # git_sha is the SHA of the versioned build tree that produced this binary
+    # (release base + applied version bump), not the pre-bump base. base_sha is
+    # recorded separately so the original release base stays traceable.
     manifest = {
         "version": args.version,
         "target": args.target,
         "git_sha": args.git_sha,
         "created_at": created_at,
     }
+    if base_sha:
+        manifest["base_sha"] = base_sha
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     archive_path = args.out_dir / ARCHIVE_NAME
