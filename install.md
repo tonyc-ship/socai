@@ -185,7 +185,10 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   sudo dnf install -y git curl ca-certificates gcc gcc-c++ make pkgconf-pkg-config openssl-devel
 elif command -v pacman >/dev/null 2>&1; then
-  sudo pacman -Sy --needed git curl base-devel pkgconf openssl
+  # Install directly only when the system is already current. If package
+  # databases need refreshing, ask before running a full upgrade instead:
+  # sudo pacman -Syu --needed git curl base-devel pkgconf openssl
+  sudo pacman -S --needed git curl base-devel pkgconf openssl
 else
   echo "Install Git, curl, C/C++ build tools, pkg-config, and OpenSSL headers." >&2
 fi
