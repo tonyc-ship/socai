@@ -219,16 +219,19 @@ Expected:
 
 Make PATH persistent only after confirming the transient PATH test passes:
 
+Inspect the shell rc file rather than `$PATH`: the transient install step above
+already prepended `$HOME/.socai/bin`, so a `$PATH` check would always report the
+path as present and never persist it.
+
 ```sh
-case ":$PATH:" in
-  *":$HOME/.socai/bin:"*) echo 'managed binary path already active' ;;
-  *)
-    shell_rc="$HOME/.zshrc"
-    [ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
-    printf '\n# socai CLI\nexport PATH="$HOME/.socai/bin:$PATH"\n' >> "$shell_rc"
-    echo "updated $shell_rc"
-    ;;
-esac
+shell_rc="$HOME/.zshrc"
+[ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
+if [ -f "$shell_rc" ] && grep -Fq '.socai/bin' "$shell_rc"; then
+  echo "managed binary path already persisted in $shell_rc"
+else
+  printf '\n# socai CLI\nexport PATH="$HOME/.socai/bin:$PATH"\n' >> "$shell_rc"
+  echo "updated $shell_rc"
+fi
 ```
 
 Open a new shell and re-run:
@@ -353,16 +356,19 @@ Expected:
 
 Make PATH persistent if needed:
 
+Inspect the shell rc file rather than `$PATH`: the install step above already
+prepended `$HOME/.cargo/bin`, so a `$PATH` check would always report the path as
+present and never persist it.
+
 ```sh
-case ":$PATH:" in
-  *":$HOME/.cargo/bin:"*) echo 'cargo bin path already active' ;;
-  *)
-    shell_rc="$HOME/.zshrc"
-    [ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
-    printf '\n# cargo-installed CLIs\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> "$shell_rc"
-    echo "updated $shell_rc"
-    ;;
-esac
+shell_rc="$HOME/.zshrc"
+[ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
+if [ -f "$shell_rc" ] && grep -Fq '.cargo/bin' "$shell_rc"; then
+  echo "cargo bin path already persisted in $shell_rc"
+else
+  printf '\n# cargo-installed CLIs\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> "$shell_rc"
+  echo "updated $shell_rc"
+fi
 ```
 
 ### source/Cargo update smoke
