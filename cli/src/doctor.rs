@@ -9,9 +9,12 @@ use std::cmp::Ordering;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio::time::timeout as tokio_timeout;
 
 const RELEASE_API_URL: &str = "https://api.github.com/repos/tonyc-ship/socai/releases/latest";
 const RELEASE_HTTP_TIMEOUT: Duration = Duration::from_secs(3);
+const CDP_WS_REACHABILITY_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) async fn run() -> Result<bool> {
     let mut report = DoctorReport::default();
@@ -109,6 +112,8 @@ async fn add_daemon_rows(report: &mut DoctorReport) {
 async fn add_cdp_row(report: &mut DoctorReport) {
     match discover_existing_chrome_endpoint().await {
         Ok(Some(endpoint)) => {
+            let needs_ws_reachability_check =
+                endpoint.http_version_url.is_none() && endpoint.version.is_none();
             let mut parts = vec![
                 format!("source {}", endpoint.source),
                 format!("ws {}", endpoint.browser_ws_url),
@@ -124,6 +129,24 @@ async fn add_cdp_row(report: &mut DoctorReport) {
                     parts.push(format!("protocol {protocol}"));
                 }
             }
+
+            if needs_ws_reachability_check {
+                match validate_websocket_tcp_reachable(&endpoint.browser_ws_url).await {
+                    Ok(()) => parts.push("tcp reachable".to_string()),
+                    Err(err) => {
+                        parts.push(format!("unreachable ({err:#})"));
+                        report.add(DiagnosticRow::error(
+                            "browser/cdp",
+                            format!(
+                                "{}; launch Chrome with --remote-debugging-port=9222 or set SOCAI_CDP_WS/SOCAI_CDP_URL",
+                                parts.join("; ")
+                            ),
+                        ));
+                        return;
+                    }
+                }
+            }
+
             report.add(DiagnosticRow::ok("browser/cdp", parts.join("; ")));
         }
         Ok(None) => report.add(DiagnosticRow::error(
@@ -137,6 +160,44 @@ async fn add_cdp_row(report: &mut DoctorReport) {
             ),
         )),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebsocketTcpTarget {
+    host: String,
+    port: u16,
+}
+
+fn websocket_tcp_target(raw_url: &str) -> Result<WebsocketTcpTarget> {
+    let url =
+        reqwest::Url::parse(raw_url).with_context(|| format!("parse websocket URL {raw_url}"))?;
+    let default_port = match url.scheme() {
+        "ws" => 80,
+        "wss" => 443,
+        other => anyhow::bail!("expected ws:// or wss:// CDP websocket URL, got {other}://"),
+    };
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .context("websocket URL missing host")?
+        .to_string();
+    let port = url.port().unwrap_or(default_port);
+
+    Ok(WebsocketTcpTarget { host, port })
+}
+
+async fn validate_websocket_tcp_reachable(raw_url: &str) -> Result<()> {
+    let target = websocket_tcp_target(raw_url)?;
+    let address = format!("{}:{}", target.host, target.port);
+    tokio_timeout(
+        CDP_WS_REACHABILITY_TIMEOUT,
+        TcpStream::connect((target.host.as_str(), target.port)),
+    )
+    .await
+    .with_context(|| format!("timed out connecting to {address}"))?
+    .with_context(|| format!("connect to {address}"))?;
+
+    Ok(())
 }
 
 async fn add_release_rows(report: &mut DoctorReport, install_mode: InstallMode) {
@@ -267,7 +328,7 @@ fn update_hint(mode: InstallMode) -> &'static str {
             "managed-binary update: rerun the socai installer or replace ~/.socai/bin/socai with the latest GitHub release binary"
         }
         InstallMode::SourceCargo => {
-            "source-cargo update: cargo install --git https://github.com/tonyc-ship/socai --bin socai --force"
+            "source-cargo update: in your socai checkout run `git pull --ff-only` then `cargo install --path cli --force`"
         }
         InstallMode::Unknown => {
             "update using the installer or package manager that placed this executable; socai doctor will not self-update"
@@ -474,8 +535,46 @@ mod tests {
     #[test]
     fn update_hints_match_install_mode() {
         assert!(update_hint(InstallMode::ManagedBinary).contains("~/.socai/bin/socai"));
-        assert!(update_hint(InstallMode::SourceCargo).contains("cargo install"));
+        let source_hint = update_hint(InstallMode::SourceCargo);
+        assert!(source_hint.contains("git pull --ff-only"));
+        assert!(source_hint.contains("cargo install --path cli --force"));
+        assert!(!source_hint.contains("cargo install --git"));
         assert!(update_hint(InstallMode::Unknown).contains("will not self-update"));
+    }
+
+    #[test]
+    fn parses_websocket_tcp_target_with_explicit_port() {
+        assert_eq!(
+            websocket_tcp_target("ws://127.0.0.1:9222/devtools/browser/id").ok(),
+            Some(WebsocketTcpTarget {
+                host: "127.0.0.1".to_string(),
+                port: 9222,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_websocket_tcp_target_default_ports() {
+        assert_eq!(
+            websocket_tcp_target("ws://localhost/devtools/browser/id").ok(),
+            Some(WebsocketTcpTarget {
+                host: "localhost".to_string(),
+                port: 80,
+            })
+        );
+        assert_eq!(
+            websocket_tcp_target("wss://example.com/devtools/browser/id").ok(),
+            Some(WebsocketTcpTarget {
+                host: "example.com".to_string(),
+                port: 443,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_non_websocket_tcp_target() {
+        assert!(websocket_tcp_target("http://127.0.0.1:9222/json/version").is_err());
+        assert!(websocket_tcp_target("not a url").is_err());
     }
 
     #[test]
