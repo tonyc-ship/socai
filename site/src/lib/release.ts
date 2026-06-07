@@ -26,7 +26,7 @@ async function fetchLatestReleaseVersion(): Promise<string | null> {
         }
 
         const response = await fetch(
-            "https://api.github.com/repos/tonyc-ship/socai/releases/latest",
+            "https://api.github.com/repos/socai-io/socai/releases/latest",
             {
                 headers,
             },

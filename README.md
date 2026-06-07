@@ -9,7 +9,7 @@
 
 ## Desktop App
 
-[Download .dmg for Mac](https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg).
+[Download .dmg for Mac](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg).
 
 For local development:
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="tonyc-ship/socai"
+repo="socai-io/socai"
 workflow="release.yml"
 release_type="patch"
 ref="main"
@@ -19,7 +19,7 @@ Options:
   --ref REF         Git ref to dispatch from (default: main). Production
                     releases publish only from main. fix/release-* is for
                     non-publishing workflow tests.
-  --repo OWNER/REPO GitHub repository (default: tonyc-ship/socai)
+  --repo OWNER/REPO GitHub repository (default: socai-io/socai)
   --workflow FILE   Workflow file/name (default: release.yml)
   --no-watch        Trigger and print run URL without waiting for completion
   -h, --help        Show this help
