@@ -12,6 +12,16 @@
 - 沉淀了小红书网页知识，避免agent盲目探索，又快又准
 - 复用你已登录的chrome小红书账号，避免未登录被屏蔽
 
+## 使用方式
+
+socai 有三种用法，内核相同，按你的场景选：
+
+| 方式 | 是什么 | 如何开始 |
+| --- | --- | --- |
+| [**CLI**](#cli) | 命令行工具，给 Claude Code、Codex 等 AI agent 调用（核心） | `cargo install --path cli` |
+| [**TUI**](#tui) | 终端里的交互界面，手动跑任务 | 安装后运行 `socai` |
+| [**GUI**](#desktop-app-gui) | 图形桌面应用（macOS），点击即用 | [下载 .dmg](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg) |
+
 ## CLI
 
 socai 的核心，给 Claude Code、Codex 等 AI agent 提供开箱即用的小红书工具。
@@ -48,7 +58,15 @@ Options:
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
-## Desktop App
+## TUI
+
+不带子命令直接运行 `socai`，即可打开终端交互界面：
+
+```bash
+socai
+```
+
+## Desktop App (GUI)
 
 [Download .dmg for Mac](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg).
 
