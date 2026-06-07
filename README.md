@@ -7,35 +7,23 @@
 - 沉淀了小红书网页知识，避免agent盲目探索，又快又准
 - 复用你已登录的chrome小红书账号，避免未登录被屏蔽
 
-## Desktop App
+## CLI
 
-[Download .dmg for Mac](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg).
+socai 的核心，给 Claude Code、Codex 等 AI agent 提供开箱即用的小红书工具。
 
-For local development:
-
-```bash
-cd app
-pnpm run dev:desktop:local
-```
-
-This writes records and artifacts to:
-
-```text
-.socai/app/tasks.json
-.socai/runs/<run-dir>/
-```
-
-## CLI (for Claude Code, Codex, etc)
-
-From the repo root:
+从仓库根目录安装：
 
 ```bash
 cargo install --path cli
+```
 
+常用命令：
+
+```bash
 socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个获取帖子
 socai search_notes "运营爆款思路" --filter sort=最新                          # 只打开搜索结果页
-socai extract_note --note-id <id>                                          # open a note from the current page
-socai stop                                                                 # stop the daemon (closes the tool tab)
+socai extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
+socai stop                                                                 # 停止 daemon（关闭工具标签页）
 ```
 
 Options:
@@ -55,32 +43,9 @@ Options:
 continuation command: a prior `search_notes` / `topic_scan` must have left the
 tool tab on a waterfall containing the target card.
 
+## Desktop App
 
-## TUI
-
-```bash
-cargo install --path cli
-socai
-```
-
-## Website
-
-The marketing/download website lives in `site/` and builds as a static Astro
-site. It is separate from the desktop product UI in `app/`.
-
-```bash
-cd site
-pnpm install
-pnpm dev
-pnpm build
-```
-
-The build output is written to `site/dist/`. Deployment settings are documented in
-[Website deployment](docs/website-deployment.md).
-
-## Documentation
-
-- [Data model](docs/data-model.md) — run artifacts, desktop task index, and timeline replay.
+[Download .dmg for Mac](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg).
 
 ## 欢迎加群交流
 
