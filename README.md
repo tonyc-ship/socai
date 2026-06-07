@@ -26,9 +26,11 @@ socai 有三种用法，内核相同，按你的场景选：
 
 socai 的核心，给 Claude Code、Codex 等 AI agent 提供开箱即用的小红书工具。
 
-从仓库根目录安装：
+克隆仓库并安装：
 
 ```bash
+git clone https://github.com/socai-io/socai.git
+cd socai
 cargo install --path cli
 ```
 
@@ -60,10 +62,14 @@ tool tab on a waterfall containing the target card.
 
 ## TUI
 
-不带子命令直接运行 `socai`，即可打开终端交互界面：
+安装方式与 CLI 相同，安装后不带子命令运行 `socai` 即可打开终端交互界面：
 
 ```bash
-socai
+git clone https://github.com/socai-io/socai.git
+cd socai
+cargo install --path cli
+
+socai   # 不带子命令即打开 TUI
 ```
 
 ## Desktop App (GUI)
