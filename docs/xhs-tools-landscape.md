@@ -3,602 +3,602 @@
 *写于 2026-06-07。记录截至该日期的小红书（XHS / RedNote）自动化与数据采集
 开源工具生态；当上游平台或这些项目演进时请修订。*
 
-这份文档不是教程，而是一张概念地图。它沿用
-[browser-automation-evolution.md](./browser-automation-evolution.md) 的分析框架
-——原理（principle）、出发点（motivation）、历史演进、风险、异同、生态血缘——
-把七个有代表性的小红书工具放在同一个坐标系里对比。第一次请线性阅读以建立心智
-模型，之后再按目录回查具体条目。
+这份文档不是教程，而是一张概念地图。姊妹篇
+[browser-automation-evolution.md](./browser-automation-evolution.md) 讲的是"通用
+浏览器自动化框架"的演进；这一篇换一个框架——**围绕"怎么过小红书这道签名+风控关卡"
+来切分**，对比七个有代表性的小红书工具，并自始至终把 socai 放进同一张坐标系里做
+对照。
 
-被分析的七个项目（star 数与起始时间为用户给定，截至 2026-06）：
+被分析的项目（star 数与起始时间为用户给定，截至 2026-06；**按技术路线由老到新
+排序**——前三个是逆向 API 路线，后四个是浏览器路线）：
 
-| # | 项目 | Stars | 起始 | 语言 | 一句话定位 |
-|---|---|---|---|---|---|
-| 1 | [NanmiCoder/MediaCrawler](https://github.com/NanmiCoder/MediaCrawler) | 50k | 2023/6 | Python | 多平台数据采集器（XHS 只是其一） |
-| 2 | [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) | 14k | 2025/8 | Go | 自托管的 XHS MCP server（go-rod 驱动浏览器） |
-| 3 | [white0dew/XiaohongshuSkills](https://github.com/white0dew/XiaohongshuSkills) | 3k | 2026/2 | Python | CDP 直连的发布/运营工具（含 SKILL.md） |
-| 4 | [jackwener/xiaohongshu-cli](https://github.com/jackwener/xiaohongshu-cli) | 2k | 2026/3 *(已停开发)* | Python | 逆向 API 的 agent 友好 CLI |
-| 5 | [ReaJason/xhs](https://github.com/ReaJason/xhs) | 2k | 2023/4 *(已停开发)* | Python | 逆向签名的 HTTP 客户端库（生态鼻祖） |
-| 6 | [autoclaw-cc/xiaohongshu-skills](https://github.com/autoclaw-cc/xiaohongshu-skills) | 1k | 2026/3 | Python | 浏览器扩展 Bridge + SKILL.md 技能集 |
-| 7 | [xpzouying/x-mcp](https://github.com/xpzouying/x-mcp) | 300 | 2025/10 | 扩展+云 | xiaohongshu-mcp 的零部署 SaaS 版（云端 MCP + 浏览器插件） |
+| # | 项目 | Stars | 起始 | 语言 | 路线 | 一句话定位 |
+|---|---|---|---|---|---|---|
+| 1 | [ReaJason/xhs](https://github.com/ReaJason/xhs) | 2k | 2023/4 *(停更)* | Python | 逆向 API | 可插拔签名的 HTTP 客户端库，生态鼻祖 |
+| 2 | [NanmiCoder/MediaCrawler](https://github.com/NanmiCoder/MediaCrawler) | 50k | 2023/6 | Python | 逆向 API* | 多平台数据采集框架（XHS 只是其一） |
+| 3 | [jackwener/xiaohongshu-cli](https://github.com/jackwener/xiaohongshu-cli) | 2k | 2026/3 *(停更)* | Python | 逆向 API | agent 友好的逆向 API CLI |
+| 4 | [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) | 14k | 2025/8 | Go | 浏览器(go-rod) | 自托管的 XHS MCP server |
+| 5 | [xpzouying/x-mcp](https://github.com/xpzouying/x-mcp) | 300 | 2025/10 | 插件+云 | 浏览器(扩展) | 上一项的零部署 SaaS 版 |
+| 6 | [white0dew/XiaohongshuSkills](https://github.com/white0dew/XiaohongshuSkills) | 3k | 2026/2 | Python | 浏览器(裸 CDP) | CDP 直连的发布/运营工具 |
+| 7 | [autoclaw-cc/xiaohongshu-skills](https://github.com/autoclaw-cc/xiaohongshu-skills) | 1k | 2026/3 | Python | 浏览器(CDP/扩展) | 扩展 Bridge + SKILL.md 技能集 |
+| — | **socai**（本仓库） | — | 2025 | Rust | 浏览器(裸 CDP) | XHS 内容研究 + 多模态富集的集成产品 |
+
+\* MediaCrawler 早期是浏览器路线，现状已迁移到逆向 API（详见 §6.2）。
 
 ## 目录
 
-1. [核心问题：怎么"对小红书说话"](#1-核心问题怎么对小红书说话)
-2. [三条技术路线](#2-三条技术路线)
-3. [签名这堵墙：谁来生成 x-s](#3-签名这堵墙谁来生成-x-s)
-4. [向 AI Agent 的转向](#4-向-ai-agent-的转向)
+1. [小红书的签名与风控：所有差异的根源](#1-小红书的签名与风控所有差异的根源)
+2. [两条根本路线（及其内部子轴）](#2-两条根本路线及其内部子轴)
+3. [xhshow：逆向路线的公共底座](#3-xhshow逆向路线的公共底座)
+4. [按操作类型再切一刀：阅读 vs 创作 vs 互动](#4-按操作类型再切一刀阅读-vs-创作-vs-互动)
 5. [逐项目剖析](#5-逐项目剖析)
-6. [横切轴](#6-横切轴)
-7. [进程生命周期与部署形态](#7-进程生命周期与部署形态)
-8. [风险模型](#8-风险模型)
-9. [生态血缘](#9-生态血缘)
-10. [历史演进的叙事线](#10-历史演进的叙事线)
-11. [对 socai 的启示](#11-对-socai-的启示)
-12. [附录 A — 值得记住的框架式表述](#附录-a--值得记住的框架式表述)
-13. [附录 B — 待验证的开放问题](#附录-b--待验证的开放问题)
+6. [能力、封装与解耦度](#6-能力封装与解耦度)
+7. [与通用浏览器/agent 框架的关系](#7-与通用浏览器agent-框架的关系)
+8. [与灰产群控的技术分界](#8-与灰产群控的技术分界)
+9. [封号风险与使用成本](#9-封号风险与使用成本)
+10. [生态血缘与演进线](#10-生态血缘与演进线)
+11. [socai 的定位与发展方向](#11-socai-的定位与发展方向)
 
 ---
 
-## 1. 核心问题：怎么"对小红书说话"
+## 1. 小红书的签名与风控：所有差异的根源
 
-就像 browser-automation-evolution 里"一切最终都是在向 Chrome 发 CDP 消息"一样，
-所有小红书工具最终都要回答同一个问题：
+姊妹篇里"一切最终都是在向 Chrome 发 CDP 消息"是那张地图的原点；这张地图的原点是：
 
-> **怎样让小红书的服务器，相信你这次请求是一个正常登录用户在正常使用？**
+> **小红书怎么判断"这次请求来自一个正常登录的真人"，以及七个项目各自怎么过这道关。**
 
-小红书把这道关卡建在两个地方：
+关卡由两层组成——**请求签名**（能不能发出一个被接受的请求）和**行为风控**（发得
+多了会不会被惩罚）。
 
-- **请求签名**：小红书 Web/App 的每个 API 调用都带 `x-s` / `x-t` / `x-s-common`
-  / `x-b3-traceid` 等头。这些值由前端一段高度混淆的 JS（历史上叫
-  `window._webmsxyw`，后来是 `window.xhs` 系列）基于 URL、body、时间戳、cookie
-  里的 `a1`、localStorage 里的 `b1` 等算出来。**没有合法签名，API 直接拒绝。**
-- **行为风控**：即便签名合法，平台还会从访问频率、设备指纹、`sec-ch-ua`
-  一致性、鼠标轨迹、`a1`/设备指纹与历史是否吻合等维度做风控，触发验证码
-  （captcha / 滑块）、限流，乃至封号。
+### 1.1 请求签名
 
-七个项目的全部差异，本质上都是**这道签名+风控关卡的不同绕法**。理解了这一点，
-其余的结构（库 / CLI / MCP / 扩展 / SaaS）都会自然落位。这与参考文档里
-"每一层都是为不同的消费者重塑同一个协议"的叙事完全同构。
+小红书 Web 端每个 API 调用都带一组自定义头，核心是四个：
 
----
+- **`x-s`**：请求签名主体。由前端一段高度混淆的 JS（历史上的入口是
+  `window._webmsxyw(url, data)`，后续版本改名）基于**请求路径 + body + 时间戳 +
+  cookie 里的 `a1`**算出。算法内部用了一张**打乱过的自定义 Base64 码表**、一套
+  CRC32 变体（项目里常见的 `mrc()` 函数）和多轮位运算。
+- **`x-t`**：毫秒时间戳，参与 `x-s` 的计算，也用于服务端校验时效。
+- **`x-s-common`**：一个描述"客户端环境"的 JSON，被自定义 Base64 编码后放进头里。
+  字段如 `s0`（平台码）、`x1`（SDK 版本，如 `4.86.0`）、`x2`（OS）、`x3`
+  （`xhs-pc-web`）、`x5`=cookie 的 `a1`、`x8`=localStorage 的 `b1`、`x9`=对前面
+  若干字段做 CRC 的校验值。**它把"你是谁、你的环境长什么样"打包进了签名**，所以
+  伪造时必须连环境一起编圆。
+- **`x-b3-traceid` / `x-xray-traceid`**：链路追踪 ID，随机生成即可，但缺了也可能
+  被风控注意。
 
-## 2. 三条技术路线
+两个反复出现的身份变量值得单列：
 
-把签名这道关卡的绕法抽象出来，七个项目分成三条路线（外加它们的子变种）。这是
-全文最重要的一张分类表。
+- **`a1`**：cookie 里的设备/访客指纹，签名重度依赖它。逆向路线要么从浏览器里偷出
+  真实的 `a1`，要么自己生成一个格式合法的（`get_a1_and_web_id()`）。
+- **`b1`**：localStorage 里的另一段环境指纹，纯 HTTP 拿不到（不在 cookie 里），
+  所以逆向工具常常只能留空或塞个近似值——**这是纯 HTTP 路线天然的"破绽"之一**。
 
-| 路线 | 怎么过签名关 | 运行时是否需要浏览器 | 代表项目 |
+此外还有 **`xsec_token`**：一个**绑定到具体笔记**的访问令牌，看详情、抓评论、
+点赞收藏都要带它，而它只能从上一步的列表/搜索结果里取到。**你无法凭空用一个
+`note_id` 去读详情**——必须先经过一次列表拿到配对的 token。这条约束深刻影响了所有
+工具的 API 设计（几乎每个详情/互动接口都要求同时传 `feed_id` 和 `xsec_token`）。
+
+不同业务域用**不同的签名方案**，这点常被忽略却很关键：
+
+| 业务域 | host | 签名 | 难度 |
 |---|---|---|---|
-| **A. 逆向签名 + 纯 HTTP** | 用纯算法（Python/Go）复刻签名函数 | 否 | ReaJason/xhs、jackwener/xiaohongshu-cli、MediaCrawler（现状） |
-| **B. 浏览器自动化** | 不碰签名——让真实浏览器去发请求，自己只操控 DOM / 读页面状态 | 是 | xiaohongshu-mcp、XiaohongshuSkills、MediaCrawler（历史） |
-| **C. 浏览器扩展 / 注入** | 寄生在用户真实已登录的浏览器里，拦截或复用页面自己的请求 | 是（用户日常浏览器） | autoclaw/xiaohongshu-skills、xpzouying/x-mcp |
+| 浏览/搜索/互动 | `edith.xiaohongshu.com` | `x-s` 系列 | 主战场，被逆向得最透 |
+| 创作/发布 | `creator.xiaohongshu.com` | 另一套（项目里见到 `XYW_` 前缀） | 单独逆向，资料更少 |
+| 客服/商业 | `customer.xiaohongshu.com` | 又一套，相对简单 | 偶有用到 |
 
-### 2.1 路线 A — 逆向签名 + 纯 HTTP
+也就是说，逆向路线要"全功能"，得**把好几套签名分别啃下来**——这是它维护成本高的
+结构性原因。
 
-**出发点**：浏览器又重又慢又难并发。如果能把那段签名 JS 用 Python/Go 重写出来，
-就能用 `requests`/`httpx` 直接打 `edith.xiaohongshu.com` 的 API，单机几百并发、
-无界面、易上代理池——这是**爬虫规模化**的理想形态。
+### 1.2 行为风控
 
-**代价**：签名算法是平台的核心对抗资产，平台会不定期改。逆向方必须持续跟进，
-**一旦平台改算法，纯 HTTP 工具集体失效**。这也是 ReaJason/xhs 和
-jackwener/xiaohongshu-cli 都"已停止维护"的根因——维护逆向是一场无尽的军备竞赛。
+签名合法只是入场券。即便每个请求都签对了，平台仍从多维度判断是否"像机器人"：
 
-### 2.2 路线 B — 浏览器自动化
+- **频率与节奏**：单位时间请求数、请求间隔是否过于规律（真人有抖动）。
+- **设备指纹一致性**：`a1`/`b1`、`User-Agent`、`sec-ch-ua` 三件套、时区、屏幕参数
+  是否自洽且与历史吻合。纯 HTTP 工具最容易在这里露馅（headers 拼得再像，也少了
+  真浏览器的 TLS 指纹、JS 运行时特征）。
+- **服务端风控判定**：小红书前端 SDK 会在若干 API 调用后，把服务端的风控结论
+  （`isRiskUser` 之类）通过 APM 上报回去——autoclaw 的 `risk_analyzer.py` 正是
+  截获并解析了这个回报，把"平台现在觉得你多可疑"变成结构化报告。
 
-**出发点**："既然签名这么难逆，那我干脆不逆。" 启动一个真实的（或 headless 的）
-Chromium，让它正常加载小红书页面、由**页面自己的 JS** 去签名发请求；自动化层
-只负责点按钮、填表单、滚动，以及从 `window.__INITIAL_STATE__`（小红书 SSR/水合
-注入的 JSON）或 DOM 里把数据读出来。
+风控被触发的后果是**阶梯式**的：验证码（滑块/点选）→ 限流（接口降频或空结果）→
+功能限制 → 封号。**读操作很少触发严重风控，高频写操作（发布/批量互动）才是封号
+重灾区**（详见 §4、§9）。
 
-**代价**：慢、重、并发差，且强依赖页面 DOM 结构——平台一改版（如 2026 年 2-3 月
-创作者中心改版）选择器就失效。但它**对签名算法的变化免疫**，因为签名始终由真页面
-完成。这条路线又分三个子变种：
+### 1.3 一句话总括
 
-- **B-Playwright**（MediaCrawler 历史形态）：用 Playwright 起浏览器、注入 JS 取
-  签名，再用 httpx 发请求。
-- **B-CDP 直连**（xiaohongshu-mcp、XiaohongshuSkills）：不用 Playwright，直接通过
-  CDP（go-rod 或裸 websocket）控制浏览器。对应参考文档 §4.3/§4.4 的 "CDP-direct"
-  阵营。
-- **B-扩展**：见路线 C。
-
-### 2.3 路线 C — 浏览器扩展 / 注入
-
-**出发点**：路线 B 还得自己起一个带调试端口的浏览器、自己管 cookie、自己扫码登录。
-最省事的形态是：**直接寄生在用户每天在用的、已经登录好的 Chrome 里**。用户装一个
-扩展，扩展以用户真实身份、真实设备指纹操作小红书。
-
-这正是参考文档 §4.4 browser-harness "attach to your real Chrome，反转安全模型"
-的思路，在小红书场景的落地。它的反检测能力最强（你就是真用户），但 blast radius
-最大（扩展能动你浏览器里的一切登录态）。两个项目走这条路：
-
-- **autoclaw/xiaohongshu-skills**：扩展通过 WebSocket 连到本地 Python bridge
-  server，本地优先，开源。
-- **x-mcp**：扩展连到云端中转（`wss://mcp.aredink.com`），SaaS、零部署、闭源扩展。
+七个项目的全部技术差异，都可以还原成对一个问题的不同回答：**"x-s 由谁来算、a1/b1
+从哪来、怎么让请求节奏像真人"**。理解了 §1，后面的库/CLI/MCP/扩展/产品形态都只是
+这个核心选择的外包装。
 
 ---
 
-## 3. 签名这堵墙：谁来生成 x-s
+## 2. 两条根本路线（及其内部子轴）
 
-参考文档里把 LLM 面对 raw Playwright 的困境拆成"四堵墙"。对小红书工具，最关键的
-一堵墙是**签名**。"谁来生成 `x-s`"这一个问题，几乎决定了一个项目的全部命运
-（维护成本、稳定性、能否规模化）。四种答案：
+绕过 §1 这道关，**根本上只有两条路**，而不是更多：
 
-| 谁来签名 | 机制 | 代表 | 优点 | 致命弱点 |
-|---|---|---|---|---|
-| **纯算法复刻** | Python/Go 重写签名函数（如 `xhshow` 库） | xiaohongshu-cli、MediaCrawler 现状 | 无浏览器，可规模化 | 平台改算法即失效，需永续维护 |
-| **调用页面 JS** | 起浏览器，`page.evaluate(window._webmsxyw(url,data))` | ReaJason/xhs 推荐用法 | 算法变化免疫 | 慢、重，仍要起浏览器 |
-| **让页面自己发** | 浏览器自动化点 DOM，请求由页面发出 | xiaohongshu-mcp、XiaohongshuSkills | 完全不碰签名 | 依赖 DOM，改版即坏 |
-| **拦截页面请求** | 扩展 hook `fetch`/`XHR`，读页面已签名的响应 | autoclaw（interceptor.js） | 签名+风控全免疫，最隐蔽 | 需装扩展，blast radius 大 |
+- **路线 A — 逆向签名 + 纯 HTTP**：把签名算法用 Python/Go 复刻出来，自己拼 headers，
+  用 `requests`/`httpx` 直打 API，**运行时不需要浏览器**。
+- **路线 B — 让浏览器代签**：跑一个**用户已登录的真实浏览器**，由**页面自己的 JS**
+  完成签名和发请求；自动化层只负责操控页面、读取结果。
 
-一个值得记住的细节：`xhshow`（作者 Cloxl，MIT）是当前纯算法路线的**事实标准签名
-库**，MediaCrawler 和 xiaohongshu-cli 都依赖它。MediaCrawler 甚至在
-`playwright_sign.py` 里给 xhshow 打了个 monkey-patch，修正它对 GET 请求 `a3_hash`
-的计算 bug（区分 POST 走 `MD5(api_path)`、GET 走 `MD5(完整 URL)`）。这说明：**纯
-算法路线的维护负担，已经从"逆向"沉淀成了一个需要被全社区共同打补丁的公共依赖。**
+之前一版文档把"用扩展"和"用 CDP"列成两条并列路线，这是**概念混淆**。澄清如下：
 
-而 autoclaw 的拦截法最为巧妙：它根本不关心 `x-s` 怎么算——
-`interceptor.js` 在 `document_start`、`MAIN` world 里抢在小红书主 bundle 之前
-包裹原生 `fetch`/`XMLHttpRequest`，于是页面自己签名、自己发出的每个 API 响应都被
-扩展原样捕获。**让平台自己的代码替你干签名这件脏活**，这是对抗成本最低的一种姿势。
+> **"扩展 vs CDP vs Playwright"不是路线，而是路线 B 内部的"控制面"子轴。** 三者都
+> 需要用户真实登录、都通过 `evaluate`/注入 JS 与页面交互，能力高度重叠。socai 用裸
+> CDP、xiaohongshu-mcp 用 go-rod(CDP)、autoclaw 既能用裸 CDP 也能用扩展——它们在
+> "让真浏览器代签"这件根本事上**完全同类**。扩展能做的（hook fetch、读 cookie、
+> 在真实 profile 上操作），CDP 基本都能做（`Fetch`/`Network` 域拦截、`Network.
+> getAllCookies`、attach 到带调试端口的现有 Chrome）。
+
+所以路线 B 真正有意义的内部子轴有三条，且**彼此正交**：
+
+### 子轴一：控制面（怎么驱动浏览器）
+
+| 控制面 | 是什么 | 代表 | 取舍 |
+|---|---|---|---|
+| **Playwright** | 重型封装库，自带 auto-wait/locator | MediaCrawler（历史） | 写起来稳，但要拖 Node + 自带 Chromium，重 |
+| **CDP 直连** | 直接收发 CDP 消息（裸 ws / go-rod / chromiumoxide） | xiaohongshu-mcp、XiaohongshuSkills、autoclaw、**socai** | 轻、单二进制、控制粒度细，但要自己处理等待/重试 |
+| **浏览器扩展** | 装一个 MV3 extension，content/background script 操作 | autoclaw、x-mcp | 天然跑在用户日常浏览器、无需开调试端口；但要让用户装扩展、分发受应用商店约束 |
+
+**Playwright 与 CDP 直连的实质区别**（沿用姊妹篇 §2）：Playwright 在 CDP 之上加了
+auto-wait（每个动作自动等元素可见/可点）、locator（选择器每次重算、抗重渲染）、
+跨 frame 协调等一整套"为人写测试"而生的能力，代价是 Node 运行时 + 版本绑定的
+Chromium 缓存（数百 MB）。CDP 直连则是"把协议薄薄包一层"：没有 auto-wait（要自己
+轮询/sleep）、没有 locator（自己管选择器），但换来单二进制、低内存、对时序的完全
+掌控。**对一个要长期驻留、被 agent 反复调用的工具，CDP 直连的可预测性和轻量通常
+更划算**——这也是 xiaohongshu-mcp、socai 都选它的原因。
+
+**扩展相对 CDP 的唯一硬差异**不在能力，而在**部署形态**：扩展不需要用户用
+`--remote-debugging-port` 重启 Chrome，装上即用，对非技术用户更友好；代价是要走
+Chrome Web Store 审核或手动加载、且扩展本身要单独维护。x-mcp 把这条优势用到极致
+（零部署 SaaS），socai/xiaohongshu-mcp 则接受"需要开调试端口"换取无扩展依赖。
+
+### 子轴二：数据怎么读出来
+
+三种取数方式，鲁棒性递增：
+
+1. **DOM 抓取**：`querySelector` 拼字段。最直观，但**改版即坏**，字段易缺。
+2. **读页面状态**：`window.__INITIAL_STATE__`——小红书 SSR/水合时注入的完整 JSON。
+   比 DOM 全、稳。xiaohongshu-mcp、autoclaw、**socai** 都优先读它（socai 的
+   `page_scripts.js` 里 `__INITIAL_STATE__?.search?.feeds` + DOM 兜底）。
+3. **网络拦截**：hook `fetch`/`XHR`（扩展在 MAIN world，或 CDP 的 `Fetch` 域），
+   直接捕获页面**已签名**请求的原始响应。最全最稳，连签名都不用碰。autoclaw 的
+   `interceptor.js` 是这一路的范例。
+
+### 子轴三：用谁的浏览器 profile
+
+- **附着用户日常 Chrome**（真实登录态、真实指纹）：反检测最好。socai
+  （`discover_existing_chrome_endpoint`）、autoclaw/x-mcp（扩展天然如此）。
+- **自起独立 Chrome**（专用 user-data-dir，需自己扫码登录）：与日常环境隔离，
+  可多账号并行。xiaohongshu-mcp（headless + cookie 文件）、XiaohongshuSkills
+  （按账号隔离 user-data-dir）。
+
+> 把三条子轴拼起来才是一个项目的完整画像。例如 socai = **CDP 直连 + 读
+> `__INITIAL_STATE__` + 附着真实 Chrome**；autoclaw 的扩展模式 = **扩展 + fetch
+> 拦截 + 真实 Chrome**；xiaohongshu-mcp = **go-rod + `__INITIAL_STATE__` + 独立
+> headless**。这比"分成 B/C 两条路"清晰得多。
 
 ---
 
-## 4. 向 AI Agent 的转向
+## 3. xhshow：逆向路线的公共底座
 
-这正是参考文档 §3"the pivot to agents"在小红书场景的复刻。2023-2024 年的工具
-（xhs、MediaCrawler）服务的是**写代码的开发者**——你 import 一个库、跑一个批量
-爬虫脚本。2025 年下半年起，消费者变了：变成了 **Claude Code / Cursor / Codex
-这样的外部 AI agent**，以及通过它们下自然语言指令的**非技术终端用户**。
+逆向路线（A）值得单独讲它的底座，因为**逆向 XHS 签名这件最难的脏活，已经从各项目
+内部沉淀成了一个公共依赖：[`xhshow`](https://github.com/Cloxl/xhshow)（作者 Cloxl，
+MIT）**。
 
-这一转向带来三个可观察的结构变化：
+- **它是什么**：把 §1.1 描述的 `x-s` / `x-s-common` 算法（自定义 Base64 码表、CRC
+  变体、`x-s-common` JSON 封装、payload array、`a3_hash`）用**纯 Python 完整复刻**
+  的签名库。对外暴露 `Xhshow.sign_headers_get/post`、`build_url`，以及可配置 UA 和
+  各种模板的 `CryptoConfig`、模拟会话上下文的 `SessionManager`。
+- **谁在用**：**jackwener/xiaohongshu-cli** 的 `signing.py` 就是 xhshow 的薄封装
+  （把它配成 macOS/Chrome 指纹）；**MediaCrawler** 现状也通过 `sign_with_xhshow`
+  委托给它，甚至在 `playwright_sign.py` 里给它打了个 monkey-patch——修正 xhshow 对
+  **GET 请求 `a3_hash`** 的计算 bug（POST 用 `MD5(api_path)`、GET 应用
+  `MD5(完整 URL)`，引用了 xhshow 的 issue #104）。
+- **为什么重要**：它是"**底层技术与上层应用解耦**"的最佳样本（呼应 §6）。逆向是
+  一场无尽军备竞赛；把它收敛到一个被多方共同打补丁的公共库后，上层工具（CLI、
+  爬虫）就能很薄——xiaohongshu-cli 几乎只是"xhshow + 反检测 + 漂亮 CLI"。反过来，
+  这也意味着**这些逆向工具的命运被一个共同的上游绑定**：xhshow 跟不上平台改版时，
+  它们会一起失效。
 
-1. **接口形态从"库"变成"agent 工具面"。** 出现了两种新载体：
-   - **MCP server**（Model Context Protocol）：xiaohongshu-mcp、x-mcp。AI 客户端
-     通过 MCP 协议调用 `search_feeds` / `publish_content` 等工具。
-   - **SKILL.md 技能**：XiaohongshuSkills、autoclaw/xiaohongshu-skills。把能力写成
-     带 YAML frontmatter 的 Markdown，供 OpenClaw / Claude Code 这类支持 `SKILL.md`
-     的 agent 平台自动路由。这本质上是"用自然语言 + 一个 CLI 子命令清单"教 agent
-     怎么调你的工具。
+> ReaJason/xhs（更早、2023）走的是另一种解耦：它**不内置签名**，而是把 `sign`
+> 做成构造参数（`XhsClient(cookie, sign=...)`），由使用者注入——官方示例用
+> Playwright 调页面 `window._webmsxyw` 来签。可以说 xhs 把"签名"这个最易腐坏的
+> 部分外包给了调用方，自己只维护稳定的数据模型与 helper。xhshow 则是把这块脏活
+> 收敛成一个专门的库。两种都是对"逆向易腐"这一现实的工程应对。
 
-2. **目标从"读"变成"读+写"。** 早期工具几乎全是只读爬取（搜笔记、抓评论、导
-   数据做分析）。MCP/Skill 时代的工具几乎都把重心放在**发布与互动**（发图文/视频、
-   点赞、收藏、评论、回复、定时发布、带货商品绑定）——因为 agent 的价值在于"替我
-   运营账号"，而不只是"替我抓数据"。
+---
 
-3. **身份从"伪装的爬虫"变成"真实的我"。** 为了让 agent 安全地写操作，工具纷纷
-   转向"用你真实已登录的浏览器、真实账号、真实指纹操作"（路线 C），把账号异常
-   登录风险降到最低。这与参考文档里 browser-harness "inherit all your logged-in
-   sessions" 的取舍如出一辙。
+## 4. 按操作类型再切一刀：阅读 vs 创作 vs 互动
 
-> 注意一个信号：**逆向签名两个老项目（xhs 2023/4、xiaohongshu-cli 2026/3）都标了
-> "已停止维护"，而活跃增长的全是浏览器自动化 / 扩展 / MCP 路线。** 这和参考文档
-> 里"连最强的 Playwright-wrapper 团队都转向 CDP-direct"是同一种行业风向：纯逆向
-> 的军备竞赛正在被"以真人身份操作真浏览器"取代。
+把"小红书操作"笼统看会丢掉重要差异。按业务拆成三类，它们在**技术难度、依赖、封号
+风险**上都不同：
+
+### 4.1 阅读 / 搜索（read）
+
+- **技术**：`edith` 主域 GET；数据既能走签名 API，也能直接读 `__INITIAL_STATE__`
+  （浏览器路线常这么做，连签名都省了）。
+- **依赖**：详情/评论需要配对的 `xsec_token`（先列表后详情）。
+- **风险**：**最低**。读是幂等的、不改平台状态，高频读最多触发限流/验证码，很少
+  直接封号。**socai 当前几乎只做这一类**（search/extract/comments/profile）。
+
+### 4.2 创作 / 发布（write-publish）
+
+- **技术**：切到 `creator` 域，**另一套签名**；且发布是**多步有状态流程**——
+  `获取上传凭证(permit) → 上传图片/视频（大文件还要分片）→ 创建笔记`。
+  ReaJason/xhs（`create_image_note`/`upload_file_with_slice`）和 xiaohongshu-cli
+  （`get_upload_permit`+`upload_file`）证明**逆向路线也能纯 API 发布**，但要额外
+  逆向 creator 签名与上传协议。浏览器路线（xiaohongshu-mcp / XiaohongshuSkills /
+  autoclaw / x-mcp）则一律走**创作者中心的 DOM 流程**：填标题正文、上传、写话题
+  标签、点发布——XiaohongshuSkills README 直言要为"2026 年 2-3 月创作者中心改版"
+  改选择器，正是这条路 DOM 强依赖的写照。
+- **风险**：**最高**。发布是强写操作，平台对新发内容的频率/相似度/账号活跃度风控
+  最严，也是封号最常见的触发点。
+- **差异点**：发布几乎是所有 MCP/Skill 工具的"主打能力"，但恰恰是**最脆**（改版）
+  且**最危险**（封号）的一类。
+
+### 4.3 互动（like / favorite / comment / follow）
+
+- **技术**：`edith` 主域 POST，需 `feed_id + xsec_token`。比发布简单（单步），比
+  阅读多了写副作用。评论/回复带文本，风控介于点赞与发布之间。
+- **风险**：**中等**，但**批量互动**（短时间大量点赞/关注/评论）是仅次于发布的
+  封号高发区。
+
+**给工具选型的提炼**：如果只做研究/选题/竞品分析（纯读），逆向与浏览器路线都安全
+好用；一旦要发布和批量互动，**风险和维护成本都急剧上升**，且发布的脆弱性来自
+creator 域的独立签名（逆向路线）或创作者中心 DOM（浏览器路线）。这解释了为什么
+"研究型"工具（socai）和"运营型"工具（xiaohongshu-mcp / x-mcp / Skills）会长成
+很不一样的形态。
 
 ---
 
 ## 5. 逐项目剖析
 
-### 5.1 NanmiCoder/MediaCrawler — 多平台爬虫的集大成者
+### 5.1 ReaJason/xhs — 生态鼻祖（HTTP 客户端库）
 
-- **定位**：不是 XHS 专用工具，而是覆盖小红书、抖音、快手、B 站、微博、贴吧、知乎
-  的**多平台数据采集框架**。XHS 只是 `media_platform/xhs/` 一个子模块。
-- **原理（演进过的）**：早期是路线 B-Playwright（注入 JS 取签名）；现状是**路线 A**
-  ——`client.py` 用 `httpx` 直发 API，签名走 `sign_with_xhshow`（纯算法库），同时
-  保留 CDP 模式（`ENABLE_CDP_MODE=True`，连本地 Chrome，反检测更好）。代码里
-  `help.py`/`xhs_sign.py`/`playwright_sign.py`/`xhs_sign` 多套签名实现并存，正是这段
-  演进史的化石层。
-- **工程深度**：IP 代理池（`proxy/`，支持快代理等）、多种存储后端
-  （csv/db/json/jsonl/sqlite/excel/postgres）、登录态缓存、评论词云、并发控制、
-  甚至一个 FastAPI + Vite 的 WebUI（`api/webui/`）。这是七个里**工程完成度和体量
-  最高**的一个，也对应它 50k 的 star。
-- **消费者**：写代码的开发者 / 数据分析者。批量、离线、规模化爬取。
-- **风险姿态**：以"伪装的爬虫"为主，靠代理池+频控降低被封概率；License 是
-  "非商业学习许可证"，README 反复强调仅供学习。
-- **生命周期**：参考文档的 **Pattern D（monolithic CLI）/批处理** ——跑一次爬一批，
-  Chrome（CDP 模式下）随进程起落。
+七个里最老（2023/4），PyPI 上的 `XhsClient` 库，作者自述"练 Python"。**路线 A**，
+但签名**可插拔**（见 §3 旁注）。它的历史意义在于**定义了后来者的公共词汇表**：
+`Note`/`FeedType`/`SearchSortType` 枚举、`get_imgs_url_from_note` 等 helper 被广泛
+沿用，MediaCrawler 与它互相致谢。能力覆盖搜索、详情、评论、用户页，以及完整的
+创作者发布链路（含分片上传）。**现已停更**——签名一改即需重逆向，加上"练手"初衷，
+自然退场（注意：停更指作者不再开发新功能，是否还回应 issue 不确定）。
 
-### 5.2 xpzouying/xiaohongshu-mcp — 自托管 MCP server 的标杆
+### 5.2 NanmiCoder/MediaCrawler — 多平台采集框架
 
-- **定位**：把小红书能力封装成一个**本地长驻的 MCP server**，让 AI 客户端调用。
-- **原理**：**路线 B-CDP 直连**。Go + `go-rod`（CDP 客户端，相当于 Go 版 Puppeteer）
-  + `go-rod/stealth` + `xpzouying/headless_browser`。读数据靠 `page.MustEval` 取
-  `window.__INITIAL_STATE__`（小红书自己水合好的 JSON，无需逆向）；写操作（发布/
-  点赞/评论）靠 DOM 点击；搜索筛选靠按索引点击筛选标签（`filterOptionsMap`）。
-  **完全不碰签名。**
-- **接口**：MCP over **StreamableHTTP**（`mcp.NewStreamableHTTPHandler`，挂在
-  Gin 的 `/mcp` 路由，默认 `:18060`）——注意它**不走 stdio**，而是起一个本地 HTTP
-  服务，所以可以容器化（有 Docker 镜像、Docker Pulls 徽章）。另有 `cmd/login`
-  单独做扫码登录、cookie 落盘到文件。
-- **工具面**：publish_content / publish_video / search_feeds（带
-  sort/note_type/publish_time/scope/location 多维筛选）/ feed_detail（可滚动加载
-  全部评论、展开二级回复）/ like / favorite / comment / reply / user_profile 等，
-  且发布支持定时、原创声明、可见范围、带货商品绑定——**写能力非常完整**。
-- **消费者**：能自己部署 Go 服务/Docker 的开发者 + 其 AI 客户端。
-- **生命周期**：参考文档的 **Pattern A（detached daemon）/ Pattern B（MCP）**
-  混合——一个长驻服务持有 headless 浏览器，跨调用保持温热。
-- **生态地位**：它是 2025 下半年 MCP 浪潮里**最有影响力的 XHS 工具**，下面的 x-mcp
-  和 autoclaw 都是它的衍生（见 §9）。
+不是 XHS 专用，而是覆盖小红书/抖音/快手/B 站/微博/贴吧/知乎的**多平台爬虫框架**，
+XHS 只是 `media_platform/xhs/` 一个子模块。**路线演进过**：早期 Playwright 注入
+取签名，现状委托 `xhshow` 纯算法（§3），同时保留 CDP 模式连本地 Chrome 增强反检测。
+代码里多套签名实现并存（`help.py`/`xhs_sign.py`/`playwright_sign.py`）正是这段史的
+化石层。**工程完成度七个里最高**：IP 代理池、七种存储后端（csv/db/json/sqlite/
+excel/postgres…）、登录态缓存、评论词云、并发控制、FastAPI+Vite WebUI。定位是
+**开发者/数据分析的批量离线采集**，几乎纯读。配套有闭源的 MediaCrawler Pro（去
+Playwright、断点续爬、多账号、内容解构 agent）——典型的"开源引流、闭源变现"。
 
-### 5.3 white0dew/XiaohongshuSkills — CDP 直连的发布/运营瑞士军刀
+### 5.3 jackwener/xiaohongshu-cli — agent 友好的逆向 CLI
 
-- **定位**：起初是"自动发布图文/视频到小红书"的 CLI，现已扩成搜索、详情、评论、
-  点赞收藏、用户页抓取、通知抓取、内容数据看板导出 CSV 的**全能运营工具**。
-- **原理**：**路线 B-CDP 直连，且是裸 CDP**——`scripts/cdp_publish.py`（单文件
-  192KB！）直接用 `websockets` 库收发 `Page.*` / `Runtime.*` / `Input.*` 等 CDP
-  消息，不依赖 Playwright/go-rod。`chrome_launcher.py` 用 `subprocess` 起 Chrome、
-  带 `--remote-debugging-port=9222` 和**按账号隔离的 `--user-data-dir`**（多账号
-  cookie 隔离）。也支持 `--host/--port` 连远程 CDP、headless 模式。
-- **特色**：README 明确说"发布链路按 2026 年 2-3 月小红书创作者中心改版调过选择器
-  与等待策略"——这是路线 B 强依赖 DOM 的真实写照：**改版是它的头号维护负担**。
-  另有登录态本地缓存 12 小时、二维码 Base64 导出（便于远程前端展示扫码）。
-- **接口**：CLI 子命令 + 一个 `SKILL.md` + `docs/claude-code-integration.md`，所以
-  既能人用，也能当 AI agent 技能用。
-- **消费者**：想要"开箱即用发布"的个人创作者 + AI agent。
-- **风险姿态**：README 把风险提示放在最显眼处，强调测试号、控频、人工复核。
-- **生命周期**：自己起的带调试端口的 Chrome（Pattern A 的简化版），CLI 短连接
-  逐次连上去执行。
+**路线 A**，`signing.py` 是 xhshow 薄封装、`creator_signing.py` 自带创作者端签名，
+**运行时不起浏览器**。两大亮点：
+- **反检测做得最用心**（弥补纯 HTTP 的先天劣势）：固定 macOS Chrome 指纹、
+  `sec-ch-ua` 三件套对齐、会话级稳定身份、请求间高斯抖动
+  （`random.gauss(0.3,0.15)`，偶尔加 2–5s）、遇验证码指数退避冷却
+  （`min(30, 5·2^(n-1))`）。
+- **agent 一等公民**：所有命令支持 `--yaml`/`--json`，非 TTY 默认 YAML；统一信封
+  `ok / schema_version / data / error` + 枚举错误码（`not_authenticated` /
+  `verification_required` / `ip_blocked` / `signature_error` …）；短索引导航
+  （`xhs read 1` 复用上次列表）。
+能力覆盖搜索/阅读/互动/发布/通知，是逆向路线里**功能最全且最适合被脚本与 agent
+调用**的一个。**已停更（2026/3）**。
 
-### 5.4 jackwener/xiaohongshu-cli — agent 友好的逆向 API CLI
+### 5.4 xpzouying/xiaohongshu-mcp — 自托管 MCP server 标杆
 
-- **定位**：一个**纯逆向 API** 的小红书 CLI，强调对 AI agent 友好（结构化输出）。
-  作者还有 bilibili-cli / twitter-cli / tg-cli 等同系列工具。
-- **原理**：**路线 A**。`signing.py` 是 `xhshow` 库的薄封装（配置成 macOS/Chrome
-  指纹），`creator_signing.py` 自带创作者端签名。**运行时完全不起浏览器**，靠
-  `requests`/httpx 直打 API。Cookie 通过 `subprocess` 从本地浏览器 SQLite 提取，
-  或扫码登录。
-- **反检测**：这是它最用心的地方——固定 macOS Chrome 指纹、`sec-ch-ua` 三件套对齐、
-  会话级稳定的浏览器身份、请求间 **高斯抖动**（`random.gauss(0.3,0.15)`，偶尔加
-  2-5s）、遇验证码**指数退避冷却**（`min(30, 5*2^(n-1))`）。即"用纯 HTTP 尽量
-  装得像真人"。
-- **agent 友好**：所有命令支持 `--yaml`/`--json`，非 TTY 默认 YAML；统一信封
-  `ok / schema_version / data / error`，错误码枚举化（`not_authenticated` /
-  `verification_required` / `ip_blocked` / `signature_error` …）。短索引导航
-  （`xhs read 1` 复用上次列表结果）也是为对话式使用设计。
-- **状态**：**已停止维护（2026/3 起）**——逆向路线的宿命。
-- **生命周期**：参考文档 **Pattern D 的极简版**——每次调用就是个无状态短命进程，
-  唯一状态是磁盘上的 cookie。
+**路线 B：go-rod(CDP) + stealth + 独立 headless 浏览器**。读数据用
+`page.MustEval` 取 `__INITIAL_STATE__`，写操作（发布/点赞/评论）走 DOM，搜索筛选
+靠按索引点筛选标签——**完全不碰签名**。接口是 **MCP over StreamableHTTP**
+（Gin 挂 `/mcp`，默认 `:18060`，**不走 stdio**，因而能容器化，有 Docker 镜像）。
+工具面非常完整：发布支持定时/原创声明/可见范围/带货商品绑定，详情支持滚动加载全部
+评论与展开二级回复。它是 **2025 下半年 MCP 浪潮里最有影响力的 XHS 工具**，下面两个
+项目都是它的衍生（§10）。面向能自部署 Go 服务/Docker 的开发者及其 AI 客户端。
 
-### 5.5 ReaJason/xhs — 生态的鼻祖（HTTP 客户端库）
+### 5.5 xpzouying/x-mcp — 零部署 SaaS 版
 
-- **定位**：七个里最老（2023/4），一个发在 PyPI 上的 `XhsClient` **HTTP 客户端库**，
-  作者自述"主要是练 Python"。它是后来很多项目签名实现的源头。
-- **原理**：**路线 A 的"半成品"形态**——`XhsClient` 用 `requests` 发请求，但
-  **签名函数是可插拔的**（`XhsClient(cookie, sign=...)`）。它把"怎么签名"这个最难
-  的问题留给了使用者：
-  - 官方推荐用法（`example/basic_usage.py`）是**路线 B 的混合体**：用 Playwright +
-    `stealth.min.js` 起 headless 浏览器，注入 cookie 后调用页面的
-    `window._webmsxyw(url, data)` 拿签名——即"让页面 JS 替我签"。
-  - 同时 `help.py` 里有一套**纯 Python 的 `sign`/`quick_sign`**，用于创作者/客服端
-    那些较简单的签名。
-- **历史意义**：它定义了后来者的基本数据模型（`Note`/`FeedType`/`SearchSortType`
-  枚举、`get_imgs_url_from_note` 等 helper），MediaCrawler 的早期签名也受其影响
-  （README 里 ReaJason 还致谢了 NanmiCoder）。可以说**整个 Python 小红书生态的
-  公共词汇表，很多是这里定的。**
-- **状态**：**已停止维护**。签名一改即失效，加上"练手项目"的初衷，自然退场。
-- **生命周期**：就是个库，import 进你自己的进程；起不起浏览器取决于你选哪种 sign。
+与 xiaohongshu-mcp **同作者**，为"被原版部署难劝退的非技术用户"而生。**路线 B：
+扩展 + 云中继**——用户装一个（**闭源**）Chrome extension，扩展通过 WebSocket 连
+云端（`wss://mcp.aredink.com/ws`），云端把 MCP over HTTP（`/mcp` + `X-API-Key`）
+暴露给 AI 客户端；AI 调用 → 云中转 → 扩展在用户真实浏览器执行 → 回传。工具面
+（`xhs_*`，约 8–11 个）镜像 xiaohongshu-mcp。卖点是**零环境部署 + 复用日常登录态 +
+操作浏览器内可见可干预**，接入只需 `claude mcp add --transport http` 一行。这个
+GitHub 仓库**几乎无源码**（仅 README/SKILL.md/接入指南/隐私政策），真正的扩展与
+云端是 aredink.com 的闭源产品——所以它在本对比里更多是**商业化形态样本**。
 
-### 5.6 autoclaw-cc/xiaohongshu-skills — 扩展 Bridge + SKILL.md 技能集
+### 5.6 white0dew/XiaohongshuSkills — CDP 直连的发布/运营工具
 
-- **定位**：面向 AI agent 的小红书技能集，主打"**用你已登录的真实浏览器、真实账号、
-  以普通用户方式操作**"。明确支持 OpenClaw 及一切兼容 `SKILL.md` 的平台。
-- **原理（双后端，很关键）**：它实现了一个与 CDP `Page` 同接口的抽象，背后可切换两种
-  传输：
-  - **`cdp.py`**：裸 CDP WebSocket 客户端（注释直言"对应 Go browser/browser.go +
-    go-rod API"）——即路线 B-CDP。
-  - **`bridge.py` + `extension/`**：**路线 C**。一个 MV3 Chrome 扩展（XHS Bridge），
-    `background.js` 通过 WebSocket 连本地 `bridge_server.py`（`ws://localhost:9333`）
-    收命令；扩展持 `debugger`/`scripting`/`cookies`/`webRequest` 权限，在用户**真实
-    已登录**的浏览器里执行。最妙的是 `interceptor.js` 在 `document_start`/`MAIN`
-    world 抢先 hook `fetch`/`XHR`，把页面自己签名发出的 API 响应原样捕获——
-    **完全不碰签名**。
-  - 两种后端共享同一套上层逻辑（`feeds.py` / `feed_detail.py` / `publish.py` …），
-    且这套逻辑几乎是 **xiaohongshu-mcp（Go）的逐文件 Python 移植**（每个文件
-    docstring 都写着"对应 Go xiaohongshu/xxx.go"）。
-- **额外深度**：`risk_analyzer.py` 解析拦截到的 APM 上报，输出结构化**风控报告**
-  （risk_level / detection_axes / 服务端风控判定），`human.py` 做人类行为模拟
-  （随机延迟、滚动节奏）。这是七个里**唯一把"读取平台对你的风控判定"做成一等公民**
-  的项目。
-- **接口**：5 个 `SKILL.md` 技能（auth / publish / explore / interact / content-ops）+
-  统一 `scripts/cli.py`（JSON 输出）。SKILL.md 里甚至强制 agent"只用本项目脚本、
-  忽略记忆中的 xiaohongshu-mcp 等其它实现"——一种有趣的**技能边界自我防卫**。
-- **生命周期**：参考文档 **Pattern C（attach to existing Chrome）**——寄生用户日常
-  浏览器，Chrome 归用户所有，blast radius 是用户全量登录态。
+**路线 B：裸 CDP**——`scripts/cdp_publish.py`（单文件 192KB）直接用 `websockets`
+收发 `Page.*`/`Runtime.*`/`Input.*`，不依赖 Playwright/go-rod。`chrome_launcher.py`
+用 subprocess 起 Chrome、带调试端口和**按账号隔离的 user-data-dir**（多账号），也
+支持连远程 CDP 与 headless。起初专做发布，现已扩成搜索/详情/评论/点赞收藏/用户页/
+通知抓取/**内容数据看板导出 CSV**。提供 CLI + `SKILL.md` + Claude Code 接入文档，
+人/agent 两用。强 DOM 依赖使"创作者中心改版"成为它的头号维护负担。
 
-### 5.7 xpzouying/x-mcp — xiaohongshu-mcp 的零部署 SaaS 版
+### 5.7 autoclaw-cc/xiaohongshu-skills — 扩展 Bridge + 技能集
 
-- **定位**：与 xiaohongshu-mcp **同一作者**，专为"被原版部署难劝退的非技术用户和
-  高频创作者"打造。一句话：**xiaohongshu-mcp 的云托管 + 浏览器插件版**。
-- **原理**：**路线 C，但中转在云端**。用户装一个 Chrome 扩展（Chrome 应用商店 /
-  aredink.com 分发，**闭源**），扩展通过 WebSocket 连云端
-  （`wss://mcp.aredink.com/ws`）；云端把 MCP over HTTP（`https://mcp.aredink.com/mcp`，
-  `X-API-Key` 鉴权）暴露给 AI 客户端。AI 调用 → 云端中转 → 扩展在用户真实浏览器里
-  执行 → 结果回传。工具面（`xhs_*` 系列，约 8-11 个）基本镜像 xiaohongshu-mcp。
-- **卖点**：零环境部署（无需 Python/Docker/代理）、操作全程在浏览器可见可干预、
-  复用日常登录态无异地登录风险。隐私政策称 API Key 加密存于本地、服务端不存个人数据。
-- **消费者**：完全不想碰命令行的终端用户；接入方式是 `claude mcp add --transport
-  http` 一行命令。
-- **代码仓库**：这个 GitHub repo 里**几乎没有源码**——只有 README / SKILL.md /
-  openclaw 接入指南 / 隐私政策 / 排错文档。真正的扩展和云端是闭源产品
-  （aredink.com）。所以它在本对比里更多是一个**商业化形态样本**，而非可读源码的工程。
-- **生命周期**：参考文档没有完全对应的模式——可称为 **Pattern C + 云中继**：
-  浏览器执行端在用户侧（Pattern C），但 MCP server 在云端、跨设备、多租户。
+**路线 B，且实现了双控制面**：一个与 CDP `Page` 同接口的抽象，背后可切
+- **裸 CDP**（`cdp.py`），或
+- **扩展 Bridge**（`bridge.py` + `extension/`）：MV3 extension 通过
+  `ws://localhost:9333` 连本地 `bridge_server.py`，在用户真实已登录浏览器里执行；
+  `interceptor.js` 在 `document_start`/`MAIN` world 抢先 hook `fetch`/`XHR`，
+  **直接捕获页面已签名请求的响应**（§2 子轴二的范例）。
+
+两种后端共享同一套上层逻辑，而这套逻辑几乎是 **xiaohongshu-mcp(Go) 的逐文件 Python
+移植**（每个文件 docstring 标注"对应 Go xiaohongshu/xxx.go"，连 `human.py` 的延迟
+常量都对应 Go 版）。额外深度：`risk_analyzer.py` 解析拦截到的 APM 上报，输出结构化
+**风控报告**（risk_level / detection_axes / 服务端判定）——七个里**唯一把"读取
+平台对你的风控判定"做成一等公民**的。接口是 5 个 `SKILL.md`（auth/publish/explore/
+interact/content-ops）+ 统一 CLI。
+
+### 5.8 socai（本仓库）— 内容研究 + 多模态富集的集成产品
+
+放在一起对比才看得清 socai 的不同：
+- **路线 B：裸 CDP（Rust）+ 读 `__INITIAL_STATE__` + 附着用户真实 Chrome**
+  （`discover_existing_chrome_endpoint`，需用户开 `--remote-debugging-port`，配套
+  `chrome://inspect` 引导）。JS 抽取器集中在 `page_scripts.js`（37KB），经
+  `Runtime.evaluate` 注入、返回 JSON——这与 xiaohongshu-mcp/autoclaw 的取数哲学
+  同类。
+- **能力重心是"读/研究"而非"写/运营"**：`search_notes`、`topic_scan`、
+  `extract_note`、`extract_comments`、`extract_profile`、`scroll_in_note`、
+  `collect_carousel_images` 等，**目前没有发布/点赞/评论的写工具**。这与
+  publish 重的 MCP/Skill 工具是镜像关系（呼应 §4）。
+- **唯一做多模态富集的**：图片 OCR、vision 描述，视频转写/摘要/抽帧描述
+  （entity 字段里的 `ocr_text`/`vision_description`/`transcript`/`frame_descriptions`）。
+  其它六个都只取文本与计数，socai 把"把一条笔记读懂"做到了内容层。
+- **三种交付面合一**：agentless 工具 CLI（daemon 常驻、跨调用温热）、agent TUI、
+  Tauri 桌面应用。**它是唯一的"集成产品"**，其余六个都是"工具面"（库/CLI/server/
+  扩展）。
+
+更系统的 socai 对比见 §11。
 
 ---
 
-## 6. 横切轴
+## 6. 能力、封装与解耦度
 
-这些项目在多个独立轴上分布。下面几张表是理解全局的关键。
+把"功能丰富度 × 封装形式 × 底层与上层的耦合度"放在一起看，是评估这些项目工程
+成熟度的关键维度。
 
-### 6.1 轴 1 — 技术路线 × 是否需要浏览器
-
-| 项目 | 路线 | 运行时浏览器 | 怎么读数据 | 怎么写操作 |
+| 项目 | 功能广度 | 上层封装形式 | 底层技术 | 上下层解耦度 |
 |---|---|---|---|---|
-| MediaCrawler | A（曾 B） | 可选（CDP 模式） | httpx + 纯算法签名 | 几乎只读 |
-| xiaohongshu-mcp | B-CDP(go-rod) | headless | `__INITIAL_STATE__` | DOM 点击 |
-| XiaohongshuSkills | B-裸 CDP | 自起带调试端口 | `__INITIAL_STATE__`/DOM | DOM 点击 |
-| xiaohongshu-cli | A | 否 | httpx + xhshow | API 直发 |
-| ReaJason/xhs | A（推荐配 B 签名） | 取决于 sign | requests | API 直发 |
-| autoclaw/xhs-skills | C（或 B-CDP） | 用户真实浏览器 | fetch 拦截 | DOM/扩展执行 |
-| x-mcp | C + 云中继 | 用户真实浏览器 | 扩展执行 | 扩展执行 |
+| ReaJason/xhs | 中（读+发布） | Python 库 | requests + **可插拔签名** | **高**：签名外包给调用方 |
+| MediaCrawler | **高**（7 平台+存储+词云+WebUI） | 库/CLI/WebUI | httpx + 委托 xhshow | 高：签名收敛到 xhshow，平台层插件化 |
+| xiaohongshu-cli | 高（读/互动/发布/通知） | CLI（YAML 信封） | 委托 xhshow + 反检测 | **高**：CLI 极薄，逆向全在 xhshow |
+| xiaohongshu-mcp | 高（读+全套写+定时/带货） | MCP server(HTTP) | go-rod + DOM | 中：业务逻辑与 go-rod 较耦合 |
+| x-mcp | 高（镜像上一项） | 云 MCP + 扩展 | 闭源扩展 | 不可见（闭源） |
+| XiaohongshuSkills | 高（发布/运营/数据看板） | CLI + SKILL.md | 裸 CDP（**单文件 192KB**） | **低**：巨型单文件，逻辑与 CDP 缠绕 |
+| autoclaw | 高（含风控分析） | SKILL.md×5 + CLI | **双后端**(CDP/扩展) 同接口 | **高**：Page 接口抽象掉了传输层 |
+| **socai** | 中（读/研究为主）+ **多模态** | CLI+TUI+桌面 | 裸 CDP(Rust) + JS 抽取器契约 | **高**：JS 抽取器与 Rust 注入/校验分层 |
 
-### 6.2 轴 2 — 谁是消费者（对应参考文档 §5.1）
+几条值得展开的观察：
 
-| 消费者 | 框架/工具自己驱动 | 开发者驱动 | 外部 AI agent 驱动 | 非技术终端用户 |
-|---|---|---|---|---|
-| MediaCrawler | ✅ 批量爬虫主模式 | ✅ 可当库 | ❌ | ⚠️ 有 WebUI |
-| xiaohongshu-mcp | ❌ | ✅ 自部署 | ✅ MCP | ⚠️ 需会部署 |
-| XiaohongshuSkills | ❌ | ✅ CLI | ✅ SKILL.md | ✅ CLI 易用 |
-| xiaohongshu-cli | ❌ | ✅ CLI 主模式 | ✅ YAML 信封 | ✅ |
-| ReaJason/xhs | ❌ | ✅ **只此一种**（库） | ❌ | ❌ |
-| autoclaw/xhs-skills | ❌ | ✅ CLI | ✅ **主模式** SKILL.md | ✅ 装扩展即可 |
-| x-mcp | ❌ | ❌ | ✅ MCP | ✅ **核心人群** |
+- **解耦度最高的范式有两种**：(a) 把易腐的逆向收敛成独立库（xhshow → MediaCrawler/
+  xiaohongshu-cli），(b) 把"传输/控制面"抽象成统一接口（autoclaw 的 CDP/扩展双
+  后端共享 `Page`；socai 的 JS 抽取器 vs Rust 宿主分层）。两者都让"最易变的那层"
+  可以独立替换而不动上层。
+- **解耦度最低的是 XiaohongshuSkills 的 192KB 单文件**：功能很全，但业务逻辑、
+  选择器、CDP 调用、等待策略全缠在一起，改版时定位成本高。这是"快速堆功能"与
+  "可维护"之间的典型取舍。
+- **功能广度 ≠ 工程质量**：x-mcp/xiaohongshu-mcp 功能最全，但前者闭源、后者与
+  go-rod 较耦合；socai 功能面更窄（专注读），但在内容理解（多模态）和交付形态
+  （产品）上做了别人没做的纵深。**广度与纵深是两种不同的投入方向。**
+- **封装形式正在收敛到 "agent 工具面"**：MCP server（xiaohongshu-mcp/x-mcp）和
+  SKILL.md（XiaohongshuSkills/autoclaw）是 2025–2026 的两种主流外壳。socai 同时
+  具备 CLI 工具面**和**集成产品，是形态上最完整的。
 
-注意一条清晰的时间梯度：**越早的项目越偏"开发者/库"，越晚的越偏"AI agent /
-终端用户"**。这就是 §4 那次转向的量化体现。
+---
 
-### 6.3 轴 3 — 数据流向（读 vs 写）
+## 7. 与通用浏览器/agent 框架的关系
 
-| | 只读爬取为主 | 读写并重 | 写（发布/运营）为主 |
-|---|---|---|---|
-| 项目 | MediaCrawler、ReaJason/xhs | xiaohongshu-cli、xiaohongshu-mcp、autoclaw | XiaohongshuSkills、x-mcp |
+把这批 XHS 工具放回姊妹篇那张"通用框架"地图上，能看清它们站在哪：
 
-早期=读（数据分析），晚期=写（账号运营）。
+- **没有一个用 browser-use / Stagehand 这类 agent 框架。** 它们要么是逆向 HTTP
+  （根本不碰浏览器框架），要么**手写浏览器控制**。原因很实际：browser-use/Stagehand
+  是"通用网页 agent"，而 XHS 工具需要的是**针对单站点写死的确定性流程**（点这个
+  筛选标签、读这个 `__INITIAL_STATE__` 路径），通用框架的"让 LLM 看页面再决定"
+  反而是负担。
+- **控制面映射到通用世界**：
+  - go-rod（xiaohongshu-mcp）≈ **Go 版 Puppeteer**：CDP 直连、单语言、无 auto-wait
+    的重封装。
+  - 裸 CDP（XiaohongshuSkills、autoclaw、**socai**）≈ 姊妹篇里的 **agent-browser /
+    browser-harness 阵营**（CDP-direct，自建原语，轻量可预测）。
+  - 扩展（autoclaw、x-mcp）≈ **browser-harness 附着真实 Chrome** 的思路落地——
+    "继承你已登录的全部会话"，反检测最好。
+  - Playwright（MediaCrawler 历史）≈ 姊妹篇的 **Playwright-wrapper 阵营**。
+- **一个一致的行业风向**：姊妹篇指出"连最强的 Playwright-wrapper 团队都转向了
+  CDP-direct（browser-harness）"。这批 XHS 工具里**活跃增长的全是 CDP/go-rod/
+  扩展（CDP-direct 系），而纯逆向老兵停更**——是同一股潮水在垂直站点上的体现。
+- **socai 的坐标**：CDP-direct + 附着真实 Chrome + 不内置"让 LLM 看页面"的通用
+  agent，而是**站点专用的确定性工具** + 独立的 agent loop（`core/src/agent/`）。
+  这等于把 agent-browser 的"确定性原语 CLI"和 browser-harness 的"附着真实浏览器"
+  两个优点，收进了一个**站点垂直 + 产品化**的盒子里。
 
-### 6.4 轴 4 — 接口形态（agent 工具面）
+---
 
-| 形态 | 项目 | 对应参考文档 |
+## 8. 与灰产群控的技术分界
+
+这批开源工具与"大规模灰产/自动化操作小红书"在技术栈上分属两个世界，划清边界有助于
+理解它们的能力上限：
+
+| 维度 | 本批开源工具 | 灰产群控 |
 |---|---|---|
-| Python 库（import） | ReaJason/xhs | SDK |
-| 批量爬虫 + WebUI | MediaCrawler | Pattern D |
-| 人/agent 两用 CLI | xiaohongshu-cli、XiaohongshuSkills | agent CLI / primitive CLI 之间 |
-| 自托管 MCP server（HTTP） | xiaohongshu-mcp | Pattern B/A |
-| 云端 MCP server（HTTP，多租户） | x-mcp | 无直接对应（云中继） |
-| SKILL.md 技能 | XiaohongshuSkills、autoclaw、x-mcp | — |
-| 浏览器扩展 | autoclaw、x-mcp | Pattern C |
+| 协议层 | **Web 端**（`xiaohongshu.com`，x-s 签名） | 多为 **App 端协议**（抓包逆向 APK、protobuf、更强加固） |
+| 设备 | 单台真机/单浏览器 | **真机农场（群控/云控）**、改机框架、Xposed/hook 改设备指纹 |
+| 账号 | 单账号或少量 | **账号池**（成百上千）+ 接码平台（短信验证码）+ 养号 |
+| 网络 | 本机 IP 或少量代理 | **住宅代理池**、4G 卡池、一机一 IP |
+| 反检测 | header/指纹对齐、行为抖动 | 改机指纹、传感器数据伪造、轨迹回放、整机环境隔离 |
+| 目标 | 个人研究/运营/学习 | 刷量、养号、批量发广告、数据倒卖 |
+| 工程形态 | 开源库/CLI/MCP | 闭源 SaaS、按量收费、对抗团队持续运营 |
+
+关键区别有三：**(1) Web vs App**——开源工具几乎都打 Web 端（资料多、签名相对可逆），
+灰产更常啃 App 协议（加固强、价值高）；**(2) 单点 vs 农场**——开源工具是"一个真人
+的自动化"，灰产是"上千个假人的工业化"，后者的核心资产是设备/账号/IP 的**规模化
+供给与改机能力**，而非签名本身；**(3) 对抗强度**——灰产与平台风控是全职军备竞赛，
+开源工具只是"尽量像真人"。**本批工具（含 socai）都明确站在"个人尺度、真人身份"
+这一侧**，这既是合规姿态，也决定了它们不会、也不应该去碰改机/账号池那套。
 
 ---
 
-## 7. 进程生命周期与部署形态
+## 9. 封号风险与使用成本
 
-把参考文档 §6 的五种"Chrome 住在进程树哪里"模式套到这些项目上：
+小红书自动化用户真正关心的只有两件事：**会不会被封号**，以及**装起来用起来有多
+麻烦**。其余（法律免责声明、"作者建议用测试号"之类）都不是有区分度的信息，这里
+不展开。
 
-| 模式 | 含义 | 本生态中的项目 |
-|---|---|---|
-| **A 守护进程** | 长驻 daemon 持温热浏览器 | xiaohongshu-mcp（HTTP 服务长驻）、XiaohongshuSkills（自起调试端口 Chrome） |
-| **B MCP server** | 作为 agent 子进程，stdio/HTTP | xiaohongshu-mcp（HTTP 形态可被 agent 接入） |
-| **C 附着真实浏览器** | 连用户日常已登录 Chrome | autoclaw（扩展 Bridge）、x-mcp（扩展） |
-| **D 单体 CLI** | agent loop / 任务跑在 CLI 进程里 | MediaCrawler（爬虫批处理）、xiaohongshu-cli、XiaohongshuSkills（CLI 短连接） |
-| **E 集成产品** | Chrome 生命周期=应用窗口 | （本批均无；**这正是 socai 的差异化空间**） |
-| **C + 云中继** | 执行端在用户浏览器、server 在云 | x-mcp（参考文档未覆盖的新形态） |
+### 9.1 封号/检测风险
 
-两个值得强调的点：
+封号风险**主要由两个因素决定**，且与"用哪条路线"强相关：
 
-- **没有一个开源项目落在 Pattern E（集成产品）。** 它们全是库 / CLI / server /
-  扩展——都是"工具面"，没有一个是"用户打开来干活的产品"。这与参考文档 §7.4 的
-  结论一致：**库做不出集成产品，因为它们是库不是产品。**
-- **Cookie 永远在磁盘，daemon 只省启动成本。** 无论 xiaohongshu-mcp 的 cookie 文件、
-  XiaohongshuSkills 的按账号 user-data-dir、还是扩展复用浏览器 profile——登录态都
-  落在磁盘/浏览器 profile 里，daemon/server 的价值是让浏览器保持温热，不是保存状态。
-  （参考文档附录 A："Cookies live on disk. Daemons save you the boot cost.")
+1. **请求是否像真人发的**——纯 HTTP（路线 A）缺 `b1`、缺真浏览器的 TLS/JS 运行时
+   指纹，最易被识别；让真浏览器代签（路线 B）天然带齐全部环境特征，检测风险显著
+   更低。**这是路线 A 停更、路线 B 兴起的深层原因之一。**
+2. **操作类型与频率**（见 §4）：读 < 互动 < 发布；低频 < 高频。**封号几乎都发生在
+   高频写**，与选哪条路线关系不大。
 
----
+据此给一个**封号风险排序**（低→高）：
 
-## 8. 风险模型
+- **最低**：附着真实浏览器 + 只读（socai 当前形态；autoclaw 读模式）。你就是真用户
+  在看内容。
+- **较低**：浏览器路线的适度写（xiaohongshu-mcp / XiaohongshuSkills，控频前提下）。
+- **中**：浏览器路线的高频写（任何工具批量发布/互动都危险）。
+- **较高**：纯 HTTP 逆向（ReaJason/xhs、xiaohongshu-cli）——指纹/节奏最易露馅，故
+  xiaohongshu-cli 才不得不重金做高斯抖动+冷却来补救。
 
-小红书工具的风险有两个**正交**维度，常被混为一谈：
+> 一句话：**封号风险 ≈ f(请求像不像真人, 写操作的频率)**。路线选择影响前者，使用
+> 克制影响后者。
 
-- **检测/封号风险**（平台会不会发现并惩罚这个账号）
-- **blast radius / 安全风险**（这个工具能动你多少东西、泄露面多大）
+### 9.2 使用成本（装起来/用起来麻不麻烦）
 
-| 项目 | 检测/封号风险 | blast radius | 说明 |
-|---|---|---|---|
-| MediaCrawler | 中（靠代理池+频控） | 低（独立 cookie/指纹） | 爬虫规模化，主要风险是 IP/账号被限流 |
-| xiaohongshu-cli | **较高** | 低 | 纯 HTTP 最易被指纹/频率识别，故重金做高斯抖动+冷却 |
-| ReaJason/xhs | 较高 | 低 | 同上，且已停维护，签名易失效 |
-| xiaohongshu-mcp | 中 | 中（独立 headless profile + cookie 文件） | 真浏览器降低检测，但仍是"非日常环境" |
-| XiaohongshuSkills | 中 | 中（自起 Chrome，多账号隔离） | 强调测试号+控频+人工复核 |
-| autoclaw/xhs-skills | **低**（你就是真用户） | **高**（扩展能动全量登录态） | 反检测最好，但安全暴露面最大；自带 risk_analyzer 监测 |
-| x-mcp | **低** | **高 + 云信任** | 同上，且数据要经过第三方云中继，多一层信任假设 |
+这是用户唯一会关心的另一个角度，差异很大：
 
-一条贯穿全表的**权衡铁律**（与参考文档 browser-harness 的取舍同构）：
+| 起步成本 | 项目 |
+|---|---|
+| **最低**：装个扩展/连个云即用，无需命令行 | x-mcp（Chrome 商店一键 + 一行 `claude mcp add`） |
+| **低**：装扩展 + 本地起一个 bridge | autoclaw |
+| **中**：要会跑 Python/Go 或 Docker、要开浏览器调试端口 | xiaohongshu-mcp、XiaohongshuSkills、socai |
+| **偏高**：要懂逆向/cookie 提取、配代理，且随时可能因停更而失效 | MediaCrawler、xiaohongshu-cli、ReaJason/xhs |
 
-> **检测风险与 blast radius 此消彼长。** 你越想"不被平台发现"（用真实浏览器、真实
-> 账号、真实指纹），就越要把更大的权限/暴露面交给工具；你越想"隔离安全"（独立
-> profile、纯 HTTP），就越容易被平台风控盯上。没有免费午餐。
-
-x-mcp 还引入了**第三个风险层**：云中继。你的浏览器操作指令要经过 aredink.com 的
-服务器。即便其隐私政策声称"服务端不存个人数据"，这仍是一个比"纯本地"更强的信任
-假设——这是 SaaS 形态为了"零部署"必然付出的代价。
-
-此外，**所有这些工具都游走在小红书用户协议的灰色地带**：自动化操作、数据采集本身
-就可能违反平台条款。MediaCrawler / ReaJason/xhs 在 README 里都放了显著的"仅供学习
-研究、勿商用、勿大规模爬取"免责声明，这不是客套，而是这类项目的共同法律姿态。
+**socai 当前要求用户用 `--remote-debugging-port` 启 Chrome**，属"中等成本"；这是
+"附着真实浏览器以求低封号风险"必然付出的便利性代价（CDP 路线无扩展依赖，但需要
+调试端口）。是否提供更省事的引导（甚至可选的扩展/独立 profile 模式）是产品取舍，
+见 §11。
 
 ---
 
-## 9. 生态血缘
+## 10. 生态血缘与演进线
 
-七个项目不是孤立的，它们之间有清晰的"祖孙"与"近亲"关系：
+### 10.1 血缘图
 
 ```
-         ReaJason/xhs (2023/4, 鼻祖)
-          │  定义数据模型、签名雏形、致谢往来
-          ▼
-   NanmiCoder/MediaCrawler (2023/6)
-          │  早期共享签名思路
-          │
-          ▼  ……纯算法签名沉淀为公共依赖……
-     Cloxl/xhshow (签名库, MIT)
-        ╱           ╲
-MediaCrawler        jackwener/xiaohongshu-cli (2026/3)
-(打 patch 修 bug)    (薄封装 xhshow + 反检测)
-
+   ReaJason/xhs (2023/4, 鼻祖：数据模型+签名雏形，可插拔 sign)
+        │ 互相致谢
+        ▼
+   MediaCrawler (2023/6, 多平台)         Cloxl/xhshow (签名公共库, MIT)
+        └────── 现状委托 ──────►  ◄────── 薄封装 ──────┐
+                                                 jackwener/xiaohongshu-cli (2026/3)
 
    xpzouying/xiaohongshu-mcp (2025/8, Go, MCP 标杆)
-        │                    ╲
-        │ 同作者、SaaS 化       ╲ 逐文件 Python 移植 + 扩展化
-        ▼                      ▼
-  xpzouying/x-mcp        autoclaw-cc/xiaohongshu-skills (2026/3)
-  (2025/10, 云+插件)      (双后端: CDP / 扩展 Bridge, SKILL.md)
+        │ 同作者 SaaS 化            ╲ 逐文件 Python 移植 + 扩展化
+        ▼                          ▼
+   xpzouying/x-mcp (2025/10)   autoclaw-cc/xiaohongshu-skills (2026/3)
+   (云 + 闭源扩展)              (CDP/扩展双后端, SKILL.md, 风控分析)
+
+   white0dew/XiaohongshuSkills (2026/2, 独立的裸 CDP 发布工具)
+   socai (CDP-direct + 多模态 + 集成产品)
 ```
 
-关键血缘事实（均有源码佐证）：
+有源码佐证的血缘事实：**xhshow 是逆向路线的事实标准底座**（MediaCrawler/
+xiaohongshu-cli 共用，前者还为它打补丁）；**x-mcp 是 xiaohongshu-mcp 同作者的 SaaS
+化**（原版 README 直接推荐"部署难就用 x-mcp"）；**autoclaw 是 xiaohongshu-mcp 的
+跨语言忠实移植 + 扩展化**（docstring 逐文件对应）。一个有意思的事实：xpzouying 一人
+贡献了生态里两个关键节点，并间接定义了 autoclaw 的移植对象——**MCP 时代的 XHS 工具
+相当程度上是围绕他这套实现长出来的**。
 
-- **ReaJason/xhs 是公共词汇表的源头**：枚举、helper、签名雏形被后来者广泛沿用，
-  MediaCrawler 与它互相致谢。
-- **`xhshow`（Cloxl）是纯算法路线的事实标准**：MediaCrawler 和 xiaohongshu-cli 都
-  依赖它；MediaCrawler 还在 `playwright_sign.py` 给它打 GET 请求 `a3_hash` 的补丁
-  （引用了 xhshow 的 issue #104）。**逆向的维护负担已社区化。**
-- **x-mcp 是 xiaohongshu-mcp 的同作者 SaaS 化**：xpzouying 在 xiaohongshu-mcp 的
-  README 里直接推荐"部署有困难就用我的 x-mcp，装个扩展即可"。
-- **autoclaw/xiaohongshu-skills 是 xiaohongshu-mcp 的 Python 移植 + 扩展化**：其
-  `scripts/xhs/*.py` 每个文件 docstring 都标注"对应 Go xiaohongshu/xxx.go"，连
-  `human.py` 的延迟常量都对应 Go 版 `feed_detail.go` 里的常量。这是一次**跨语言、
-  换接口形态（Go MCP → Python SKILL.md+扩展）的忠实重实现**。
+### 10.2 演进线（一条主线，不重复展开）
 
-一个有意思的观察：**xpzouying 一个人就贡献了生态里两个关键节点**
-（xiaohongshu-mcp + x-mcp），并间接催生了第三个（autoclaw 的移植对象）。MCP 时代的
-XHS 工具，相当程度上是围绕他这套实现长出来的。
+四个阶段，每一阶段都是**"消费者变了 → 形态随之重塑"**，与姊妹篇"每代是不同消费者
+重塑同一协议"同构：
 
----
+1. **2023 · 逆向爬数据**——消费者=开发者；目标=只读做分析；过关=自己逆向签名。
+   （xhs、MediaCrawler 诞生）
+2. **2024–25 上半 · 浏览器自动化 + 反检测**——纯逆向难维护，转向"真浏览器代签" +
+   stealth/CDP/指纹对齐。（MediaCrawler 加 CDP 模式）
+3. **2025 下半 · MCP**——消费者=AI agent；目标从读转向**写（发布/互动）**；形态=
+   MCP server。（xiaohongshu-mcp，随即 x-mcp SaaS 化）
+4. **2026 · Skill / 真人身份**——形态=SKILL.md 技能；执行环境=用户真实浏览器
+   （扩展/附着）；取数升级到 fetch 拦截。同期**逆向老兵停更**。
+   （XiaohongshuSkills、autoclaw；socai 亦属此代但走"研究+产品"分支）
 
-## 10. 历史演进的叙事线
-
-把时间轴拉直，整个生态的演进和参考文档"每一代都是不同消费者重塑同一协议"的
-叙事完全吻合：
-
-1. **2023 — 逆向签名 / 爬数据时代。** 消费者是开发者。代表：ReaJason/xhs、
-   MediaCrawler 诞生。目标=**只读爬取**做数据分析。怎么过关=**自己逆向签名**
-   （或起浏览器调页面 JS 签）。
-
-2. **2024–2025 上半 — 浏览器自动化 + 反检测时代。** 纯逆向越来越难维护，工具转向
-   "起真浏览器，让页面自己签"，并加 stealth、代理池、CDP 模式、指纹对齐、行为抖动。
-   MediaCrawler 加 CDP 模式即此阶段产物。
-
-3. **2025 下半 — MCP 时代。** 消费者变成 **AI agent**。代表：xiaohongshu-mcp
-   （2025/8）。目标从读转向**读+写（发布/互动）**。接口从库变成 **MCP server**。
-   随即 x-mcp（2025/10）把它 SaaS 化给非技术用户。
-
-4. **2026 — AI Agent Skill / 真人身份时代。** 代表：XiaohongshuSkills（2026/2）、
-   autoclaw/xiaohongshu-skills（2026/3）。接口变成 **SKILL.md 技能**，执行环境变成
-   **用户真实已登录的浏览器**（扩展 Bridge），过关方式变成**拦截页面自己的请求**
-   （连签名都不用看）。与此同时，**逆向路线的老兵集体退场**（xhs、xiaohongshu-cli
-   标注停维护）。
-
-三条贯穿性趋势：
-
-- **从"逆向爬取"到"以真人身份操作"**（A → B → C 路线迁移）。
-- **从"自己造签名"到"让浏览器/页面替我签"乃至"拦截页面的成品"**（维护成本递减、
-  反检测递增、blast radius 递增）。
-- **从"开发者的库"到"AI agent 的工具面"再到"终端用户的零部署 SaaS"**（消费者
-  逐层上移）。
+三条贯穿趋势：**逆向爬取 → 真人身份操作**；**自己造签名 → 让页面代签 → 拦截页面
+成品**（维护成本递减、检测风险递减）；**开发者的库 → agent 的工具面 → 终端用户的
+零部署形态**（消费者逐层上移）。
 
 ---
 
-## 11. 对 socai 的启示
+## 11. socai 的定位与发展方向
 
-把 socai 放进这张地图，几个定位判断会变得清晰：
+### 11.1 socai 在这张地图上的独特坐标
 
-- **socai 的稀缺位置是 Pattern E（集成产品）。** 七个开源项目无一落在这里——它们
-  的天花板都是"成为一个好用的工具面（库/CLI/MCP/扩展）"。socai 作为 Tauri 桌面
-  产品，天花板是"成为用户打开来干活的产品"。这与参考文档 §7.4 的结论一致，是
-  **库永远做不到、只有产品能做到的差异化**。
+把前面所有维度收拢，socai 与这六个工具的关系可以一句话概括：**同属"CDP 直连 +
+附着真实浏览器"的低封号风险阵营，但在三个轴上独一无二**：
 
-- **路线选择上，socai 与 xiaohongshu-mcp / autoclaw 同属"附着真实浏览器 +
-  浏览器自动化"阵营**（`discover_existing_chrome_endpoint` 即 Pattern C 取向），
-  因此**天然规避了逆向签名的军备竞赛**——这一点已被本批两个老兵的"停止维护"
-  反向验证为正确取舍。代价同样是 DOM 改版的维护负担（参见 XiaohongshuSkills 为
-  2026 年 2-3 月创作者中心改版改选择器的经历），socai 的 JS 抽取器契约
-  （`core/src/sites/xhs/`）需要按同样节奏跟进。
+1. **唯一的集成产品**（§5.8、§6）。其余都是工具面（库/CLI/server/扩展），天花板是
+   "成为好用的工具"；socai 是 Tauri 桌面产品，天花板是"用户打开来干活的产品"。
+   这是库做不到、只有产品能占的位置。
+2. **唯一做内容多模态理解**（OCR / vision / 视频转写）。别人停在"取文本+计数"，
+   socai 把"读懂一条笔记"做到内容层——这正是"研究/选题"场景的核心价值。
+3. **读/研究优先，而非发布/运营**（§4、§9）。这让 socai 天然处在**封号风险最低**
+   的象限，也与它的产品叙事（帮你研究小红书内容生态）自洽。
 
-- **值得借鉴的两个具体设计**：
-  1. **autoclaw 的 fetch 拦截读数据**：相比滚动 DOM 抓取，拦截页面自己发出的已签名
-     API 响应更稳、更全、更省 token。socai 的 XHS 数据抽取若还在依赖 DOM/状态读取，
-     可评估"被动拦截网络响应"这一更鲁棒的路径。
-  2. **autoclaw 的 risk_analyzer**：把平台 APM 上报的服务端风控判定解析成结构化
-     风险报告，让 agent/用户能感知"我现在多危险"。对一个要替用户长期运营账号的
-     产品，**风控可观测性**可能是比功能数量更重要的护城河。
+同时，socai 也继承了路线 B 的共同负担：**强依赖 `__INITIAL_STATE__`/DOM，改版即需
+跟进**——`core/src/sites/xhs/page_scripts.js` 的抽取器要按小红书改版节奏维护，这点
+与 XiaohongshuSkills 为创作者中心改版改选择器是同一类工作。
 
-- **agent 工具面是否要补齐？** xiaohongshu-mcp / x-mcp 证明了"把 XHS 能力暴露成
-  MCP"有真实需求。参考文档 §7.5 已把"socai 是否对外提供 MCP server"列为开放
-  问题——本生态的现状给的信号是：**MCP/SKILL.md 工具面正在成为这一品类的标配**，
-  不提供等于把"被 Claude Code / Codex 直接调用"的入口让给竞品。
+### 11.2 可借鉴这批项目的三个具体点
 
-- **统一信封值得抄**：xiaohongshu-cli 的 `ok/schema_version/data/error` +
-  枚举错误码 + 非 TTY 默认 YAML，是把 CLI 做成"agent 一等公民"的成熟范式，与
-  socai 已有的 agentless 工具 CLI（`search_notes`/`topic_scan` 等）方向一致，可
-  对照查漏。
+- **fetch/Network 拦截取数（来自 autoclaw）**：socai 现在读 `__INITIAL_STATE__` +
+  DOM 兜底；可评估用 CDP 的 `Fetch`/`Network` 域**被动拦截小红书已签名响应**，比
+  滚动抓 DOM 更稳、更全、更省 token，且改版鲁棒性更好。
+- **风控可观测性（来自 autoclaw 的 risk_analyzer）**：把小红书 APM 上报的服务端
+  风控判定解析出来，让产品/用户实时感知"当前账号有多危险"。对一个要长期陪用户用
+  账号的产品，**风控仪表盘可能比多一个功能更有护城河价值**。
+- **统一结构化信封（来自 xiaohongshu-cli）**：`ok/schema_version/data/error` +
+  枚举错误码 + 非 TTY 默认 YAML，是把 CLI 做成"agent 一等公民"的成熟范式，可对照
+  socai 的 agentless 工具 CLI（`search_notes`/`topic_scan`）查漏。
 
----
+### 11.3 结合 2026 下半年 agent 趋势的发展方向
 
-## 附录 A — 值得记住的框架式表述
+把 socai 放到当下（2026 年中）的 agent 技术潮流里，有几条值得考虑的演进路径：
 
-- *"所有小红书工具的差异，本质上都是签名+风控这道关卡的不同绕法。"*
+- **暴露 MCP / Skill 工具面，把"产品"也变成"平台"。** xiaohongshu-mcp/x-mcp/
+  autoclaw 已证明"被 Claude Code、Codex 直接调用 XHS 能力"是真实需求，MCP 与
+  SKILL.md 正在成为这一品类的标配。socai 已有 agentless 工具 daemon，**把它包成一个
+  MCP server（或导出 SKILL.md）几乎是顺手的事**，却能让 socai 既是产品、又是外部
+  agent 的工具供给侧。不提供，等于把"被外部 agent 调用"的入口让给竞品。
 
-- *"'谁来生成 x-s'这一个问题，几乎决定了一个项目的全部命运。"*
+- **借鉴 browser-harness 的"自扩展工具"思路。** 姊妹篇里 browser-harness 最激进的
+  设计是：agent 遇到缺失能力时**自己写一个新 helper 并持久化**。socai 的站点工具
+  目前是固定且经审计的；可以考虑一个**受控的自扩展层**——让 agent 在遇到新页面
+  形态/新字段时，提议一个新的 JS 抽取片段，经校验后纳入 `page_scripts.js`。这能把
+  "改版即坏"的被动维护，部分转成"agent 协助自愈"。
 
-- *"最聪明的姿势不是逆向签名，而是让平台自己的 JS 替你把签名这件脏活干完——
-  扩展只负责把成品读走。"*（autoclaw 的 fetch 拦截）
+- **借鉴 agent-browser 的"ref 化确定性原语"。** 当 socai 未来要做写操作（发布/
+  互动）时，与其让 LLM 直接点 DOM（脆且不可预测），不如沿用 agent-browser 那套
+  "snapshot → 给元素打 `@ref` → 按 ref 确定性操作"的范式，既稳定又可审计——这对
+  封号风险高的写操作尤其重要。
 
-- *"纯逆向是一场无尽的军备竞赛；本批两个逆向老兵都标注了'已停止维护'，而活跃的
-  全是浏览器自动化/扩展路线。"*
+- **多模态富集 × sub-agent 编排。** socai 已有的 OCR/vision/视频转写，天然适合
+  做成可并行的 sub-agent 流水线（一条笔记 = 取文本 + OCR 配图 + 转写视频 + 聚合
+  摘要）。结合 2026 的多 agent 编排趋势，"研究一个话题"可以从"串行读 N 条"升级为
+  "并行深读 N 条并交叉分析"。
 
-- *"检测风险与 blast radius 此消彼长。想不被发现就得交出更大权限；想隔离安全就更
-  容易被风控盯上。没有免费午餐。"*
-
-- *"逆向的维护负担已经社区化——它沉淀成了 xhshow 这个需要被大家共同打补丁的公共
-  依赖。"*
-
-- *"消费者逐层上移：开发者的库 → AI agent 的工具面 → 终端用户的零部署 SaaS。"*
-
-- *"七个开源项目无一是集成产品。库做不出产品，因为它们是库。这正是 socai 的位置。"*
-
-- *"Cookie 永远在磁盘，daemon/server 只省启动成本，不保存状态。"*（沿用参考文档）
-
----
-
-## 附录 B — 待验证的开放问题
-
-- **小红书签名算法的当前版本** — `x-s-common` 模板里的 `x4`（如 "4.86.0" /
-  "4.74.0"）和 `s0`（3/5）在各项目里取值不同，反映它们逆向时所对标的 Web 版本不同。
-  值得追踪当前线上版本号，判断哪些纯算法工具其实已经过期。
-
-- **`window.__INITIAL_STATE__` 的稳定性** — xiaohongshu-mcp/autoclaw 重度依赖它读
-  数据。小红书若改 SSR/水合结构（或转向纯 CSR），这条路会和 DOM 选择器一样脆。
-  值得对比 fetch 拦截（autoclaw interceptor.js）相对它的鲁棒性优势。
-
-- **x-mcp 云中继的真实数据面** — 闭源，仅有隐私政策的声明。"服务端不存个人数据"
-  到底覆盖哪些字段、cookie/操作指令是否过云，需要抓包验证才能给企业用户结论。
-
-- **autoclaw ↔ xiaohongshu-mcp 的同步成本** — 既然 autoclaw 是 Go 版的逐文件移植，
-  当 xiaohongshu-mcp 改版（如适配新 DOM）时，autoclaw 需要多久跟进？这关系到"移植
-  型项目"的可持续性。
-
-- **socai 的 fetch 拦截可行性** — socai 走 CDP-direct，理论上可用 `Fetch`/`Network`
-  域被动拦截小红书已签名的响应（类似 autoclaw 在扩展里做的）。值得评估这相对当前
-  抽取器契约的稳定性与 token 成本收益。
-
-- **MediaCrawler Pro 的闭源走向** — 开源版主推"非商业学习"，Pro 版去 Playwright、
-  加断点续爬/多账号/内容解构 agent。这条"开源引流、闭源变现"的路径，是数据采集类
-  项目的典型商业模式，值得作为生态商业化样本持续观察。
+- **守住"低封号风险"的产品边界。** 在所有"加功能"的诱惑里，socai 最该守住的是
+  §9 的结论：**封号风险主要来自高频写**。作为研究型产品，保持"读为主、写克制、
+  附着真人浏览器"的姿态，本身就是相对竞品（发布/批量互动重）的一个差异化安全优势——
+  不要为了功能数量把它丢掉。
