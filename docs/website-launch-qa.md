@@ -12,9 +12,9 @@ Status: **website launch checks passed on production**, with one release-artifac
 - Latest GitHub release metadata matches the website download target.
 - The latest DMG was downloaded through `https://socai.io/download`; its SHA-256 matches the GitHub Release digest.
 - The mounted `socai.app` is code-signed and accepted as a notarized Developer ID app.
-- The DMG container itself is **not notarized**; tracked separately in [#40](https://github.com/tonyc-ship/socai/issues/40).
+- The DMG container itself is **not notarized**; tracked separately in [#40](https://github.com/socai-io/socai/issues/40).
 - A Lighthouse accessibility contrast issue was found in the app mock window title, fixed, deployed, and re-tested.
-- Vercel Git preview deployments remain blocked until a Vercel/GitHub account owner connects the GitHub login/integration, as documented in [#33](https://github.com/tonyc-ship/socai/issues/33).
+- Vercel Git preview deployments remain blocked until a Vercel/GitHub account owner connects the GitHub login/integration, as documented in [#33](https://github.com/socai-io/socai/issues/33).
 
 ## Build and config validation
 
@@ -70,7 +70,7 @@ Results:
 | `https://www.socai.io/` | Redirect to canonical host | Passed; `HTTP/2 308`, `location: https://socai.io/` |
 | `https://socai.io/download` | Redirect to latest universal DMG | Passed; `HTTP/2 307`, GitHub latest DMG location |
 | `https://socai.io/download/macos` | Redirect to latest universal DMG | Passed; `HTTP/2 307`, GitHub latest DMG location |
-| `https://socai.io/github` | Redirect to repo | Passed; `HTTP/2 307`, `location: https://github.com/tonyc-ship/socai` |
+| `https://socai.io/github` | Redirect to repo | Passed; `HTTP/2 307`, `location: https://github.com/socai-io/socai` |
 | `https://socai.io/robots.txt` | HTTPS 200 | Passed |
 | `https://socai.io/sitemap.xml` | HTTPS 200 | Passed |
 | `https://socai.io/social-card.png` | HTTPS 200 image | Passed |
@@ -80,7 +80,7 @@ Results:
 GitHub latest release checked with:
 
 ```bash
-gh release view --repo tonyc-ship/socai --json tagName,name,url,assets,publishedAt,isDraft,isPrerelease
+gh release view --repo socai-io/socai --json tagName,name,url,assets,publishedAt,isDraft,isPrerelease
 ```
 
 Current latest release:
@@ -89,7 +89,7 @@ Current latest release:
 - Published: `2026-05-27T09:19:10Z`
 - Asset: `socai-macos-universal.dmg`
 - Size: `14,575,965` bytes (`14.6 MB` decimal)
-- Release asset URL: `https://github.com/tonyc-ship/socai/releases/download/v0.1.2/socai-macos-universal.dmg`
+- Release asset URL: `https://github.com/socai-io/socai/releases/download/v0.1.2/socai-macos-universal.dmg`
 - Digest: `sha256:507ff343cc13b3453346d9d3663bb5e12bbda47507ed7e851b0bf65cfc893309`
 
 Downloaded through the production website route:
@@ -141,7 +141,7 @@ source=Notarized Developer ID
 origin=Developer ID Application: Mingrui Zhang (J9B2NB3X6G)
 ```
 
-Conclusion: the app bundle is signed/notarized, but the DMG container should be notarized/stapled before broader public sharing. Follow-up: [#40](https://github.com/tonyc-ship/socai/issues/40).
+Conclusion: the app bundle is signed/notarized, but the DMG container should be notarized/stapled before broader public sharing. Follow-up: [#40](https://github.com/socai-io/socai/issues/40).
 
 ## Desktop and mobile browser checks
 
@@ -173,7 +173,7 @@ Production Lighthouse after fixes and redeploy:
 - Best Practices: 100
 - SEO: 100
 
-Remaining non-blocking performance notes are mostly related to external font loading/cache lifetime and render-blocking font CSS. Existing issue [#8](https://github.com/tonyc-ship/socai/issues/8) already tracks bundling fonts locally.
+Remaining non-blocking performance notes are mostly related to external font loading/cache lifetime and render-blocking font CSS. Existing issue [#8](https://github.com/socai-io/socai/issues/8) already tracks bundling fonts locally.
 
 ## Rollback and update process
 

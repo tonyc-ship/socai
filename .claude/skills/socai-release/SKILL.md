@@ -10,7 +10,7 @@ Use this skill whenever the task is to create or inspect a socai GitHub Release,
 The command-line release path is the source of truth:
 
 ```bash
-gh workflow run release.yml --repo tonyc-ship/socai --ref main -f release_type=patch
+gh workflow run release.yml --repo socai-io/socai --ref main -f release_type=patch
 ```
 
 A helper script wraps this command, finds the created run, watches it, and prints the resulting release:
@@ -55,7 +55,7 @@ Run from the repo root when possible.
 
 ```bash
 gh auth status --hostname github.com
-gh repo view tonyc-ship/socai --json nameWithOwner,defaultBranchRef,url
+gh repo view socai-io/socai --json nameWithOwner,defaultBranchRef,url
 
 git fetch origin main --tags
 git status --short
@@ -104,13 +104,13 @@ Equivalent raw `gh` path:
 
 ```bash
 gh workflow run release.yml \
-  --repo tonyc-ship/socai \
+  --repo socai-io/socai \
   --ref main \
   -f release_type=patch
 
 sleep 8
 run_id="$(gh run list \
-  --repo tonyc-ship/socai \
+  --repo socai-io/socai \
   --workflow release.yml \
   --branch main \
   --event workflow_dispatch \
@@ -118,7 +118,7 @@ run_id="$(gh run list \
   --json databaseId \
   --jq '.[0].databaseId')"
 
-gh run watch "${run_id}" --repo tonyc-ship/socai --exit-status
+gh run watch "${run_id}" --repo socai-io/socai --exit-status
 ```
 
 Use `minor` or `major` instead of `patch` only when requested.
@@ -145,7 +145,7 @@ or:
 
 ```bash
 gh workflow run release.yml \
-  --repo tonyc-ship/socai \
+  --repo socai-io/socai \
   --ref fix/release-some-branch \
   -f release_type=patch
 ```
@@ -155,20 +155,20 @@ gh workflow run release.yml \
 List recent release runs:
 
 ```bash
-gh run list --repo tonyc-ship/socai --workflow release.yml --limit 10
+gh run list --repo socai-io/socai --workflow release.yml --limit 10
 ```
 
 Watch a run:
 
 ```bash
-gh run watch RUN_ID --repo tonyc-ship/socai --exit-status
+gh run watch RUN_ID --repo socai-io/socai --exit-status
 ```
 
 View details/logs:
 
 ```bash
-gh run view RUN_ID --repo tonyc-ship/socai
-gh run view RUN_ID --repo tonyc-ship/socai --log-failed
+gh run view RUN_ID --repo socai-io/socai
+gh run view RUN_ID --repo socai-io/socai --log-failed
 ```
 
 Common failure notes:
@@ -184,7 +184,7 @@ Common failure notes:
 After a successful production run:
 
 ```bash
-gh release view --repo tonyc-ship/socai \
+gh release view --repo socai-io/socai \
   --json tagName,name,url,isDraft,isPrerelease,publishedAt,assets \
   --jq '{tagName,name,url,isDraft,isPrerelease,publishedAt,assets:[.assets[].name]}'
 ```
@@ -198,10 +198,10 @@ Expected:
 Verify download redirects:
 
 ```bash
-tag="$(gh release view --repo tonyc-ship/socai --json tagName --jq '.tagName')"
+tag="$(gh release view --repo socai-io/socai --json tagName --jq '.tagName')"
 curl -I https://socai.io/download
 curl -I -L --max-time 30 -o /dev/null -w 'code=%{http_code}\nfinal=%{url_effective}\n' https://socai.io/download
-curl -sSI https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg | grep -F "/releases/download/${tag}/socai-macos-universal.dmg"
+curl -sSI https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg | grep -F "/releases/download/${tag}/socai-macos-universal.dmg"
 ```
 
 Expected final URL should resolve through GitHub latest release download and produce a successful response. The visible `socai.io` version is only expected to update after the separate site deployment follow-up.
@@ -209,10 +209,10 @@ Expected final URL should resolve through GitHub latest release download and pro
 Optional artifact check:
 
 ```bash
-tag="$(gh release view --repo tonyc-ship/socai --json tagName --jq '.tagName')"
+tag="$(gh release view --repo socai-io/socai --json tagName --jq '.tagName')"
 mkdir -p "/tmp/socai-release-${tag}"
 gh release download "${tag}" \
-  --repo tonyc-ship/socai \
+  --repo socai-io/socai \
   --pattern socai-macos-universal.dmg \
   --dir "/tmp/socai-release-${tag}" \
   --clobber

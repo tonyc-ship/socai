@@ -35,17 +35,17 @@
     },
     {
       "source": "/download",
-      "destination": "https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg",
+      "destination": "https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg",
       "permanent": false
     },
     {
       "source": "/download/macos",
-      "destination": "https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg",
+      "destination": "https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg",
       "permanent": false
     },
     {
       "source": "/github",
-      "destination": "https://github.com/tonyc-ship/socai",
+      "destination": "https://github.com/socai-io/socai",
       "permanent": false
     }
   ]

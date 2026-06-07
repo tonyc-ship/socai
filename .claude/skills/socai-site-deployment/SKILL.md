@@ -19,7 +19,7 @@ This skill is the source-of-truth deployment runbook. [`../../../docs/website-de
 - Canonical host: `socai.io`
 - `www` behavior: `https://www.socai.io/*` should 308/redirect to `https://socai.io/*`
 - Download route: `https://socai.io/download` redirects to GitHub's latest universal macOS DMG
-- GitHub route: `https://socai.io/github` redirects to `https://github.com/tonyc-ship/socai`
+- GitHub route: `https://socai.io/github` redirects to `https://github.com/socai-io/socai`
 
 Expected Vercel project settings:
 
@@ -146,8 +146,8 @@ Expected first-hop behavior:
 
 - `https://socai.io/` returns `200`.
 - `https://www.socai.io/` returns `308` with `location: https://socai.io/`.
-- `https://socai.io/download` returns a Vercel redirect (`307`) to `https://github.com/tonyc-ship/socai/releases/latest/download/socai-macos-universal.dmg`.
-- `https://socai.io/github` returns a Vercel redirect (`307`) to `https://github.com/tonyc-ship/socai`.
+- `https://socai.io/download` returns a Vercel redirect (`307`) to `https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg`.
+- `https://socai.io/github` returns a Vercel redirect (`307`) to `https://github.com/socai-io/socai`.
 
 Use `-L` only when you want to follow the chain:
 
@@ -162,16 +162,16 @@ Try:
 ```bash
 cd site
 vercel link --yes --scope socai-d83824c8 --project socai-site
-vercel git connect https://github.com/tonyc-ship/socai --scope socai-d83824c8
+vercel git connect https://github.com/socai-io/socai --scope socai-d83824c8
 ```
 
 If Vercel returns:
 
 ```text
-Failed to link tonyc-ship/socai. You need to add a Login Connection to your GitHub account first.
+Failed to link socai-io/socai. You need to add a Login Connection to your GitHub account first.
 ```
 
-then a Vercel/GitHub account owner must connect the GitHub login/integration in the Vercel dashboard, then connect `socai-site` to `tonyc-ship/socai` with root directory `site`.
+then a Vercel/GitHub account owner must connect the GitHub login/integration in the Vercel dashboard, then connect `socai-site` to `socai-io/socai` with root directory `site`.
 
 ## Troubleshooting
 
