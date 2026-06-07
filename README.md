@@ -1,11 +1,10 @@
 # socai
 
-[![release](https://img.shields.io/github/v/release/socai-io/socai?style=flat-square&color=000&label=release)](https://github.com/socai-io/socai/releases/latest)
-[![downloads](https://img.shields.io/github/downloads/socai-io/socai/total?style=flat-square&color=000&label=downloads)](https://github.com/socai-io/socai/releases)
-[![stars](https://img.shields.io/github/stars/socai-io/socai?style=flat-square&color=000&label=stars)](https://github.com/socai-io/socai/stargazers)
-[![platform](https://img.shields.io/badge/platform-macOS-000?style=flat-square)](https://github.com/socai-io/socai/releases/latest)
-[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-000?style=flat-square)](https://github.com/socai-io/socai/blob/main/Cargo.toml)
-[![website](https://img.shields.io/badge/website-socai.io-000?style=flat-square)](https://socai.io)
+[![release](https://img.shields.io/github/v/release/socai-io/socai?style=flat-square&color=blue&label=release)](https://github.com/socai-io/socai/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/socai-io/socai/total?style=flat-square&color=brightgreen&label=downloads)](https://github.com/socai-io/socai/releases)
+[![rust](https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](https://github.com/socai-io/socai/blob/main/LICENSE-APACHE)
+[![website](https://img.shields.io/badge/website-socai.io-blue?style=flat-square)](https://socai.io)
 
 专为小红书优化的 web use agent，执行小红书调研、内容抽取和自定义 agent 任务。
 
