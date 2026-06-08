@@ -4,6 +4,11 @@ The repo has a Rust core (`core/`), a Rust CLI (`cli/`), and a Tauri 2 desktop
 app (`app/`). The Rust core is the active shared implementation for
 CLI/TUI/Tauri.
 
+Build, run, local-dev workflows, and the reference-docs index live in
+[DEVELOPMENT.md](./DEVELOPMENT.md). The [README](./README.md) is user-facing
+only (CLI install + usage, desktop download); keep developer material out of it
+and in DEVELOPMENT.md instead.
+
 ## Rust core — `core/`
 
 - `core/src/agent/`: generic agent loop, LLM providers, run state, tool trait.
