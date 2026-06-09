@@ -13,6 +13,12 @@ pub const XHS_HOME_URL: &str = "https://www.xiaohongshu.com/explore";
 
 const PAGE_SCRIPTS_JS: &str = include_str!("page_scripts.js");
 
+/// How long to wait for the search-results page to actually populate cards
+/// after submitting. The wait polls and returns the instant cards appear, so a
+/// generous ceiling only costs time on genuinely slow loads (e.g. over a VPN) —
+/// the fast path is unaffected.
+const SEARCH_TRANSITION_TIMEOUT_S: f64 = 12.0;
+
 const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "note",
     "noteWithWait",
@@ -30,6 +36,7 @@ const XHS_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
     "noteOpen",
     "comments",
     "commentsWithWait",
+    "scrollFeed",
     "scrollInNote",
     "carouselImages",
     "profileInfo",
@@ -161,6 +168,7 @@ impl<'a> XhsPageRuntime<'a> {
         query: &str,
         filters: Option<&Value>,
         wait_seconds: f64,
+        num_notes: Option<usize>,
     ) -> Result<Value> {
         let keyword = query.trim();
         if keyword.is_empty() {
@@ -179,7 +187,13 @@ impl<'a> XhsPageRuntime<'a> {
             }
         }
         let cards = if ok {
-            self.extract_search_cards().await?
+            match num_notes {
+                // Scroll the feed to lazy-load more cards until we reach the
+                // requested count (or the feed stops growing). `None`/`Some(0)`
+                // keeps the cheap first-page-only behaviour.
+                Some(target) if target > 0 => self.collect_search_cards(target).await?,
+                _ => self.extract_search_cards().await?,
+            }
         } else {
             Vec::new()
         };
@@ -234,7 +248,7 @@ impl<'a> XhsPageRuntime<'a> {
         sleep_ms(150).await;
         self.page.press_key("Enter").await?;
         let state = self
-            .wait_for_search_transition(query, wait_seconds.clamp(0.2, 6.0))
+            .wait_for_search_transition(query, wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S))
             .await?;
         if search_transition_ok(&state, query) {
             return Ok(json!({
@@ -251,7 +265,7 @@ impl<'a> XhsPageRuntime<'a> {
             if x > 0.0 && y > 0.0 {
                 self.page.click(x, y).await?;
                 let state = self
-                    .wait_for_search_transition(query, wait_seconds.clamp(0.2, 6.0))
+                    .wait_for_search_transition(query, wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S))
                     .await?;
                 if search_transition_ok(&state, query) {
                     return Ok(json!({
@@ -298,6 +312,78 @@ impl<'a> XhsPageRuntime<'a> {
         self.ensure_xhs(false).await?;
         let raw = self.expect_array("searchCards", None).await?;
         Ok(parse_cards(&raw))
+    }
+
+    /// Scroll the search feed to lazy-load more cards. By default jumps to the
+    /// document bottom (window-size independent, no hard-coded pixel step); with
+    /// `nudge_up` it instead scrolls back up ~1/10 of a screen to jog XHS's
+    /// infinite-scroll observer when a bottom jump failed to trigger a load.
+    pub async fn scroll_feed(&self, nudge_up: bool) -> Result<Value> {
+        self.ensure_xhs(false).await?;
+        self.expect_object("scrollFeed", Some(&json!({ "nudge_up": nudge_up })))
+            .await
+    }
+
+    /// Poll `extract_search_cards` until the count grows past `baseline` or
+    /// `timeout` elapses; returns the latest cards either way.
+    async fn wait_for_card_growth(
+        &self,
+        baseline: usize,
+        timeout: Duration,
+    ) -> Result<Vec<XhsNoteCard>> {
+        const POLL: Duration = Duration::from_millis(400);
+        let deadline = Instant::now() + timeout;
+        loop {
+            sleep_ms(POLL.as_millis() as u64).await;
+            let cards = self.extract_search_cards().await?;
+            if cards.len() > baseline || Instant::now() >= deadline {
+                return Ok(cards);
+            }
+        }
+    }
+
+    /// Collect search cards up to `target`, scrolling the feed and waiting for
+    /// lazy-loaded cards after each scroll. Stops once we have enough cards or
+    /// the feed stops growing across a few consecutive scrolls (real end of
+    /// results). Returns at most `target` cards in feed order.
+    async fn collect_search_cards(&self, target: usize) -> Result<Vec<XhsNoteCard>> {
+        // XHS sometimes ignores a too-fast jump to the bottom and won't fetch
+        // more, so pause before each jump; if a jump still loads nothing within
+        // SETTLE_TIMEOUT, a small reverse (upward) scroll reliably re-triggers
+        // the lazy load. Give up only after MAX_STALLS rounds where even the
+        // nudge fails (the real end of results).
+        const PRE_SCROLL_DELAY: Duration = Duration::from_millis(1500);
+        const SETTLE_TIMEOUT: Duration = Duration::from_millis(5000);
+        const MAX_STALLS: usize = 3;
+
+        let mut cards = self.extract_search_cards().await?;
+        let mut stalls = 0usize;
+        while cards.len() < target {
+            let before = cards.len();
+
+            // 1) Deliberate pause, then jump to the bottom to request more.
+            sleep_ms(PRE_SCROLL_DELAY.as_millis() as u64).await;
+            self.scroll_feed(false).await?;
+            cards = self.wait_for_card_growth(before, SETTLE_TIMEOUT).await?;
+
+            // 2) Nothing loaded in time — nudge back up to jog the observer and
+            //    wait once more before counting this round as a stall.
+            if cards.len() <= before {
+                self.scroll_feed(true).await?;
+                cards = self.wait_for_card_growth(before, SETTLE_TIMEOUT).await?;
+            }
+
+            if cards.len() <= before {
+                stalls += 1;
+                if stalls >= MAX_STALLS {
+                    break;
+                }
+            } else {
+                stalls = 0;
+            }
+        }
+        cards.truncate(target);
+        Ok(cards)
     }
 
     pub async fn open_note(

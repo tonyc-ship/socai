@@ -132,12 +132,13 @@ pub async fn search_notes_command(
     page: Arc<PageSession>,
     query: &str,
     filters: Option<&Value>,
+    num_notes: Option<i64>,
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         SEARCH_NOTES_COMMAND,
-        search_notes_input(query, filters)?,
+        search_notes_input(query, filters, num_notes)?,
         debug_snapshot,
     )
     .await
@@ -174,13 +175,20 @@ pub async fn extract_note_command(
     .await
 }
 
-fn search_notes_input(query: &str, filters: Option<&Value>) -> anyhow::Result<Value> {
+fn search_notes_input(
+    query: &str,
+    filters: Option<&Value>,
+    num_notes: Option<i64>,
+) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
         "wait_seconds": 2.0,
     });
     if let Some(filters) = filters {
         input["filters"] = filters.clone();
+    }
+    if let Some(n) = num_notes {
+        input["num_notes"] = json!(n.max(1));
     }
     Ok(input)
 }
@@ -402,12 +410,15 @@ impl Tool for SearchNotesTool {
     }
 
     fn description(&self) -> &str {
-        "Search Xiaohongshu for notes matching `query`. Atomic: submits the \
-         search and returns the first results page's cards (id, title, author, \
-         image) without scrolling. Optionally applies search-result `filters` \
-         (omitted groups reset to defaults); each group is single-select. Use \
-         this before `open_note` to pick which note to read; to research a topic \
-         in one call use `topic_scan`."
+        "Search Xiaohongshu for notes matching `query` and return result cards \
+         (id, title, author, likes, cover image). By default reads only the \
+         first results page (~19 cards, no scrolling). Pass `num_notes` to \
+         auto-scroll the feed, lazy-loading more cards until that many are \
+         collected (titles/likes/covers only — note bodies are NOT opened, so \
+         it stays fast). Optionally applies search-result `filters` (omitted \
+         groups reset to defaults); each group is single-select. Use before \
+         `open_note` to pick a note; to read note bodies + comments in one call \
+         use `topic_scan`."
     }
 
     fn input_schema(&self) -> Value {
@@ -416,6 +427,11 @@ impl Tool for SearchNotesTool {
             "properties": {
                 "query": { "type": "string", "description": "Search query (Chinese works fine)" },
                 "filters": search_filters_schema(),
+                "num_notes": {
+                    "type": "integer",
+                    "description": "Scroll to collect at least this many cards (lazy-loaded). Omit for the first page only.",
+                    "minimum": 1
+                },
                 "wait_seconds": {
                     "type": "number",
                     "description": "Extra seconds to wait for cards to load",
@@ -432,9 +448,14 @@ impl Tool for SearchNotesTool {
             .to_string();
         let filters = input.get("filters").filter(|value| !value.is_null()).cloned();
         let wait_seconds = get_f64(&input, "wait_seconds", 2.0);
+        let num_notes = input
+            .get("num_notes")
+            .and_then(Value::as_i64)
+            .filter(|n| *n > 0)
+            .map(|n| n as usize);
         let xhs = XhsPageRuntime::new(&self.page);
         let mut value = xhs
-            .search_notes(&query, filters.as_ref(), wait_seconds)
+            .search_notes(&query, filters.as_ref(), wait_seconds, num_notes)
             .await?;
         if let Some(cards) = value.get_mut("cards") {
             self.history.annotate_cards(cards);
@@ -1074,7 +1095,7 @@ impl Tool for TopicScanTool {
 
         // Filters are applied after the optional tab switch below (tab switch
         // re-runs the search and would drop them), so don't pass them here.
-        let search = xhs.search_notes(&query, None, 2.0).await?;
+        let search = xhs.search_notes(&query, None, 2.0, None).await?;
 
         // Optional tab switch (re-runs the search under the chosen tab), then
         // optional filter application.

@@ -237,9 +237,10 @@ impl DaemonState {
         let result = async {
             let query = required_string(&args, "query")?;
             let filters = args.get("filters");
+            let num_notes = args.get("num_notes").and_then(Value::as_i64);
             let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            search_notes_command(page, &query, filters, debug_snapshot).await
+            search_notes_command(page, &query, filters, num_notes, debug_snapshot).await
         }
         .await;
         self.track_tool_trace(

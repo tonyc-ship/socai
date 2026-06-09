@@ -885,6 +885,35 @@ const SocaiXhsPageScripts = (() => {
     });
   }
 
+  // ── search/feed scroll ───────────────────────────────────────
+  // Window-level scroll used to lazy-load more search cards. Default jumps to
+  // the current document bottom (window-size independent, no hard-coded pixel
+  // step) so the site fetches the next page. With `nudge_up`, instead scrolls
+  // back up ~1/10 of a screen: XHS sometimes ignores a too-fast jump to the
+  // bottom and won't load more, but a small reverse scroll reliably jogs its
+  // infinite-scroll observer. The caller waits for new cards by polling
+  // searchCards.
+  function scrollFeed(opts = {}) {
+    const el = document.scrollingElement || document.documentElement;
+    const before = el.scrollTop;
+    const beforeHeight = el.scrollHeight;
+    if (opts && opts.nudge_up) {
+      const step = Math.max(80, Math.round(window.innerHeight / 10));
+      window.scrollBy({ top: -step, left: 0, behavior: 'instant' });
+    } else {
+      window.scrollTo({ top: el.scrollHeight, left: 0, behavior: 'instant' });
+    }
+    const after = el.scrollTop;
+    return {
+      ok: true,
+      before,
+      after,
+      moved: after !== before,
+      scroll_height: beforeHeight,
+      inner_height: window.innerHeight,
+    };
+  }
+
   // ── modal-internal scroll (Promise-resolved) ─────────────────
   function scrollInNote(opts = {}) {
     const pixels = Number(opts.pixels) || 400;
@@ -958,6 +987,7 @@ const SocaiXhsPageScripts = (() => {
     noteOpen,
     comments,
     commentsWithWait,
+    scrollFeed,
     scrollInNote,
     carouselImages,
     profileInfo,

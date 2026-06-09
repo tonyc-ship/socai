@@ -115,7 +115,7 @@ Current metadata keys:
 | Metadata key | Type | Source CLI flag | Omitted when |
 | --- | --- | --- | --- |
 | `metadata.tab` | string | `topic_scan --tab <value>` | `--tab` is not passed or is empty. |
-| `metadata.num_notes` | number | `topic_scan --num-notes <n>` | `--num-notes` is not passed and the command uses its default. |
+| `metadata.num_notes` | number | `topic_scan` / `search_notes` `--num-notes <n>` | `--num-notes` is not passed. |
 | `metadata.debug_snapshot` | boolean | `--debug-snapshot` | `--debug-snapshot` is not passed / false. |
 
 ### Duration, status, and safe result metrics
