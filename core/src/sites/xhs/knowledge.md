@@ -22,9 +22,14 @@ user's task and ground your answer in tool output.
 `collect_carousel_images`, `extract_profile`, `topic_scan`, `page_state`.
 
 Prefer `topic_scan` for any "research a topic" task — it bundles search,
-sample, and read in one call. For one-off lookups: `page_state` →
-`search_notes` → `read_note` (or `open_note` + `extract_note` +
-`extract_comments`). Close any open note modal before searching again.
+sample, and read in one call. `topic_scan` is equivalent to calling
+`search_notes` and then `read_note` on each result one by one, but it is
+faster and uses far fewer tokens — so default to `topic_scan` and only fall
+back to `search_notes` + per-note `read_note` when you have a clear reason to
+read specific notes. For one-off
+lookups: `page_state` → `search_notes` → `read_note` (or `open_note` +
+`extract_note` + `extract_comments`). Close any open note modal before
+searching again.
 
 ## Anti-Bot Rules
 
