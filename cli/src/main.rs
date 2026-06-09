@@ -1,6 +1,7 @@
 mod daemon;
 mod tracking;
 mod tui;
+mod version;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -72,6 +73,17 @@ enum Command {
         #[arg(long = "debug-snapshot")]
         debug_snapshot: bool,
     },
+    /// Print installed version and latest release status.
+    Version {
+        /// Only print the installed version; do not check GitHub Releases.
+        #[arg(long = "no-check")]
+        no_check: bool,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update the macOS release-binary install to the latest version.
+    Update,
     /// Stop the background socai rust daemon.
     Stop,
     #[command(name = "__daemon", hide = true)]
@@ -92,6 +104,10 @@ async fn main() -> Result<()> {
         tui::run().await?;
         return Ok(());
     };
+    if should_warn_for_update(&command) {
+        version::maybe_warn_if_outdated().await;
+    }
+
     match command {
         Command::SearchNotes {
             query,
@@ -100,8 +116,7 @@ async fn main() -> Result<()> {
             pretty,
             debug_snapshot,
         } => {
-            let mut input =
-                serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
+            let mut input = serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
             if !filter.is_empty() {
                 input["filters"] = Value::Object(parse_filters(&filter)?);
             }
@@ -154,6 +169,10 @@ async fn main() -> Result<()> {
             .await?;
             print_command_result(&result, pretty)?;
         }
+        Command::Version { no_check, json } => {
+            version::print_version_command(no_check, json).await?
+        }
+        Command::Update => version::run_update_command().await?,
         Command::Stop => {
             if daemon::stop_daemon().await? {
                 eprintln!("socai rust daemon stopped");
@@ -182,6 +201,13 @@ fn parse_filters(filters: &[String]) -> Result<serde_json::Map<String, Value>> {
         );
     }
     Ok(map)
+}
+
+fn should_warn_for_update(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Daemon | Command::Update | Command::Version { .. }
+    )
 }
 
 fn print_command_result(result: &Value, pretty: bool) -> Result<()> {
