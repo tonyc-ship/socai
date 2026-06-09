@@ -8,6 +8,7 @@ use serde_json::Value;
 
 #[derive(Parser, Debug)]
 #[command(name = "socai")]
+#[command(version)]
 #[command(about = "socai — XHS-savvy browser agent")]
 struct Args {
     #[command(subcommand)]

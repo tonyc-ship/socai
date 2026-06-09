@@ -13,8 +13,8 @@ and an index of the reference docs.
 
 ### CLI / core
 
-The published install path (`cargo install --path cli`) is documented in the
-README. For day-to-day iteration, build and run from the workspace instead:
+The published install path is documented in the README and prefers the release
+CLI binary. For day-to-day iteration, build and run from the workspace instead:
 
 ```bash
 cargo build                 # build the whole workspace (core + cli)
