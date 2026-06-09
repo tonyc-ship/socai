@@ -26,6 +26,10 @@ socai 有三种用法，内核相同，按你的场景选：
 
 socai 的核心，给 Claude Code、Codex 等 AI agent 提供开箱即用的小红书工具。
 
+
+https://github.com/user-attachments/assets/8aebcded-f365-4f12-b9c4-102cc1fa964d
+
+
 克隆仓库并安装：
 
 ```bash
