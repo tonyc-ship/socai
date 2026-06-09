@@ -3,8 +3,8 @@ use crate::timeline::{agent_event_to_timeline, AgentTaskEventKind, AgentTaskEven
 use anyhow::Result;
 use serde_json::{json, Value};
 use socai_core::agent::{
-    configured_default_model_for, make_run_dir, provider_credential_kind, AgentEvent,
-    CredentialKind, Provider,
+    configured_default_model_for, make_run_dir, provider_credential_kind, resolve_provider,
+    save_default_model, AgentEvent, CredentialKind, Provider,
 };
 use socai_core::runtime::{
     create_llm_provider, ensure_llm_provider_configured, run_agent_task as run_agent_with_tools,
@@ -61,10 +61,11 @@ pub async fn cdp_refresh(_runtime: State<'_, SocaiRuntime>) -> Result<(), String
 pub async fn tool_search_notes(
     runtime: State<'_, SocaiRuntime>,
     query: String,
+    num_notes: Option<i64>,
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · search_notes").await?;
-    let result = search_notes_command(page.clone(), &query, None, false).await;
+    let result = search_notes_command(page.clone(), &query, None, num_notes, false).await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }
@@ -209,6 +210,10 @@ pub async fn agent_save_api_key(provider: String, api_key: String) -> Result<(),
 #[tauri::command]
 pub async fn agent_list_models() -> Result<Vec<Value>, String> {
     use socai_core::agent::PROVIDERS;
+    // The provider that would be used right now (honors the persisted
+    // `defaults.provider`, else first provider with a key). The frontend uses
+    // `is_default` to restore the last-chosen model across relaunches.
+    let default_provider = resolve_provider(None, None).ok();
     let mut out = Vec::new();
     for cfg in PROVIDERS {
         let credential_kind = provider_credential_kind(cfg.provider);
@@ -223,9 +228,21 @@ pub async fn agent_list_models() -> Result<Vec<Value>, String> {
             "default_model": configured_default_model_for(cfg.provider),
             "has_key": credential_kind.is_some(),
             "credential_kind": credential_kind_label,
+            "is_default": default_provider == Some(cfg.provider),
         }));
     }
     Ok(out)
+}
+
+/// Persist the user's model choice so it survives a relaunch. Writes
+/// `defaults.provider` + `defaults.{provider}_model` to `~/.socai/auth.json`.
+#[tauri::command]
+pub async fn agent_set_default_model(provider: String, model: String) -> Result<(), String> {
+    let provider_enum = Provider::from_name(provider.trim())
+        .ok_or_else(|| format!("unknown provider: {provider}"))?;
+    save_default_model(provider_enum, model.trim())
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// Open a web URL in the user's default browser. Tauri's webview does not hand
