@@ -25,6 +25,11 @@ enum Command {
         /// sort, note_type, publish_time, search_scope, distance.
         #[arg(long = "filter", value_name = "GROUP=OPTION")]
         filter: Vec<String>,
+        /// Auto-scroll the feed to collect at least this many cards
+        /// (titles/likes/covers only — note bodies are not opened). Omit for
+        /// the first page only (~19 cards).
+        #[arg(long = "num-notes")]
+        num_notes: Option<i64>,
         #[arg(long)]
         pretty: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
@@ -90,6 +95,7 @@ async fn main() -> Result<()> {
         Command::SearchNotes {
             query,
             filter,
+            num_notes,
             pretty,
             debug_snapshot,
         } => {
@@ -98,12 +104,17 @@ async fn main() -> Result<()> {
             if !filter.is_empty() {
                 input["filters"] = Value::Object(parse_filters(&filter)?);
             }
-            let result = daemon::send_or_spawn(
-                "search_notes",
-                input,
-                daemon::DEFAULT_COMMAND_TIMEOUT,
-            )
-            .await?;
+            if let Some(n) = num_notes {
+                input["num_notes"] = serde_json::json!(n.max(1));
+            }
+            // Scrolling for a large `num_notes` can take a while; give it the
+            // longer budget rather than the default single-action timeout.
+            let timeout = if num_notes.is_some() {
+                daemon::LONG_COMMAND_TIMEOUT
+            } else {
+                daemon::DEFAULT_COMMAND_TIMEOUT
+            };
+            let result = daemon::send_or_spawn("search_notes", input, timeout).await?;
             print_command_result(&result, pretty)?;
         }
         Command::TopicScan {

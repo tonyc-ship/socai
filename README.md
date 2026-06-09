@@ -37,8 +37,8 @@ cargo install --path cli
 常用命令：
 
 ```bash
-socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个获取帖子
-socai search_notes "运营爆款思路" --filter sort=最新                          # 只打开搜索结果页
+socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个打开帖子，获取内容
+socai search_notes "运营爆款思路" --num-notes 100 --filter sort=最新          # 只打开搜索结果页，拿帖子标题/点赞/封面，不读正文
 socai extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
 socai stop                                                                 # 停止 daemon（关闭工具标签页）
 ```
@@ -52,7 +52,10 @@ Options:
   `distance` (不限/同城/附近). Omitted groups reset to default.
   e.g. `--filter publish_time=一天内 --filter note_type=图文`
 - `--tab <TAB>` — search tab to switch to, `topic_scan` only (`全部` / `图文` / `视频` / `用户`).
-- `--num-notes <N>` — notes to read, `topic_scan` only (scrolls only if the first page holds fewer).
+- `--num-notes <N>` — `topic_scan`: notes to read (opens each, body + comments).
+  `search_notes`: cards to collect by auto-scrolling (titles/likes/covers only,
+  no bodies — stays fast). Both scroll only if the first page holds fewer; omit
+  for the first page only (~19).
 - `--pretty` — indented JSON (any tool command).
 - `--debug-snapshot` — record DOM + a11y tree + screenshots per page change.
 

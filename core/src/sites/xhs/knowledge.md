@@ -76,9 +76,13 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
   next cards in as it scrolls), reading its body + top comments, writing
   artifacts, closing note modals, and marking already analyzed posts. Default
   `num_notes` is 10.
-- Quick breadth scan: use `search_notes` (atomic — returns the first results
-  page's cards, no scrolling; accepts optional `filters` to narrow the feed) or
-  `extract_search_cards` to inspect cards without opening notes.
+- Quick breadth scan: use `search_notes` to return search-result cards (accepts
+  optional `filters`). By default returns only the first page (~19 cards, no
+  scrolling); pass `num_notes` to auto-scroll the feed and collect that many
+  cards (titles/likes/covers only — no bodies opened, so it stays fast). This is
+  the right tool to batch-harvest card metadata for filtering/analysis without
+  reading note bodies. Or use `extract_search_cards` to inspect already-loaded
+  cards without opening notes.
 - Manual note read: use `read_note(index=N)` or `read_note(note_id=...)`.
   Use `level="card"` for metadata only, `level="lite"` for body/comments, and
   `level="deep"` plus `include_media=true` only when images, OCR, video, or
