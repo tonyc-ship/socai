@@ -17,6 +17,7 @@ export interface ModelInfo {
   default_model: string;
   has_key: boolean;
   credential_kind?: "api_key" | "codex_oauth" | null;
+  is_default?: boolean;
 }
 
 export type AgentTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";

@@ -62,6 +62,7 @@ pub fn run() {
             commands::tool_topic_scan,
             commands::tool_extract_note,
             commands::agent_list_models,
+            commands::agent_set_default_model,
             commands::agent_open_codex_login,
             commands::agent_save_api_key,
             commands::agent_task_start,

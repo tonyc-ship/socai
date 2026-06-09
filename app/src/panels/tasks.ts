@@ -50,8 +50,11 @@ export namespace agentPanel {
   export function setModels(models: ModelInfo[]): void {
     modelsCache = models;
     if (!model || !models.some((m) => m.default_model === model)) {
+      // Restore the persisted choice (`is_default`); otherwise fall back to the
+      // first provider that has a key.
+      const persisted = models.find((m) => m.is_default && m.has_key);
       const withKey = models.find((m) => m.has_key);
-      model = (withKey ?? models[0])?.default_model ?? "";
+      model = (persisted ?? withKey ?? models[0])?.default_model ?? "";
     }
   }
 
@@ -114,6 +117,13 @@ export namespace agentPanel {
         keyMessage = "";
         keyError = "";
         pendingKey = "";
+        // Persist the choice so it survives a relaunch.
+        const picked = modelsCache.find((m) => m.default_model === next);
+        if (picked) {
+          invoke("agent_set_default_model", { provider: picked.provider, model: next }).catch(
+            (err) => console.error("agent_set_default_model failed:", err),
+          );
+        }
         // Close the popover when the picked model is ready; keep it open to
         // collect a credential when the model still needs one.
         configOpen = false;
