@@ -34,15 +34,15 @@ const messages = {
     zh: "如何启用远程调试？↗",
   },
 
-  "agent.label": { en: "agent", zh: "智能体" },
+  "agent.label": { en: "model", zh: "模型" },
   "agent.configurationAria": { en: "agent configuration", zh: "智能体设置" },
   "agent.selectModelAria": { en: "select agent model", zh: "选择智能体模型" },
   "agent.loading": { en: "loading", zh: "加载中" },
-  "agent.keyNeeded": { en: "key needed", zh: "需要密钥" },
-  "agent.needsCredential": { en: "{model} needs a credential.", zh: "{model} 需要凭据。" },
+  "agent.keyNeeded": { en: "api key needed", zh: "需要 api key" },
+  "agent.needsCredential": { en: "{model} needs an api key.", zh: "{model} 需要 api key。" },
   "agent.connectChatgpt": { en: "connect chatgpt subscription", zh: "连接 chatgpt 订阅" },
   "agent.opening": { en: "opening…", zh: "打开中…" },
-  "agent.pasteApiKey": { en: "paste api key", zh: "粘贴 api 密钥" },
+  "agent.pasteApiKey": { en: "paste api key", zh: "粘贴 api key" },
   "agent.codexLoginMissing": {
     en: "codex login not detected yet. return to socai after login completes.",
     zh: "还没有检测到 codex 登录。登录完成后返回 socai。",
@@ -78,7 +78,7 @@ const messages = {
   "task.starting": { en: "starting…", zh: "启动中…" },
   "task.runTest": { en: "run test", zh: "运行测试" },
   "task.loadingModels": { en: "loading agent models…", zh: "正在加载智能体模型…" },
-  "task.addKeyHint": { en: "add a key in the agent menu to run this model.", zh: "在智能体菜单中添加密钥后即可运行此模型。" },
+  "task.addKeyHint": { en: "add an api key in the model menu (top right) to run.", zh: "在右上角模型菜单中添加 api key 后即可运行。" },
   "task.agentPlaceholder": {
     en: "tell socai what you want researched…\neach task opens its own temporary chrome tab.",
     zh: "告诉 socai 你想研究什么…\n每个任务都会打开自己的临时 chrome 标签页。",
