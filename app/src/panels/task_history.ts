@@ -1,5 +1,6 @@
 import type { AgentTaskEventPayload } from "../main";
 import { esc } from "../lib/html";
+import { renderMarkdown } from "../lib/markdown";
 import { formatTaskCount, formatTokenUsage, formatTurns, getLocale, taskStatusLabel, t } from "../lib/i18n";
 import type { AgentTaskView } from "./tasks";
 
@@ -92,7 +93,7 @@ function renderSelectedTask(task: AgentTaskView): string {
         ? `
           <div class="agent-outcome">
             <p class="t-eyebrow result-label">${esc(t("task.finalAnswer"))}</p>
-            <pre class="result-pre">${esc(task.final_text.trim())}</pre>
+            <div class="result-pre result-md">${renderMarkdown(task.final_text.trim())}</div>
             <p class="t-small subtle">${esc(t("task.run"))} ${esc(task.run_id ?? task.task_id)}${task.turns !== null ? ` · ${esc(formatTurns(task.turns))}` : ""}${esc(tokenLine)}</p>
             ${task.run_dir ? `<p class="t-small subtle">run_dir: <span class="t-mono">${esc(task.run_dir)}</span></p>` : ""}
           </div>`

@@ -681,6 +681,64 @@ body.has-paper > * { position: relative; z-index: 1; }
 }
 .result-error { color: var(--status-error-fg); }
 .result-running { color: var(--fg-soft); }
+
+/* Rendered markdown for the final answer. Reuses the .result-pre container
+   (border/padding/scroll) but switches to prose typography. Targets the plain
+   tags emitted by `marked`. */
+.result-md {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  white-space: normal;
+}
+.result-md > :first-child { margin-top: 0; }
+.result-md > :last-child { margin-bottom: 0; }
+.result-md p { margin: 0 0 var(--sp-2) 0; }
+.result-md h1, .result-md h2, .result-md h3,
+.result-md h4, .result-md h5, .result-md h6 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: var(--sp-3) 0 var(--sp-2) 0;
+  color: var(--ink-0);
+}
+.result-md h1 { font-size: 17px; }
+.result-md h2 { font-size: 15px; }
+.result-md h3, .result-md h4, .result-md h5, .result-md h6 { font-size: 13px; }
+.result-md ul, .result-md ol { margin: 0 0 var(--sp-2) 0; padding-left: var(--sp-4); }
+.result-md li { margin: 0 0 var(--sp-1) 0; }
+.result-md li > ul, .result-md li > ol { margin: var(--sp-1) 0 0 0; }
+.result-md blockquote {
+  margin: 0 0 var(--sp-2) 0;
+  padding: var(--sp-1) var(--sp-3);
+  border-left: 2px solid var(--line);
+  color: var(--fg-soft);
+}
+.result-md hr { border: none; border-top: var(--hairline); margin: var(--sp-3) 0; }
+.result-md a { color: var(--ink-0); text-decoration: underline; }
+.result-md code { font-family: var(--font-mono); font-size: 12px; }
+.result-md pre {
+  margin: 0 0 var(--sp-2) 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border-radius: var(--r-2);
+  overflow-x: auto;
+  white-space: pre;
+}
+.result-md pre code { background: none; padding: 0; }
+.result-md table {
+  border-collapse: collapse;
+  margin: 0 0 var(--sp-2) 0;
+  font-size: 12px;
+  width: auto;
+  max-width: 100%;
+}
+.result-md th, .result-md td {
+  border: var(--hairline);
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+  vertical-align: top;
+}
+.result-md th { font-weight: 600; background: var(--surface-2); }
 .placeholder { color: var(--fg-faint); margin: 0; }
 .subtle { margin: 0; color: var(--fg-soft); }
 .event-stream {
