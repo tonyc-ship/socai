@@ -13,6 +13,10 @@ Rules:\n\
 
 pub fn build_system_prompt(tool_names: &[&str], extra_instructions: &str) -> String {
     let mut parts: Vec<String> = vec![BASE_SYSTEM_PROMPT.to_string()];
+    parts.push(format!(
+        "Today's date is {}.",
+        chrono::Local::now().format("%Y-%m-%d (%A)")
+    ));
     if !tool_names.is_empty() {
         let listing = tool_names
             .iter()
