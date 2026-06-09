@@ -17,6 +17,7 @@ pub enum Provider {
     OpenAI,
     Kimi,
     Qwen,
+    DeepSeek,
 }
 
 impl Provider {
@@ -26,6 +27,7 @@ impl Provider {
             Provider::OpenAI => "openai",
             Provider::Kimi => "kimi",
             Provider::Qwen => "qwen",
+            Provider::DeepSeek => "deepseek",
         }
     }
 
@@ -35,6 +37,7 @@ impl Provider {
             "openai" | "gpt" => Some(Self::OpenAI),
             "kimi" | "moonshot" => Some(Self::Kimi),
             "qwen" | "dashscope" => Some(Self::Qwen),
+            "deepseek" => Some(Self::DeepSeek),
             _ => None,
         }
     }
@@ -103,6 +106,14 @@ pub static PROVIDERS: &[ProviderConfig] = &[
         env_keys: &["QWEN_API_KEY", "DASHSCOPE_API_KEY"],
         base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
         model_prefixes: &["qwen", "qwq-", "qvq-"],
+    },
+    ProviderConfig {
+        provider: Provider::DeepSeek,
+        display_name: "DeepSeek",
+        default_model: "deepseek-v4-pro",
+        env_keys: &["DEEPSEEK_API_KEY"],
+        base_url: Some("https://api.deepseek.com/v1"),
+        model_prefixes: &["deepseek-"],
     },
 ];
 
@@ -435,6 +446,7 @@ mod tests {
         assert_eq!(Provider::from_name("claude"), Some(Provider::Anthropic));
         assert_eq!(Provider::from_name("MOONSHOT"), Some(Provider::Kimi));
         assert_eq!(Provider::from_name("DashScope"), Some(Provider::Qwen));
+        assert_eq!(Provider::from_name("DeepSeek"), Some(Provider::DeepSeek));
         assert_eq!(Provider::from_name("nope"), None);
     }
 
@@ -445,6 +457,7 @@ mod tests {
             Provider::OpenAI,
             Provider::Kimi,
             Provider::Qwen,
+            Provider::DeepSeek,
         ] {
             let cfg = config_for(p);
             assert_eq!(cfg.provider, p);
