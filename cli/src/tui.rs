@@ -28,6 +28,7 @@ use socai_core::sites::xhs::{xhs_agent_instructions, xhs_agent_tools, XHS_HOME_U
 const PROVIDER_ORDER: &[Provider] = &[
     Provider::Kimi,
     Provider::Qwen,
+    Provider::DeepSeek,
     Provider::OpenAI,
     Provider::Anthropic,
 ];
