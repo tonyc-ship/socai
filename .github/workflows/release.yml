@@ -145,7 +145,18 @@ jobs:
       - name: apply release version
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: python3 .github/scripts/set-app-version.py "${VERSION}"
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/set-app-version.py "${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          git commit -m "chore: release socai v${VERSION}"
+          versioned_sha="$(git rev-parse HEAD)"
+          echo "SOCAI_BUILD_SHA=${versioned_sha}" >> "${GITHUB_ENV}"
+          echo "versioned build tree ${versioned_sha}"
 
       - name: set up pnpm
         uses: pnpm/action-setup@v4
@@ -180,7 +191,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "target/${TARGET}/release/bundle"
+          rm -rf "target/${TARGET}/release/bundle" target/socai-cli-macos-universal
+
+      - name: build CLI universal binary
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          cargo build -p socai-cli --release --target aarch64-apple-darwin
+          cargo build -p socai-cli --release --target x86_64-apple-darwin
+
+          cli_dir="target/socai-cli-macos-universal"
+          mkdir -p "${cli_dir}"
+          lipo -create \
+            target/aarch64-apple-darwin/release/socai \
+            target/x86_64-apple-darwin/release/socai \
+            -output "${cli_dir}/socai"
+          chmod 0755 "${cli_dir}/socai"
+
+          actual_archs="$(lipo -archs "${cli_dir}/socai")"
+          echo "${cli_dir}/socai architectures: ${actual_archs}"
+          for expected_arch in arm64 x86_64; do
+            if [[ " ${actual_archs} " != *" ${expected_arch} "* ]]; then
+              echo "expected ${cli_dir}/socai to include ${expected_arch}, got: ${actual_archs}" >&2
+              exit 1
+            fi
+          done
+
+          version_output="$("${cli_dir}/socai" --version)"
+          echo "${version_output}"
+          if [ "${version_output}" != "socai ${VERSION}" ]; then
+            echo "expected CLI version 'socai ${VERSION}', got: ${version_output}" >&2
+            exit 1
+          fi
 
       - name: configure macos signing
         shell: bash
@@ -389,11 +434,14 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
 
+          BUILD_SHA="${SOCAI_BUILD_SHA:?SOCAI_BUILD_SHA not set by apply release version step}"
           bundle_dir="target/${TARGET}/release/bundle"
           dmg_dir="${bundle_dir}/dmg"
+          cli_binary="target/socai-cli-macos-universal/socai"
           mkdir -p dist-artifacts
 
           dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
@@ -402,8 +450,49 @@ jobs:
             echo "no dmg found in ${dmg_dir}" >&2
             exit 1
           fi
+          if [ ! -x "${cli_binary}" ]; then
+            echo "no CLI binary found at ${cli_binary}" >&2
+            exit 1
+          fi
 
           cp "${dmg}" "dist-artifacts/socai-macos-universal.dmg"
+
+          package_dir="${RUNNER_TEMP}/socai-cli-package"
+          rm -rf "${package_dir}"
+          mkdir -p "${package_dir}"
+          cp "${cli_binary}" "${package_dir}/socai"
+          chmod 0755 "${package_dir}/socai"
+          created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          cat > "${package_dir}/manifest.json" <<EOF
+          {
+            "base_sha": "${BASE_SHA}",
+            "created_at": "${created_at}",
+            "git_sha": "${BUILD_SHA}",
+            "target": "macos-universal",
+            "version": "${VERSION}"
+          }
+          EOF
+
+          tar -C "${package_dir}" -czf dist-artifacts/socai-cli-macos-universal.tar.gz socai manifest.json
+          (cd dist-artifacts && shasum -a 256 socai-cli-macos-universal.tar.gz > socai-cli-macos-universal.tar.gz.sha256)
+          cp scripts/install-cli.sh dist-artifacts/install.sh
+
+          (cd dist-artifacts && shasum -a 256 -c socai-cli-macos-universal.tar.gz.sha256)
+          archive_listing="${RUNNER_TEMP}/socai-cli-archive-files.txt"
+          tar -tzf dist-artifacts/socai-cli-macos-universal.tar.gz > "${archive_listing}"
+          for required_file in socai manifest.json; do
+            if ! grep -Fxq "${required_file}" "${archive_listing}"; then
+              echo "CLI archive missing ${required_file}" >&2
+              exit 1
+            fi
+          done
+          manifest_path="${RUNNER_TEMP}/socai-cli-manifest.json"
+          tar -xOzf dist-artifacts/socai-cli-macos-universal.tar.gz manifest.json > "${manifest_path}"
+          grep -F "\"version\": \"${VERSION}\"" "${manifest_path}"
+          grep -F "\"target\": \"macos-universal\"" "${manifest_path}"
+          grep -F "\"git_sha\": \"${BUILD_SHA}\"" "${manifest_path}"
+          grep -F "\"base_sha\": \"${BASE_SHA}\"" "${manifest_path}"
+          grep -F '"created_at":' "${manifest_path}"
 
           ls -lah dist-artifacts
 
@@ -455,18 +544,25 @@ jobs:
             exit 1
           fi
 
-          artifact="dist-artifacts/socai-macos-universal.dmg"
-          if [ ! -f "${artifact}" ]; then
-            echo "missing release artifact: ${artifact}" >&2
-            exit 1
-          fi
+          required_artifacts=(
+            dist-artifacts/socai-macos-universal.dmg
+            dist-artifacts/socai-cli-macos-universal.tar.gz
+            dist-artifacts/socai-cli-macos-universal.tar.gz.sha256
+            dist-artifacts/install.sh
+          )
+          for artifact in "${required_artifacts[@]}"; do
+            if [ ! -f "${artifact}" ]; then
+              echo "missing release artifact: ${artifact}" >&2
+              exit 1
+            fi
+          done
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           python3 .github/scripts/set-app-version.py "${VERSION}"
 
-          git add app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          git add Cargo.toml app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
           if git diff --cached --quiet; then
             echo "version files already up to date"
           else
@@ -503,8 +599,11 @@ jobs:
           ## downloads
 
           - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
+          - [CLI installer](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh) — one-command macOS CLI install.
+          - [universal mac CLI tarball](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-macos-universal.tar.gz) — standalone `socai` CLI.
+          - [CLI checksum](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-macos-universal.tar.gz.sha256)
 
-          This macOS build is signed and notarized.
+          The macOS app build is signed and notarized.
 
           ## changes
 
@@ -530,3 +629,50 @@ jobs:
 
           trap - ERR
           cat release-notes.md
+
+  verify-cli-installer:
+    name: verify latest CLI installer
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - prepare
+      - release
+    runs-on: macos-14
+
+    steps:
+      - name: install CLI from latest release
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          install_url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh"
+          test_home="${RUNNER_TEMP}/socai-install-home"
+          install_dir="${RUNNER_TEMP}/socai-bin"
+          rm -rf "${test_home}" "${install_dir}"
+          mkdir -p "${test_home}"
+
+          installed=false
+          for attempt in {1..12}; do
+            echo "install attempt ${attempt}: ${install_url}"
+            if curl -fsSL "${install_url}" | HOME="${test_home}" SOCAI_INSTALL_DIR="${install_dir}" SHELL=/bin/zsh sh; then
+              installed=true
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "${installed}" != "true" ]; then
+            echo "failed to install socai from latest release" >&2
+            exit 1
+          fi
+
+          version_output="$("${install_dir}/socai" --version)"
+          echo "${version_output}"
+          if [ "${version_output}" != "socai ${VERSION}" ]; then
+            echo "expected CLI version 'socai ${VERSION}', got: ${version_output}" >&2
+            exit 1
+          fi
+
+          "${install_dir}/socai" --help >/dev/null
+          grep -F "${install_dir}" "${test_home}/.zshrc"

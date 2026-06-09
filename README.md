@@ -18,24 +18,31 @@ socai 有三种用法，内核相同，按你的场景选：
 
 | 方式 | 是什么 | 如何开始 |
 | --- | --- | --- |
-| [**CLI**](#cli) | 命令行工具，给 Claude Code、Codex 等 AI agent 调用（核心） | `cargo install --path cli` |
-| [**TUI**](#tui) | 终端里的交互界面，手动跑任务 | 安装后运行 `socai` |
+| [**CLI**](#cli) | 命令行工具，给 Claude Code、Codex 等 AI agent 调用（核心） | 下载 macOS CLI binary，或用 Cargo fallback |
+| [**TUI**](#tui) | 终端里的交互界面，手动跑任务 | 安装 CLI 后运行 `socai` |
 | [**GUI**](#desktop-app-gui) | 图形桌面应用（macOS），点击即用 | [下载 .dmg](https://github.com/socai-io/socai/releases/latest/download/socai-macos-universal.dmg) |
 
 ## CLI
 
 socai 的核心，给 Claude Code、Codex 等 AI agent 提供开箱即用的小红书工具。
 
-
 https://github.com/user-attachments/assets/8aebcded-f365-4f12-b9c4-102cc1fa964d
 
+macOS 用户优先安装预编译 CLI binary（不需要 Rust/Cargo）：
 
-克隆仓库并安装：
+```bash
+curl -fsSL https://github.com/socai-io/socai/releases/latest/download/install.sh | sh
+```
+
+安装脚本会下载并校验 `socai-cli-macos-universal.tar.gz`，安装到
+`~/.socai/bin/socai`，并提示/写入 PATH。
+
+如果当前平台还没有可用的 CLI binary，或你要开发/调试源码，再使用 Cargo fallback：
 
 ```bash
 git clone https://github.com/socai-io/socai.git
 cd socai
-cargo install --path cli
+cargo install --path cli --force
 ```
 
 常用命令：
@@ -72,10 +79,6 @@ tool tab on a waterfall containing the target card.
 安装方式与 CLI 相同，安装后不带子命令运行 `socai` 即可打开终端交互界面：
 
 ```bash
-git clone https://github.com/socai-io/socai.git
-cd socai
-cargo install --path cli
-
 socai   # 不带子命令即打开 TUI
 ```
 
