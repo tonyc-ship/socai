@@ -886,31 +886,63 @@ const SocaiXhsPageScripts = (() => {
   }
 
   // ── search/feed scroll ───────────────────────────────────────
-  // Window-level scroll used to lazy-load more search cards. Default jumps to
-  // the current document bottom (window-size independent, no hard-coded pixel
-  // step) so the site fetches the next page. With `nudge_up`, instead scrolls
-  // back up ~1/10 of a screen: XHS sometimes ignores a too-fast jump to the
-  // bottom and won't load more, but a small reverse scroll reliably jogs its
-  // infinite-scroll observer. The caller waits for new cards by polling
-  // searchCards.
-  function scrollFeed(opts = {}) {
-    const el = document.scrollingElement || document.documentElement;
-    const before = el.scrollTop;
-    const beforeHeight = el.scrollHeight;
-    if (opts && opts.nudge_up) {
-      const step = Math.max(80, Math.round(window.innerHeight / 10));
-      window.scrollBy({ top: -step, left: 0, behavior: 'instant' });
-    } else {
-      window.scrollTo({ top: el.scrollHeight, left: 0, behavior: 'instant' });
+  // Lazy-loads more search cards. Default jumps to the bottom (window-size
+  // independent, no hard-coded pixel step) so the site fetches the next page.
+  // With `nudge_up`, instead scrolls back up ~1/10 of a screen: XHS sometimes
+  // ignores a too-fast jump to the bottom and won't load more, but a small
+  // reverse scroll reliably jogs its infinite-scroll observer. The caller waits
+  // for new cards by polling searchCards.
+  //
+  // In the default layout the window itself scrolls. But when the 问点点 AI
+  // summary panel is present (the `.ai-feeds-page.with-ai-chat` layout), the
+  // feed lives in an inner column that scrolls independently and the window
+  // never moves — so a window scroll loads nothing. We therefore locate the
+  // real scroll container by walking up from a note card to its nearest
+  // scrollable ancestor, and only fall back to the window when none is found.
+  function isScrollable(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(el);
+    const overflowY = style.overflowY || style.overflow || '';
+    return el.scrollHeight > el.clientHeight + 24 && ['auto', 'scroll', 'overlay'].includes(overflowY);
+  }
+
+  function findScrollableFeedContainer() {
+    const cards = $$('section.note-item, [data-note-id], .feeds-page .note-item, .ai-feeds-page .note-item');
+    let node = cards.length
+      ? cards[cards.length - 1]
+      : $('.feeds-container, .feeds-wrapper, .ai-feeds-page');
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (isScrollable(node)) return node;
+      node = node.parentElement;
     }
-    const after = el.scrollTop;
+    return null;
+  }
+
+  function scrollFeed(opts = {}) {
+    const container = findScrollableFeedContainer();
+    const target = container || document.scrollingElement || document.documentElement;
+    const useWindow = !container;
+    const before = target.scrollTop;
+    const beforeHeight = target.scrollHeight;
+    const viewport = useWindow ? window.innerHeight : target.clientHeight;
+    if (opts && opts.nudge_up) {
+      const step = Math.max(80, Math.round(viewport / 10));
+      if (useWindow) window.scrollBy({ top: -step, left: 0, behavior: 'instant' });
+      else target.scrollBy({ top: -step, left: 0, behavior: 'instant' });
+    } else if (useWindow) {
+      window.scrollTo({ top: beforeHeight, left: 0, behavior: 'instant' });
+    } else {
+      target.scrollTo({ top: beforeHeight, left: 0, behavior: 'instant' });
+    }
+    const after = target.scrollTop;
     return {
       ok: true,
+      container: useWindow ? 'window' : (container.className || container.tagName),
       before,
       after,
       moved: after !== before,
       scroll_height: beforeHeight,
-      inner_height: window.innerHeight,
+      inner_height: viewport,
     };
   }
 
