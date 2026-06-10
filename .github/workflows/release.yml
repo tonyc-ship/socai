@@ -129,8 +129,150 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "previous_tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
 
-  build:
-    name: build universal macos
+  build-macos-cli:
+    name: build macOS CLI
+    needs: prepare
+    runs-on: macos-14
+
+    steps:
+      - name: checkout release base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+
+      - name: apply release version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/set-app-version.py "${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          git commit -m "chore: release socai v${VERSION}"
+          versioned_sha="$(git rev-parse HEAD)"
+          echo "SOCAI_BUILD_SHA=${versioned_sha}" >> "${GITHUB_ENV}"
+          echo "versioned build tree ${versioned_sha}"
+
+      - name: set up rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: cache rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+          key: macos-cli-universal
+
+      - name: clear stale CLI outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/socai-cli-macos-universal
+
+      - name: build CLI universal binary
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          cargo build -p socai-cli --release --target aarch64-apple-darwin
+          cargo build -p socai-cli --release --target x86_64-apple-darwin
+
+          cli_dir="target/socai-cli-macos-universal"
+          mkdir -p "${cli_dir}"
+          lipo -create \
+            target/aarch64-apple-darwin/release/socai \
+            target/x86_64-apple-darwin/release/socai \
+            -output "${cli_dir}/socai"
+          chmod 0755 "${cli_dir}/socai"
+
+          actual_archs="$(lipo -archs "${cli_dir}/socai")"
+          echo "${cli_dir}/socai architectures: ${actual_archs}"
+          for expected_arch in arm64 x86_64; do
+            if [[ " ${actual_archs} " != *" ${expected_arch} "* ]]; then
+              echo "expected ${cli_dir}/socai to include ${expected_arch}, got: ${actual_archs}" >&2
+              exit 1
+            fi
+          done
+
+          version_output="$("${cli_dir}/socai" --version)"
+          echo "${version_output}"
+          if [ "${version_output}" != "socai ${VERSION}" ]; then
+            echo "expected CLI version 'socai ${VERSION}', got: ${version_output}" >&2
+            exit 1
+          fi
+
+      - name: collect distributable artifacts
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+
+          BUILD_SHA="${SOCAI_BUILD_SHA:?SOCAI_BUILD_SHA not set by apply release version step}"
+          cli_binary="target/socai-cli-macos-universal/socai"
+          mkdir -p dist-artifacts
+
+          if [ ! -x "${cli_binary}" ]; then
+            echo "no CLI binary found at ${cli_binary}" >&2
+            exit 1
+          fi
+
+          package_dir="${RUNNER_TEMP}/socai-cli-package"
+          rm -rf "${package_dir}"
+          mkdir -p "${package_dir}"
+          cp "${cli_binary}" "${package_dir}/socai"
+          chmod 0755 "${package_dir}/socai"
+          created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          cat > "${package_dir}/manifest.json" <<EOF
+          {
+            "base_sha": "${BASE_SHA}",
+            "created_at": "${created_at}",
+            "git_sha": "${BUILD_SHA}",
+            "target": "macos-universal",
+            "version": "${VERSION}"
+          }
+          EOF
+
+          tar -C "${package_dir}" -czf dist-artifacts/socai-cli-macos-universal.tar.gz socai manifest.json
+          (cd dist-artifacts && shasum -a 256 socai-cli-macos-universal.tar.gz > socai-cli-macos-universal.tar.gz.sha256)
+          cp scripts/install-cli.sh dist-artifacts/install.sh
+
+          (cd dist-artifacts && shasum -a 256 -c socai-cli-macos-universal.tar.gz.sha256)
+          archive_listing="${RUNNER_TEMP}/socai-cli-archive-files.txt"
+          tar -tzf dist-artifacts/socai-cli-macos-universal.tar.gz > "${archive_listing}"
+          for required_file in socai manifest.json; do
+            if ! grep -Fxq "${required_file}" "${archive_listing}"; then
+              echo "CLI archive missing ${required_file}" >&2
+              exit 1
+            fi
+          done
+          manifest_path="${RUNNER_TEMP}/socai-cli-manifest.json"
+          tar -xOzf dist-artifacts/socai-cli-macos-universal.tar.gz manifest.json > "${manifest_path}"
+          grep -F "\"version\": \"${VERSION}\"" "${manifest_path}"
+          grep -F "\"target\": \"macos-universal\"" "${manifest_path}"
+          grep -F "\"git_sha\": \"${BUILD_SHA}\"" "${manifest_path}"
+          grep -F "\"base_sha\": \"${BASE_SHA}\"" "${manifest_path}"
+          grep -F '"created_at":' "${manifest_path}"
+
+          ls -lah dist-artifacts
+
+      - name: upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: socai-${{ needs.prepare.outputs.version }}-macos-cli
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  build-macos-app-dmg:
+    name: build macOS app DMG
     needs: prepare
     runs-on: macos-14
     env:
@@ -185,47 +327,13 @@ jobs:
         with:
           workspaces: |
             . -> target
-          key: universal-apple-darwin
+          key: macos-app-universal
 
       - name: clear stale bundle outputs
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "target/${TARGET}/release/bundle" target/socai-cli-macos-universal
-
-      - name: build CLI universal binary
-        shell: bash
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          cargo build -p socai-cli --release --target aarch64-apple-darwin
-          cargo build -p socai-cli --release --target x86_64-apple-darwin
-
-          cli_dir="target/socai-cli-macos-universal"
-          mkdir -p "${cli_dir}"
-          lipo -create \
-            target/aarch64-apple-darwin/release/socai \
-            target/x86_64-apple-darwin/release/socai \
-            -output "${cli_dir}/socai"
-          chmod 0755 "${cli_dir}/socai"
-
-          actual_archs="$(lipo -archs "${cli_dir}/socai")"
-          echo "${cli_dir}/socai architectures: ${actual_archs}"
-          for expected_arch in arm64 x86_64; do
-            if [[ " ${actual_archs} " != *" ${expected_arch} "* ]]; then
-              echo "expected ${cli_dir}/socai to include ${expected_arch}, got: ${actual_archs}" >&2
-              exit 1
-            fi
-          done
-
-          version_output="$("${cli_dir}/socai" --version)"
-          echo "${version_output}"
-          if [ "${version_output}" != "socai ${VERSION}" ]; then
-            echo "expected CLI version 'socai ${VERSION}', got: ${version_output}" >&2
-            exit 1
-          fi
+          rm -rf "target/${TARGET}/release/bundle"
 
       - name: configure macos signing
         shell: bash
@@ -432,16 +540,11 @@ jobs:
 
       - name: collect distributable artifacts
         shell: bash
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
         run: |
           set -euo pipefail
 
-          BUILD_SHA="${SOCAI_BUILD_SHA:?SOCAI_BUILD_SHA not set by apply release version step}"
           bundle_dir="target/${TARGET}/release/bundle"
           dmg_dir="${bundle_dir}/dmg"
-          cli_binary="target/socai-cli-macos-universal/socai"
           mkdir -p dist-artifacts
 
           dmg="$(find "${dmg_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
@@ -450,56 +553,156 @@ jobs:
             echo "no dmg found in ${dmg_dir}" >&2
             exit 1
           fi
-          if [ ! -x "${cli_binary}" ]; then
-            echo "no CLI binary found at ${cli_binary}" >&2
-            exit 1
-          fi
 
           cp "${dmg}" "dist-artifacts/socai-macos-universal.dmg"
-
-          package_dir="${RUNNER_TEMP}/socai-cli-package"
-          rm -rf "${package_dir}"
-          mkdir -p "${package_dir}"
-          cp "${cli_binary}" "${package_dir}/socai"
-          chmod 0755 "${package_dir}/socai"
-          created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          cat > "${package_dir}/manifest.json" <<EOF
-          {
-            "base_sha": "${BASE_SHA}",
-            "created_at": "${created_at}",
-            "git_sha": "${BUILD_SHA}",
-            "target": "macos-universal",
-            "version": "${VERSION}"
-          }
-          EOF
-
-          tar -C "${package_dir}" -czf dist-artifacts/socai-cli-macos-universal.tar.gz socai manifest.json
-          (cd dist-artifacts && shasum -a 256 socai-cli-macos-universal.tar.gz > socai-cli-macos-universal.tar.gz.sha256)
-          cp scripts/install-cli.sh dist-artifacts/install.sh
-
-          (cd dist-artifacts && shasum -a 256 -c socai-cli-macos-universal.tar.gz.sha256)
-          archive_listing="${RUNNER_TEMP}/socai-cli-archive-files.txt"
-          tar -tzf dist-artifacts/socai-cli-macos-universal.tar.gz > "${archive_listing}"
-          for required_file in socai manifest.json; do
-            if ! grep -Fxq "${required_file}" "${archive_listing}"; then
-              echo "CLI archive missing ${required_file}" >&2
-              exit 1
-            fi
-          done
-          manifest_path="${RUNNER_TEMP}/socai-cli-manifest.json"
-          tar -xOzf dist-artifacts/socai-cli-macos-universal.tar.gz manifest.json > "${manifest_path}"
-          grep -F "\"version\": \"${VERSION}\"" "${manifest_path}"
-          grep -F "\"target\": \"macos-universal\"" "${manifest_path}"
-          grep -F "\"git_sha\": \"${BUILD_SHA}\"" "${manifest_path}"
-          grep -F "\"base_sha\": \"${BASE_SHA}\"" "${manifest_path}"
-          grep -F '"created_at":' "${manifest_path}"
-
           ls -lah dist-artifacts
 
       - name: upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: socai-${{ needs.prepare.outputs.version }}-macos-universal
+          name: socai-${{ needs.prepare.outputs.version }}-macos-app
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  build-windows-cli:
+    name: build windows CLI
+    needs: prepare
+    runs-on: windows-latest
+
+    steps:
+      - name: checkout release base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+
+      - name: apply release version
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .github/scripts/set-app-version.py $env:VERSION
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml Cargo.lock
+          git commit -m "chore: release socai v$env:VERSION"
+          $versionedSha = git rev-parse HEAD
+          "SOCAI_BUILD_SHA=$versionedSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "versioned build tree $versionedSha"
+
+      - name: set up rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+          key: windows-x86_64
+
+      - name: build CLI
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build -p socai-cli --release
+          $versionOutput = & .\target\release\socai.exe --version
+          $versionOutput
+          if ($versionOutput -ne "socai $env:VERSION") {
+            throw "expected CLI version 'socai $env:VERSION', got: $versionOutput"
+          }
+
+      - name: smoke daemon start and stop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $home = Join-Path $env:RUNNER_TEMP 'socai-daemon-home'
+          Remove-Item -Recurse -Force $home -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $home | Out-Null
+          $stdout = Join-Path $home 'daemon.stdout.log'
+          $stderr = Join-Path $home 'daemon.stderr.log'
+          $env:SOCAI_HOME = $home
+          $daemon = Start-Process -FilePath .\target\release\socai.exe -ArgumentList '__daemon' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            $endpoint = Join-Path $home 'rust-daemon-endpoint.json'
+            $ready = $false
+            for ($i = 0; $i -lt 120; $i++) {
+              if (Test-Path $endpoint) {
+                $ready = $true
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) {
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw 'daemon endpoint was not created'
+            }
+            & .\target\release\socai.exe stop
+            if (-not $daemon.WaitForExit(30000)) {
+              Stop-Process -Id $daemon.Id -Force
+              throw 'daemon did not exit after stop'
+            }
+            if ($daemon.ExitCode -ne 0) {
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw "daemon exited with status $($daemon.ExitCode)"
+            }
+          } finally {
+            Remove-Item Env:SOCAI_HOME -ErrorAction SilentlyContinue
+            if (-not $daemon.HasExited) {
+              Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: collect distributable artifacts
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildSha = $env:SOCAI_BUILD_SHA
+          if (-not $buildSha) { throw 'SOCAI_BUILD_SHA not set by apply release version step' }
+          $dist = 'dist-artifacts'
+          $packageDir = Join-Path $env:RUNNER_TEMP 'socai-cli-windows-package'
+          Remove-Item -Recurse -Force $dist, $packageDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dist, $packageDir | Out-Null
+          Copy-Item .\target\release\socai.exe (Join-Path $packageDir 'socai.exe')
+          $createdAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          [ordered]@{
+            base_sha = $env:BASE_SHA
+            created_at = $createdAt
+            git_sha = $buildSha
+            target = 'windows-x86_64'
+            version = $env:VERSION
+          } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $packageDir 'manifest.json')
+
+          $archive = Join-Path $dist 'socai-cli-windows-x86_64.zip'
+          Compress-Archive -Path (Join-Path $packageDir 'socai.exe'), (Join-Path $packageDir 'manifest.json') -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  socai-cli-windows-x86_64.zip" | Set-Content -Encoding ascii "$archive.sha256"
+          Copy-Item scripts\install-cli.ps1 (Join-Path $dist 'install.ps1')
+
+          $verifyDir = Join-Path $env:RUNNER_TEMP 'socai-cli-windows-verify'
+          Remove-Item -Recurse -Force $verifyDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
+          Expand-Archive -Path $archive -DestinationPath $verifyDir
+          $versionOutput = & (Join-Path $verifyDir 'socai.exe') --version
+          if ($versionOutput -ne "socai $env:VERSION") {
+            throw "expected archive CLI version 'socai $env:VERSION', got: $versionOutput"
+          }
+          $manifest = Get-Content -Raw (Join-Path $verifyDir 'manifest.json') | ConvertFrom-Json
+          if ($manifest.version -ne $env:VERSION) { throw 'manifest version mismatch' }
+          if ($manifest.target -ne 'windows-x86_64') { throw 'manifest target mismatch' }
+          if ($manifest.git_sha -ne $buildSha) { throw 'manifest git_sha mismatch' }
+          if ($manifest.base_sha -ne $env:BASE_SHA) { throw 'manifest base_sha mismatch' }
+          if (-not $manifest.created_at) { throw 'manifest missing created_at' }
+          Get-ChildItem $dist
+
+      - name: upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: socai-${{ needs.prepare.outputs.version }}-windows-x86_64
           path: dist-artifacts/*
           if-no-files-found: error
 
@@ -508,7 +711,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs:
       - prepare
-      - build
+      - build-macos-app-dmg
+      - build-macos-cli
+      - build-windows-cli
     runs-on: ubuntu-latest
 
     steps:
@@ -521,7 +726,7 @@ jobs:
       - name: download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: socai-${{ needs.prepare.outputs.version }}-macos-universal
+          pattern: socai-${{ needs.prepare.outputs.version }}-*
           merge-multiple: true
           path: dist-artifacts
 
@@ -549,6 +754,9 @@ jobs:
             dist-artifacts/socai-cli-macos-universal.tar.gz
             dist-artifacts/socai-cli-macos-universal.tar.gz.sha256
             dist-artifacts/install.sh
+            dist-artifacts/socai-cli-windows-x86_64.zip
+            dist-artifacts/socai-cli-windows-x86_64.zip.sha256
+            dist-artifacts/install.ps1
           )
           for artifact in "${required_artifacts[@]}"; do
             if [ ! -f "${artifact}" ]; then
@@ -599,9 +807,12 @@ jobs:
           ## downloads
 
           - [universal mac dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-macos-universal.dmg) — supports Apple Silicon and Intel Macs.
-          - [CLI installer](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh) — one-command macOS CLI install.
+          - [macOS CLI installer](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh) — one-command macOS CLI install.
           - [universal mac CLI tarball](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-macos-universal.tar.gz) — standalone `socai` CLI.
-          - [CLI checksum](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-macos-universal.tar.gz.sha256)
+          - [macOS CLI checksum](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-macos-universal.tar.gz.sha256)
+          - [Windows CLI installer](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.ps1) — one-command Windows CLI install.
+          - [Windows CLI zip](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-windows-x86_64.zip) — standalone `socai.exe` CLI.
+          - [Windows CLI checksum](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/socai-cli-windows-x86_64.zip.sha256)
 
           The macOS app build is signed and notarized.
 
@@ -676,3 +887,48 @@ jobs:
 
           "${install_dir}/socai" --help >/dev/null
           grep -F "${install_dir}" "${test_home}/.zshrc"
+
+  verify-windows-cli-installer:
+    name: verify latest Windows CLI installer
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - prepare
+      - release
+    runs-on: windows-latest
+
+    steps:
+      - name: install CLI from latest release
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/install.ps1"
+          $installDir = Join-Path $env:RUNNER_TEMP 'socai-bin'
+          Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+          $env:SOCAI_INSTALL_DIR = $installDir
+
+          $installed = $false
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            Write-Host "install attempt ${attempt}: $installUrl"
+            try {
+              (Invoke-WebRequest -UseBasicParsing -Uri $installUrl).Content | Invoke-Expression
+              $installed = $true
+              break
+            } catch {
+              Write-Warning $_
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $installed) {
+            throw 'failed to install socai from latest Windows release'
+          }
+
+          $socai = Join-Path $installDir 'socai.exe'
+          $versionOutput = & $socai --version
+          $versionOutput
+          if ($versionOutput -ne "socai $env:VERSION") {
+            throw "expected CLI version 'socai $env:VERSION', got: $versionOutput"
+          }
+          & $socai --help | Out-Null
+          & $socai version --no-check

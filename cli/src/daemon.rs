@@ -9,12 +9,15 @@ use socai_core::sites::xhs::{
 };
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(windows)]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{sleep, timeout, Instant};
@@ -22,7 +25,19 @@ use tokio::time::{sleep, timeout, Instant};
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 pub const LONG_COMMAND_TIMEOUT: Duration = Duration::from_secs(1_200);
 
+#[cfg(windows)]
+type DaemonListener = TcpListener;
+#[cfg(windows)]
+type DaemonStream = TcpStream;
+#[cfg(unix)]
+type DaemonListener = UnixListener;
+#[cfg(unix)]
+type DaemonStream = UnixStream;
+
+#[cfg(unix)]
 const SOCKET_NAME: &str = "rust-daemon.sock";
+#[cfg(windows)]
+const ENDPOINT_NAME: &str = "rust-daemon-endpoint.json";
 const PID_NAME: &str = "rust-daemon.pid";
 const LOG_NAME: &str = "rust-daemon.log";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
@@ -32,6 +47,8 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 struct DaemonRequest {
     id: String,
     command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<String>,
     #[serde(default)]
     args: Value,
     #[serde(default)]
@@ -71,28 +88,37 @@ struct DaemonResponse {
 
 struct DaemonPaths {
     home: PathBuf,
+    #[cfg(unix)]
     socket: PathBuf,
+    #[cfg(windows)]
+    endpoint: PathBuf,
     pid: PathBuf,
     log: PathBuf,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Serialize, Deserialize)]
+struct DaemonEndpoint {
+    host: String,
+    port: u16,
+    token: String,
 }
 
 struct DaemonState {
     runtime: SocaiRuntime,
     telemetry: Telemetry,
+    auth_token: Option<String>,
     last_activity: Instant,
 }
 
 pub async fn run_daemon() -> Result<()> {
     let paths = daemon_paths()?;
     fs::create_dir_all(&paths.home).await?;
-    if paths.socket.exists() {
-        fs::remove_file(&paths.socket)
-            .await
-            .with_context(|| format!("remove stale socket {}", paths.socket.display()))?;
-    }
+    cleanup_stale_ipc(&paths).await?;
 
-    let listener = UnixListener::bind(&paths.socket)
-        .with_context(|| format!("bind daemon socket {}", paths.socket.display()))?;
+    let listener = bind_daemon_listener(&paths).await?;
+    let auth_token = daemon_auth_token();
+    write_daemon_endpoint(&paths, &listener, auth_token.as_deref()).await?;
     fs::write(&paths.pid, std::process::id().to_string()).await?;
 
     let runtime = SocaiRuntime::new();
@@ -100,6 +126,7 @@ pub async fn run_daemon() -> Result<()> {
     let state = Arc::new(Mutex::new(DaemonState {
         runtime,
         telemetry,
+        auth_token,
         last_activity: Instant::now(),
     }));
     let stop = Arc::new(Notify::new());
@@ -127,7 +154,7 @@ pub async fn run_daemon() -> Result<()> {
     }
 
     state.lock().await.shutdown().await?;
-    let _ = fs::remove_file(&paths.socket).await;
+    cleanup_stale_ipc(&paths).await?;
     let _ = fs::remove_file(&paths.pid).await;
     Ok(())
 }
@@ -150,7 +177,7 @@ pub async fn stop_daemon() -> Result<bool> {
 }
 
 async fn serve_client(
-    stream: UnixStream,
+    stream: DaemonStream,
     state: Arc<Mutex<DaemonState>>,
     stop: Arc<Notify>,
 ) -> Result<()> {
@@ -189,6 +216,16 @@ async fn handle_request(
     let id = request.id.clone();
     let command = request.command.clone();
     let telemetry = request.telemetry.clone();
+    let auth_token = { state.lock().await.auth_token.clone() };
+    if !daemon_request_authorized(request.auth.as_deref(), auth_token.as_deref()) {
+        return DaemonResponse {
+            id,
+            ok: false,
+            result: None,
+            error: Some("daemon authentication failed".into()),
+        };
+    }
+
     let result = async {
         if command == "ping" {
             return Ok(json!({ "ok": true }));
@@ -224,6 +261,16 @@ async fn handle_request(
             error: Some(format!("{err:#}")),
         },
     }
+}
+
+#[cfg(unix)]
+fn daemon_request_authorized(_request_auth: Option<&str>, _daemon_auth: Option<&str>) -> bool {
+    true
+}
+
+#[cfg(windows)]
+fn daemon_request_authorized(request_auth: Option<&str>, daemon_auth: Option<&str>) -> bool {
+    request_auth.is_some() && request_auth == daemon_auth
 }
 
 impl DaemonState {
@@ -579,19 +626,17 @@ mod tests {
 
 async fn send_request(command: &str, args: Value, request_timeout: Duration) -> Result<Value> {
     let paths = daemon_paths()?;
+    let (stream, auth) = connect_daemon(&paths).await?;
     let request = DaemonRequest {
         id: request_id(),
         command: command.to_string(),
+        auth,
         args,
         telemetry: DaemonTelemetry {
             enabled: telemetry_enabled(),
             include_query_text: query_text_enabled(),
         },
     };
-
-    let stream = UnixStream::connect(&paths.socket)
-        .await
-        .with_context(|| format!("connect daemon socket {}", paths.socket.display()))?;
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -625,9 +670,7 @@ async fn send_request(command: &str, args: Value, request_timeout: Duration) -> 
 async fn spawn_daemon() -> Result<()> {
     let paths = daemon_paths()?;
     fs::create_dir_all(&paths.home).await?;
-    if paths.socket.exists() {
-        let _ = fs::remove_file(&paths.socket).await;
-    }
+    cleanup_stale_ipc(&paths).await?;
 
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -670,6 +713,99 @@ async fn spawn_daemon() -> Result<()> {
     ))
 }
 
+#[cfg(unix)]
+async fn bind_daemon_listener(paths: &DaemonPaths) -> Result<DaemonListener> {
+    UnixListener::bind(&paths.socket)
+        .with_context(|| format!("bind daemon socket {}", paths.socket.display()))
+}
+
+#[cfg(windows)]
+async fn bind_daemon_listener(_paths: &DaemonPaths) -> Result<DaemonListener> {
+    TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .context("bind daemon TCP listener")
+}
+
+#[cfg(unix)]
+async fn write_daemon_endpoint(
+    _paths: &DaemonPaths,
+    _listener: &DaemonListener,
+    _auth_token: Option<&str>,
+) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn write_daemon_endpoint(
+    paths: &DaemonPaths,
+    listener: &DaemonListener,
+    auth_token: Option<&str>,
+) -> Result<()> {
+    let endpoint = DaemonEndpoint {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr()?.port(),
+        token: auth_token
+            .ok_or_else(|| anyhow!("missing daemon auth token"))?
+            .to_string(),
+    };
+    fs::write(&paths.endpoint, serde_json::to_vec_pretty(&endpoint)?)
+        .await
+        .with_context(|| format!("write daemon endpoint {}", paths.endpoint.display()))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn connect_daemon(paths: &DaemonPaths) -> Result<(DaemonStream, Option<String>)> {
+    let stream = UnixStream::connect(&paths.socket)
+        .await
+        .with_context(|| format!("connect daemon socket {}", paths.socket.display()))?;
+    Ok((stream, None))
+}
+
+#[cfg(windows)]
+async fn connect_daemon(paths: &DaemonPaths) -> Result<(DaemonStream, Option<String>)> {
+    let text = fs::read_to_string(&paths.endpoint)
+        .await
+        .with_context(|| format!("read daemon endpoint {}", paths.endpoint.display()))?;
+    let endpoint: DaemonEndpoint = serde_json::from_str(&text)
+        .with_context(|| format!("parse daemon endpoint {}", paths.endpoint.display()))?;
+    let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+        .await
+        .with_context(|| {
+            format!(
+                "connect daemon TCP listener {}:{}",
+                endpoint.host, endpoint.port
+            )
+        })?;
+    Ok((stream, Some(endpoint.token)))
+}
+
+#[cfg(unix)]
+async fn cleanup_stale_ipc(paths: &DaemonPaths) -> Result<()> {
+    if paths.socket.exists() {
+        fs::remove_file(&paths.socket)
+            .await
+            .with_context(|| format!("remove stale socket {}", paths.socket.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn cleanup_stale_ipc(paths: &DaemonPaths) -> Result<()> {
+    let _ = fs::remove_file(&paths.endpoint).await;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn daemon_auth_token() -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+fn daemon_auth_token() -> Option<String> {
+    Some(uuid::Uuid::new_v4().to_string())
+}
+
 fn debug_snapshot_flag(args: &Value) -> bool {
     args.get("debug_snapshot")
         .and_then(Value::as_bool)
@@ -689,18 +825,41 @@ fn required_string(args: &Value, key: &str) -> Result<String> {
 fn daemon_paths() -> Result<DaemonPaths> {
     let home = match std::env::var_os("SOCAI_HOME") {
         Some(path) => PathBuf::from(path),
-        None => {
-            Path::new(&std::env::var("HOME").context("HOME is not set; cannot locate ~/.socai")?)
-                .join(".socai")
-        }
+        None => home_dir()
+            .context("could not locate user home directory for ~/.socai")?
+            .join(".socai"),
     };
 
     Ok(DaemonPaths {
+        #[cfg(unix)]
         socket: home.join(SOCKET_NAME),
+        #[cfg(windows)]
+        endpoint: home.join(ENDPOINT_NAME),
         pid: home.join(PID_NAME),
         log: home.join(LOG_NAME),
         home,
     })
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            return Some(PathBuf::from(profile));
+        }
+        let drive = std::env::var_os("HOMEDRIVE")?;
+        let path = std::env::var_os("HOMEPATH")?;
+        return Some(PathBuf::from(format!(
+            "{}{}",
+            drive.to_string_lossy(),
+            path.to_string_lossy()
+        )));
+    }
+    #[allow(unreachable_code)]
+    None
 }
 
 fn request_id() -> String {
