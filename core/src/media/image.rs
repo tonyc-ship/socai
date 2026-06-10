@@ -167,8 +167,7 @@ impl MediaProcessor {
         images
             .iter()
             .zip(download_results)
-            .enumerate()
-            .map(|(idx, (image, (payload, error)))| {
+            .map(|(image, (payload, error))| {
                 let url = image
                     .get("url")
                     .and_then(Value::as_str)
@@ -187,11 +186,7 @@ impl MediaProcessor {
                     insert_string(&mut item, "download_error", "download returned no bytes");
                     return item;
                 }
-                let path = self.save_bytes(
-                    &payload,
-                    &format!("{label}_{}", idx + 1),
-                    &url_suffix(url, ".jpg"),
-                );
+                let path = self.save_bytes(&payload, label, &url_suffix(url, ".jpg"));
                 match path {
                     Ok(path) => insert_string(&mut item, "local_path", path.to_string_lossy()),
                     Err(err) => insert_string(&mut item, "save_error", format!("{err:#}")),
@@ -252,11 +247,7 @@ impl MediaProcessor {
             if !seen.insert(digest) {
                 continue;
             }
-            let path = self.save_bytes(
-                &payload,
-                &format!("{label}_{}", deduped.len() + 1),
-                &url_suffix(url, ".jpg"),
-            );
+            let path = self.save_bytes(&payload, label, &url_suffix(url, ".jpg"));
             match path {
                 Ok(path) => insert_string(&mut item, "local_path", path.to_string_lossy()),
                 Err(err) => insert_string(&mut item, "save_error", format!("{err:#}")),
