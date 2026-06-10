@@ -1238,7 +1238,10 @@ impl Tool for TopicScanTool {
                         level: level.to_string(),
                         include_media,
                         download_media,
-                        max_images: 12,
+                        // Pure downloads are cheap compared with OCR/vision,
+                        // so allow full XHS carousels instead of the smaller
+                        // enrichment-oriented default.
+                        max_images: if download_media { 100 } else { 12 },
                         max_video_frames: 4,
                     },
                 )
