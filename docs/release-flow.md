@@ -145,7 +145,7 @@ with a temporary `HOME` and `SOCAI_INSTALL_DIR`. It verifies:
 `verify-windows-cli-installer` runs on `windows-latest` and executes:
 
 ```powershell
-(Invoke-WebRequest -UseBasicParsing https://github.com/socai-io/socai/releases/latest/download/install.ps1).Content | Invoke-Expression
+$installer = Join-Path $env:TEMP 'socai-install.ps1'; Invoke-WebRequest -UseBasicParsing https://github.com/socai-io/socai/releases/latest/download/install.ps1 -OutFile $installer; Unblock-File $installer; & $installer
 ```
 
 with a temporary `SOCAI_INSTALL_DIR`. It verifies:

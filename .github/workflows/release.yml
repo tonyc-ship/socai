@@ -905,14 +905,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/install.ps1"
           $installDir = Join-Path $env:RUNNER_TEMP 'socai-bin'
+          $installer = Join-Path $env:RUNNER_TEMP 'socai-install.ps1'
           Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+          Remove-Item -Force $installer -ErrorAction SilentlyContinue
           $env:SOCAI_INSTALL_DIR = $installDir
 
           $installed = $false
           for ($attempt = 1; $attempt -le 12; $attempt++) {
             Write-Host "install attempt ${attempt}: $installUrl"
             try {
-              (Invoke-WebRequest -UseBasicParsing -Uri $installUrl).Content | Invoke-Expression
+              Invoke-WebRequest -UseBasicParsing -Uri $installUrl -OutFile $installer
+              Unblock-File $installer
+              & $installer
               $installed = $true
               break
             } catch {

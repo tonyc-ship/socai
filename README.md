@@ -39,7 +39,7 @@ curl -fsSL https://github.com/socai-io/socai/releases/latest/download/install.sh
 Windows PowerShell:
 
 ```powershell
-(Invoke-WebRequest -UseBasicParsing https://github.com/socai-io/socai/releases/latest/download/install.ps1).Content | Invoke-Expression
+$installer = Join-Path $env:TEMP 'socai-install.ps1'; Invoke-WebRequest -UseBasicParsing https://github.com/socai-io/socai/releases/latest/download/install.ps1 -OutFile $installer; Unblock-File $installer; & $installer
 ```
 
 安装脚本会下载并校验 CLI archive，安装到 `~/.socai/bin/socai`（macOS）或
