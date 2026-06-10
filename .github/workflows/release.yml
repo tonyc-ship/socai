@@ -617,15 +617,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $home = Join-Path $env:RUNNER_TEMP 'socai-daemon-home'
-          Remove-Item -Recurse -Force $home -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $home | Out-Null
-          $stdout = Join-Path $home 'daemon.stdout.log'
-          $stderr = Join-Path $home 'daemon.stderr.log'
-          $env:SOCAI_HOME = $home
+          $socaiHome = Join-Path $env:RUNNER_TEMP 'socai-daemon-home'
+          Remove-Item -Recurse -Force $socaiHome -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $socaiHome | Out-Null
+          $stdout = Join-Path $socaiHome 'daemon.stdout.log'
+          $stderr = Join-Path $socaiHome 'daemon.stderr.log'
+          $env:SOCAI_HOME = $socaiHome
           $daemon = Start-Process -FilePath .\target\release\socai.exe -ArgumentList '__daemon' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           try {
-            $endpoint = Join-Path $home 'rust-daemon-endpoint.json'
+            $endpoint = Join-Path $socaiHome 'rust-daemon-endpoint.json'
             $ready = $false
             for ($i = 0; $i -lt 120; $i++) {
               if (Test-Path $endpoint) {
