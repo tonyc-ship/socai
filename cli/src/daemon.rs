@@ -3,9 +3,13 @@ use crate::tracking::{query_text_enabled, telemetry_enabled, Telemetry};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use socai_core::runtime::SocaiRuntime;
+use socai_core::agent::{local_agent_tools, make_run_dir, AgentEvent};
+use socai_core::runtime::{
+    create_llm_provider, run_agent_task as run_agent_with_tools, AgentRunConfig, SocaiRuntime,
+};
 use socai_core::sites::xhs::{
-    extract_note_command, search_notes_command, topic_scan_command, XHS_HOME_URL,
+    extract_note_command, extract_profile_command, search_notes_command, topic_scan_command,
+    xhs_agent_instructions, xhs_agent_tools, XHS_HOME_URL,
 };
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -205,6 +209,8 @@ async fn handle_request(
             "search_notes" => state.search_notes(&id, request.args, &telemetry).await,
             "topic_scan" => state.topic_scan(&id, request.args, &telemetry).await,
             "extract_note" => state.extract_note(&id, request.args, &telemetry).await,
+            "extract_profile" => state.extract_profile(&id, request.args, &telemetry).await,
+            "agent_task" => state.agent_task(&id, request.args, &telemetry).await,
             other => Err(anyhow!("unknown daemon command: {other}")),
         }
     }
@@ -290,15 +296,104 @@ impl DaemonState {
         let started = Instant::now();
         let result = async {
             let note_id = required_string(&args, "note_id")?;
+            let level = args.get("level").and_then(Value::as_str).unwrap_or("lite");
             let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            extract_note_command(page, &note_id, debug_snapshot).await
+            extract_note_command(page, &note_id, level, debug_snapshot).await
         }
         .await;
         self.track_tool_trace(
             request_id,
             "extract_note",
             "read_note",
+            &args,
+            telemetry,
+            started,
+            &result,
+        );
+        result
+    }
+
+    /// 导航到作者主页并抽取 profile（判断博主立场用）。key-free。
+    async fn extract_profile(
+        &mut self,
+        request_id: &str,
+        args: Value,
+        telemetry: &DaemonTelemetry,
+    ) -> Result<Value> {
+        let started = Instant::now();
+        let result = async {
+            let profile_url = required_string(&args, "profile_url")?;
+            let max_notes = args.get("max_notes").and_then(Value::as_i64).unwrap_or(20);
+            let scroll_rounds = args.get("scroll_rounds").and_then(Value::as_i64).unwrap_or(6);
+            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+            extract_profile_command(page, &profile_url, max_notes, scroll_rounds).await
+        }
+        .await;
+        self.track_tool_trace(
+            request_id,
+            "extract_profile",
+            "extract_profile",
+            &args,
+            telemetry,
+            started,
+            &result,
+        );
+        result
+    }
+
+    /// 通用自由任务入口：跑一次 agent loop（带全套 XHS 工具 + 本地工具），返回 JSON。
+    /// 复用常驻浏览器会话；按 AGENTS.md 约定，理想形态应把下面这段接线下沉到
+    /// core（如 sites/xhs 的一个 run_xhs_agent_task helper），daemon 只做薄转发。
+    async fn agent_task(
+        &mut self,
+        request_id: &str,
+        args: Value,
+        telemetry: &DaemonTelemetry,
+    ) -> Result<Value> {
+        let started = Instant::now();
+        let result = async {
+            let prompt = required_string(&args, "prompt")?;
+            let instructions = args
+                .get("instructions")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let model = args.get("model").and_then(Value::as_str).map(str::to_string);
+
+            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
+            let provider = create_llm_provider(model.as_deref())?;
+
+            let mut tools = xhs_agent_tools(page, provider.clone()).await?;
+            tools.extend(local_agent_tools());
+
+            let run_dir = make_run_dir(&prompt);
+            let _ = std::fs::create_dir_all(&run_dir);
+
+            let config = AgentRunConfig {
+                extra_instructions: xhs_agent_instructions(instructions.as_deref().unwrap_or("")),
+                enabled_sites: vec!["xhs".to_string()],
+                run_dir: Some(run_dir),
+                ..AgentRunConfig::default()
+            };
+
+            // 守护进程路径下没有实时消费 agent 事件的 UI——丢弃事件流即可。
+            let (tx, _rx) = tokio::sync::broadcast::channel::<AgentEvent>(256);
+            let outcome = run_agent_with_tools(&prompt, provider, tools, config, tx).await?;
+
+            Ok(json!({
+                "final_text": outcome.final_text,
+                "run_dir": outcome.run_dir.display().to_string(),
+                "report_file": "report.md",
+                "turns": outcome.turns,
+                "input_tokens": outcome.total_input_tokens,
+                "output_tokens": outcome.total_output_tokens,
+            }))
+        }
+        .await;
+        self.track_tool_trace(
+            request_id,
+            "agent_task",
+            "agent_task",
             &args,
             telemetry,
             started,

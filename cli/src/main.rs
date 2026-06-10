@@ -49,12 +49,39 @@ enum Command {
     ExtractNote {
         #[arg(long = "note-id")]
         note_id: String,
+        /// Read at `deep` level (includes top comments). Default is `lite` (body only).
+        #[arg(long)]
+        deep: bool,
         #[arg(long)]
         pretty: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
         /// at every page change between tool operations.
         #[arg(long = "debug-snapshot")]
         debug_snapshot: bool,
+    },
+    /// Open a Xiaohongshu author profile by URL and print it as JSON.
+    #[command(name = "extract_profile")]
+    ExtractProfile {
+        /// Profile URL — e.g. the `author_url` field from a search/topic card.
+        #[arg(long = "url")]
+        profile_url: String,
+        #[arg(long = "max-notes")]
+        max_notes: Option<i64>,
+        #[arg(long = "scroll-rounds")]
+        scroll_rounds: Option<i64>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Run a free-form agent task over Xiaohongshu and print the result as JSON.
+    #[command(name = "task")]
+    Task {
+        /// Natural-language task, e.g. "搜索纸尿裤测评，判断哪些是软广".
+        prompt: String,
+        /// Extra steering instructions, prepended to the XHS playbook.
+        #[arg(long)]
+        instructions: Option<String>,
+        #[arg(long)]
+        pretty: bool,
     },
     /// Stop the background socai rust daemon.
     Stop,
@@ -111,13 +138,49 @@ async fn main() -> Result<()> {
         }
         Command::ExtractNote {
             note_id,
+            deep,
             pretty,
             debug_snapshot,
         } => {
             let result = daemon::send_or_spawn(
                 "extract_note",
-                serde_json::json!({ "note_id": note_id, "debug_snapshot": debug_snapshot }),
+                serde_json::json!({
+                    "note_id": note_id,
+                    "level": if deep { "deep" } else { "lite" },
+                    "debug_snapshot": debug_snapshot,
+                }),
                 daemon::DEFAULT_COMMAND_TIMEOUT,
+            )
+            .await?;
+            print_command_result(&result, pretty)?;
+        }
+        Command::ExtractProfile {
+            profile_url,
+            max_notes,
+            scroll_rounds,
+            pretty,
+        } => {
+            let mut input = serde_json::json!({ "profile_url": profile_url });
+            if let Some(n) = max_notes {
+                input["max_notes"] = serde_json::json!(n);
+            }
+            if let Some(r) = scroll_rounds {
+                input["scroll_rounds"] = serde_json::json!(r);
+            }
+            let result =
+                daemon::send_or_spawn("extract_profile", input, daemon::LONG_COMMAND_TIMEOUT)
+                    .await?;
+            print_command_result(&result, pretty)?;
+        }
+        Command::Task {
+            prompt,
+            instructions,
+            pretty,
+        } => {
+            let result = daemon::send_or_spawn(
+                "agent_task",
+                serde_json::json!({ "prompt": prompt, "instructions": instructions }),
+                daemon::LONG_COMMAND_TIMEOUT,
             )
             .await?;
             print_command_result(&result, pretty)?;

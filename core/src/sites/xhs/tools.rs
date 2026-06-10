@@ -158,15 +158,35 @@ pub async fn topic_scan_command(
 pub async fn extract_note_command(
     page: Arc<PageSession>,
     note_id: &str,
+    level: &str,
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         EXTRACT_NOTE_COMMAND,
-        extract_note_input(note_id)?,
+        extract_note_input(note_id, level)?,
         debug_snapshot,
     )
     .await
+}
+
+/// 导航到某个作者主页 URL，抽取其 profile（昵称/xhs_id/bio/粉丝数/笔记列表）。
+/// 与其它命令不同：它先 `navigate` 到主页再抽（ExtractProfileTool 只抽当前页）。
+/// key-free —— 纯浏览器抽取，不构造任何 LLM。
+pub async fn extract_profile_command(
+    page: Arc<PageSession>,
+    profile_url: &str,
+    max_notes: i64,
+    scroll_rounds: i64,
+) -> anyhow::Result<Value> {
+    page.navigate_with_timeout(profile_url, 60.0).await?;
+    let profile = XhsPageRuntime::new(&page)
+        .extract_profile(max_notes, scroll_rounds)
+        .await?;
+    Ok(json!({
+        "command": "extract_profile",
+        "data": profile.to_value(),
+    }))
 }
 
 fn search_notes_input(query: &str) -> anyhow::Result<Value> {
@@ -191,9 +211,10 @@ fn topic_scan_input(
     Ok(input)
 }
 
-fn extract_note_input(note_id: &str) -> anyhow::Result<Value> {
+fn extract_note_input(note_id: &str, level: &str) -> anyhow::Result<Value> {
     Ok(json!({
         "note_id": trimmed_required(note_id, "note_id")?,
+        "level": level,
         "wait_seconds": 6.0,
     }))
 }
@@ -556,7 +577,7 @@ impl Tool for ReadNoteTool {
             &self.page,
             media_for(ctx, self.llm_provider.clone(), options.include_media)?,
         );
-        let value = xhs
+        let mut value = xhs
             .read_note_with_options(
                 note_id.as_deref().unwrap_or(""),
                 index,
@@ -564,7 +585,28 @@ impl Tool for ReadNoteTool {
                 options.clone(),
             )
             .await?;
-        if value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let read_ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        // Deep reads pull comments too. `read_note_with_options` only returns
+        // body/meta — the comment list hydrates slower and is fetched
+        // separately, the same way `topic_scan` does it. Without this,
+        // `extract_note --deep` returned a note with 0 comments even when it
+        // had dozens.
+        if read_ok && options.level == "deep" {
+            let comment_count = get_i64(&input, "comment_count", 20);
+            if comment_count > 0 {
+                if let Ok(payload) = xhs.extract_comments_with_wait(comment_count, 5.0).await {
+                    let comments = payload
+                        .get("comments")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(map) = value.get_mut("entity").and_then(|v| v.as_object_mut()) {
+                        map.insert("top_comments".into(), Value::Array(comments));
+                    }
+                }
+            }
+        }
+        if read_ok {
             if let Some(entity) = value.get("entity") {
                 self.history
                     .record(entity, &options.level, options.include_media);
