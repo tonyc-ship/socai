@@ -680,7 +680,11 @@ jobs:
           $archive = Join-Path $dist 'socai-cli-windows-x86_64.zip'
           Compress-Archive -Path (Join-Path $packageDir 'socai.exe'), (Join-Path $packageDir 'manifest.json') -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-          "$hash  socai-cli-windows-x86_64.zip" | Set-Content -Encoding ascii "$archive.sha256"
+          $checksumPath = "$archive.sha256"
+          [System.IO.File]::WriteAllText($checksumPath, "$hash  socai-cli-windows-x86_64.zip`n", [System.Text.Encoding]::ASCII)
+          if ([System.IO.File]::ReadAllText($checksumPath).Contains("`r")) {
+            throw 'Windows checksum file must use LF line endings'
+          }
           Copy-Item scripts\install-cli.ps1 (Join-Path $dist 'install.ps1')
 
           $verifyDir = Join-Path $env:RUNNER_TEMP 'socai-cli-windows-verify'
