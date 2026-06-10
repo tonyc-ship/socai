@@ -55,13 +55,27 @@ impl MediaProcessor {
     }
 
     pub async fn download_bytes(&self, url: &str, referer: &str) -> Result<Vec<u8>> {
+        self.download_bytes_with_timeout(
+            url,
+            referer,
+            Duration::from_secs(self.config.request_timeout_s),
+        )
+        .await
+    }
+
+    pub async fn download_bytes_with_timeout(
+        &self,
+        url: &str,
+        referer: &str,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
         let t0 = Instant::now();
         let result = async {
             let target = url.trim();
             if target.is_empty() {
                 return Ok(Vec::new());
             }
-            let mut request = self.client.get(target);
+            let mut request = self.client.get(target).timeout(timeout);
             if !referer.trim().is_empty() {
                 request = request.header("Referer", referer.trim());
             }
@@ -85,6 +99,20 @@ impl MediaProcessor {
         suffix: &str,
     ) -> Result<PathBuf> {
         let payload = self.download_bytes(url, referer).await?;
+        self.save_bytes(&payload, label, suffix)
+    }
+
+    pub async fn download_file_with_timeout(
+        &self,
+        url: &str,
+        referer: &str,
+        label: &str,
+        suffix: &str,
+        timeout: Duration,
+    ) -> Result<PathBuf> {
+        let payload = self
+            .download_bytes_with_timeout(url, referer, timeout)
+            .await?;
         self.save_bytes(&payload, label, suffix)
     }
 

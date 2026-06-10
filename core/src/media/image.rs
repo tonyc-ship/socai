@@ -4,12 +4,16 @@ use std::time::Instant;
 use crate::agent::{Block, Message, MessageRole, ToolSchema};
 use anyhow::Result;
 use base64::Engine;
+use futures::StreamExt;
 use serde_json::Value;
 
 use crate::media::common::{detect_media_type, insert_string, short, url_suffix, MediaUnavailable};
 use crate::media::md5;
 use crate::media::processor::MediaProcessor;
 
+/// Max simultaneous image downloads for one note. Topic-scan media downloads
+/// may request a full carousel, so keep CDN requests bounded.
+const IMAGE_DOWNLOAD_CONCURRENCY: usize = 8;
 /// Max simultaneous vision (LLM) calls when enriching a note's images. Bounded
 /// so a 12-image note doesn't fire a dozen concurrent requests at the provider.
 const VISION_CONCURRENCY: usize = 4;
@@ -132,10 +136,73 @@ impl MediaProcessor {
             )
             .await?;
         self.timing.record("vision_grid", t0.elapsed());
-        Ok(parse_grid_descriptions(
-            &response.text_blocks.join("\n"),
-            n,
-        ))
+        Ok(parse_grid_descriptions(&response.text_blocks.join("\n"), n))
+    }
+
+    /// Download note images to the run's media directory without OCR or vision
+    /// enrichment. The returned image objects preserve the input shape and add
+    /// `local_path` (or a `download_error` / `save_error`) per image.
+    pub async fn download_images(
+        &self,
+        images: &[Value],
+        referer: &str,
+        label: &str,
+    ) -> Vec<Value> {
+        if images.is_empty() {
+            return Vec::new();
+        }
+
+        let t_batch = Instant::now();
+        let urls: Vec<String> = images
+            .iter()
+            .map(|image| {
+                image
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        let downloads = urls
+            .into_iter()
+            .map(|url| self.safe_download(url, referer.to_string()));
+        let download_results: Vec<_> = futures::stream::iter(downloads)
+            .buffered(IMAGE_DOWNLOAD_CONCURRENCY)
+            .collect()
+            .await;
+        self.timing
+            .record("image_download_batch", t_batch.elapsed());
+
+        images
+            .iter()
+            .zip(download_results)
+            .map(|(image, (payload, error))| {
+                let url = image
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let mut item = image.clone();
+                if url.is_empty() {
+                    insert_string(&mut item, "download_error", "image URL is empty");
+                    return item;
+                }
+                if let Some(error) = error {
+                    insert_string(&mut item, "download_error", error);
+                    return item;
+                }
+                if payload.is_empty() {
+                    insert_string(&mut item, "download_error", "download returned no bytes");
+                    return item;
+                }
+                let path = self.save_bytes(&payload, label, &url_suffix(url, ".jpg"));
+                match path {
+                    Ok(path) => insert_string(&mut item, "local_path", path.to_string_lossy()),
+                    Err(err) => insert_string(&mut item, "save_error", format!("{err:#}")),
+                }
+                item
+            })
+            .collect()
     }
 
     pub async fn enrich_images(
@@ -189,11 +256,7 @@ impl MediaProcessor {
             if !seen.insert(digest) {
                 continue;
             }
-            let path = self.save_bytes(
-                &payload,
-                &format!("{label}_{}", deduped.len() + 1),
-                &url_suffix(url, ".jpg"),
-            );
+            let path = self.save_bytes(&payload, label, &url_suffix(url, ".jpg"));
             match path {
                 Ok(path) => insert_string(&mut item, "local_path", path.to_string_lossy()),
                 Err(err) => insert_string(&mut item, "save_error", format!("{err:#}")),
@@ -253,7 +316,11 @@ impl MediaProcessor {
                         for (k, &idx) in batch.iter().enumerate() {
                             match descs.get(k) {
                                 Some(text) if !text.trim().is_empty() => {
-                                    insert_string(&mut items[idx].0, "vision_description", text.clone());
+                                    insert_string(
+                                        &mut items[idx].0,
+                                        "vision_description",
+                                        text.clone(),
+                                    );
                                 }
                                 _ => {}
                             }

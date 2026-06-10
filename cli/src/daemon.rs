@@ -314,9 +314,22 @@ impl DaemonState {
             let tab_label = args.get("tab_label").and_then(Value::as_str);
             let filters = args.get("filters");
             let num_notes = args.get("num_notes").and_then(Value::as_i64);
+            let download_media = args
+                .get("download_media")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            topic_scan_command(page, &query, tab_label, filters, num_notes, debug_snapshot).await
+            topic_scan_command(
+                page,
+                &query,
+                tab_label,
+                filters,
+                num_notes,
+                download_media,
+                debug_snapshot,
+            )
+            .await
         }
         .await;
         self.track_tool_trace(

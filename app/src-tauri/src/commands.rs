@@ -75,10 +75,20 @@ pub async fn tool_topic_scan(
     runtime: State<'_, SocaiRuntime>,
     query: String,
     num_notes: Option<i64>,
+    download_media: Option<bool>,
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
-    let result = topic_scan_command(page.clone(), &query, None, None, num_notes, false).await;
+    let result = topic_scan_command(
+        page.clone(),
+        &query,
+        None,
+        None,
+        num_notes,
+        download_media.unwrap_or(false),
+        false,
+    )
+    .await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }
@@ -339,7 +349,6 @@ fn find_codex_binary() -> Option<PathBuf> {
     })
     .find(|path| path.is_file())
 }
-
 
 #[tauri::command]
 pub async fn agent_task_start(

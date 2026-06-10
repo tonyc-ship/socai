@@ -55,8 +55,16 @@ pub(crate) const XHS_SEARCH_FILTERS: &[(&str, &str, &[&str])] = &[
         &["综合", "最新", "最多点赞", "最多评论", "最多收藏"],
     ),
     ("note_type", "笔记类型", &["不限", "视频", "图文"]),
-    ("publish_time", "发布时间", &["不限", "一天内", "一周内", "半年内"]),
-    ("search_scope", "搜索范围", &["不限", "已看过", "未看过", "已关注"]),
+    (
+        "publish_time",
+        "发布时间",
+        &["不限", "一天内", "一周内", "半年内"],
+    ),
+    (
+        "search_scope",
+        "搜索范围",
+        &["不限", "已看过", "未看过", "已关注"],
+    ),
     ("distance", "位置距离", &["不限", "同城", "附近"]),
 ];
 
@@ -64,6 +72,7 @@ pub(crate) const XHS_SEARCH_FILTERS: &[(&str, &str, &[&str])] = &[
 pub struct ReadNoteOptions {
     pub level: String,
     pub include_media: bool,
+    pub download_media: bool,
     pub max_images: usize,
     pub max_video_frames: usize,
 }
@@ -73,6 +82,7 @@ impl Default for ReadNoteOptions {
         Self {
             level: "lite".into(),
             include_media: false,
+            download_media: false,
             max_images: 12,
             max_video_frames: 4,
         }
@@ -265,7 +275,10 @@ impl<'a> XhsPageRuntime<'a> {
             if x > 0.0 && y > 0.0 {
                 self.page.click(x, y).await?;
                 let state = self
-                    .wait_for_search_transition(query, wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S))
+                    .wait_for_search_transition(
+                        query,
+                        wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S),
+                    )
                     .await?;
                 if search_transition_ok(&state, query) {
                     return Ok(json!({
@@ -1036,8 +1049,62 @@ impl<'a> XhsPageRuntime<'a> {
             self.enrich_note_media(&mut note, options.max_images, options.max_video_frames)
                 .await?;
         }
+        if options.download_media {
+            self.download_note_media(&mut note, options.max_images)
+                .await?;
+        }
 
         Ok(note)
+    }
+
+    async fn download_note_media(&self, note: &mut XhsNote, max_images: usize) -> Result<()> {
+        let Some(media) = &self.media else {
+            if note.r#type == "video" {
+                insert_value_string(
+                    &mut note.video,
+                    "download_error",
+                    "media processor unavailable",
+                );
+            } else {
+                for image in &mut note.images {
+                    insert_value_string(image, "download_error", "media processor unavailable");
+                }
+            }
+            return Ok(());
+        };
+
+        let label = if note.note_id.is_empty() {
+            if note.title.is_empty() {
+                "xhs_note"
+            } else {
+                &note.title
+            }
+        } else {
+            &note.note_id
+        };
+
+        if note.r#type == "video" {
+            note.video = media
+                .download_video(&note.video, &note.note_id, &note.title, &note.url)
+                .await;
+            return Ok(());
+        }
+
+        if note.images.is_empty() {
+            let urls = self.collect_carousel_images(max_images as i64).await?;
+            note.images = urls
+                .into_iter()
+                .take(max_images)
+                .enumerate()
+                .map(|(index, url)| json!({ "url": url, "index": index as i64 }))
+                .collect();
+            note.image_count = note.images.len() as i64;
+        }
+
+        let images: Vec<Value> = note.images.iter().take(max_images).cloned().collect();
+        note.images = media.download_images(&images, &note.url, label).await;
+        note.image_count = note.images.len() as i64;
+        Ok(())
     }
 
     async fn enrich_note_media(

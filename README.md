@@ -57,6 +57,7 @@ cargo install --path cli --force
 
 ```bash
 socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个打开帖子，获取内容
+socai topic_scan "运营爆款思路" --num-notes 10 --download-media       # 同时下载帖子图片/视频到 run_dir/site_media/
 socai search_notes "运营爆款思路" --num-notes 100 --filter sort=最新          # 只打开搜索结果页，拿帖子标题/点赞/封面，不读正文
 socai extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
 socai stop                                                                 # 停止 daemon（关闭工具标签页）
@@ -75,6 +76,8 @@ Options:
   `search_notes`: cards to collect by auto-scrolling (titles/likes/covers only,
   no bodies — stays fast). Both scroll only if the first page holds fewer; omit
   for the first page only (~19).
+- `--download-media` — `topic_scan` only: download note images/videos into the
+  printed `run_dir` (`site_media/`) and add `local_path` fields to the JSON.
 - `--pretty` — indented JSON (any tool command).
 - `--debug-snapshot` — record DOM + a11y tree + screenshots per page change.
 
