@@ -523,6 +523,20 @@ const SocaiXhsPageScripts = (() => {
     return urls;
   }
 
+  function mergeUrls(...groups) {
+    const out = [];
+    const seen = new Set();
+    for (const group of groups) {
+      for (const raw of group || []) {
+        const url = cleanImageUrl(raw);
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        out.push(url);
+      }
+    }
+    return out;
+  }
+
   function cleanLocationText(value) {
     const cleaned = norm(value);
     if (!cleaned) return '';
@@ -563,6 +577,69 @@ const SocaiXhsPageScripts = (() => {
       }
     } catch (e) {}
     return null;
+  }
+
+  function imageUrlFromStateObject(item) {
+    item = unwrapStateValue(item);
+    if (typeof item === 'string') return cleanImageUrl(item);
+    if (!item || typeof item !== 'object') return '';
+
+    // XHS note detail state usually exposes one object per carousel image.
+    // Prefer a single canonical/high-quality URL per object so we don't
+    // download thumbnail + preview variants of the same image as duplicates.
+    const directKeys = [
+      'urlDefault', 'url_default', 'urlSizeLarge', 'url_size_large',
+      'urlPre', 'url_pre', 'url', 'originalUrl', 'original_url',
+    ];
+    for (const key of directKeys) {
+      const url = cleanImageUrl(item[key]);
+      if (url) return url;
+    }
+
+    const infoList = unwrapStateValue(item.infoList || item.info_list || item.infos || item.imageInfo);
+    if (Array.isArray(infoList)) {
+      const infos = infoList
+        .map(unwrapStateValue)
+        .filter((info) => info && typeof info === 'object');
+      const preferred =
+        infos.find((info) => /dft|default|large|origin/i.test(String(info.imageScene || info.scene || info.type || ''))) ||
+        infos[0];
+      if (preferred) {
+        for (const key of ['url', 'urlDefault', 'url_default', 'urlPre', 'url_pre']) {
+          const url = cleanImageUrl(preferred[key]);
+          if (url) return url;
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function imageUrlsFromInitialState(noteId) {
+    const note = noteFromInitialState(noteId);
+    if (!note || typeof note !== 'object') return [];
+    const out = [];
+    const seen = new Set();
+    const push = (url) => {
+      url = cleanImageUrl(url);
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      out.push(url);
+    };
+    const collectList = (value) => {
+      value = unwrapStateValue(value);
+      if (!value) return;
+      if (Array.isArray(value)) {
+        for (const item of value) push(imageUrlFromStateObject(item));
+      } else {
+        push(imageUrlFromStateObject(value));
+      }
+    };
+
+    for (const key of ['imageList', 'image_list', 'imagesList', 'images', 'image']) {
+      collectList(note[key]);
+    }
+    return out;
   }
 
   function collectStateStreamVariants(stream) {
@@ -611,8 +688,9 @@ const SocaiXhsPageScripts = (() => {
     const media = note?.video?.media || note?.video || null;
     const stream = media?.stream || media?.streams || null;
     const variants = collectStateStreamVariants(stream);
+    let directUrl = '';
     if (media && typeof media === 'object') {
-      const directUrl = media.masterUrl || media.master_url || media.url || media.playUrl || '';
+      directUrl = media.masterUrl || media.master_url || media.url || media.playUrl || '';
       if (directUrl && !variants.some((item) => item.url === absUrl(directUrl))) {
         variants.push({
           url: absUrl(directUrl),
@@ -638,7 +716,7 @@ const SocaiXhsPageScripts = (() => {
       }
     }
     return {
-      is_video: !!(note?.type === 'video' || note?.video || media || best || variants.length),
+      is_video: /video|视频/.test(String(note?.type || note?.noteType || note?.cardType || '').toLowerCase()) || !!(best?.url || directUrl || variants.length),
       best_url: best?.url || '',
       width: best?.width || null,
       height: best?.height || null,
@@ -769,7 +847,7 @@ const SocaiXhsPageScripts = (() => {
     const noteId = extractNoteIdFromUrl();
     const stateVideo = videoInfoFromInitialState(noteId);
     const type = detectNoteType(root, stateVideo);
-    const imageUrls = type === 'video' ? [] : collectImageUrls(root);
+    const imageUrls = type === 'video' ? [] : mergeUrls(imageUrlsFromInitialState(noteId), collectImageUrls(root));
     const video = type === 'video' ? collectVideoInfo(root, stateVideo) : null;
     return {
       note_id: noteId,
@@ -797,7 +875,7 @@ const SocaiXhsPageScripts = (() => {
 
   function carouselImages(opts = {}) {
     const root = getNoteRoot();
-    const urls = collectImageUrls(root);
+    const urls = mergeUrls(imageUrlsFromInitialState(extractNoteIdFromUrl()), collectImageUrls(root));
     const max = Number(opts.max_images) || 12;
     return {
       ok: true,
