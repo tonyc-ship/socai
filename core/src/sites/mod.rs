@@ -1,3 +1,4 @@
+pub mod douyin;
 pub mod registry;
 pub mod xhs;
 
