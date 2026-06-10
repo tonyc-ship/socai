@@ -341,7 +341,6 @@ fn find_codex_binary() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
-
 #[tauri::command]
 pub async fn agent_task_start(
     app: AppHandle,

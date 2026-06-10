@@ -153,11 +153,7 @@ impl MediaProcessor {
     ) {
         match self.download_bytes(poster_url, referer).await {
             Ok(poster) if !poster.is_empty() => {
-                match self.save_bytes(
-                    &poster,
-                    label,
-                    &url_suffix(poster_url, ".jpg"),
-                ) {
+                match self.save_bytes(&poster, label, &url_suffix(poster_url, ".jpg")) {
                     Ok(path) => insert_string(result, "poster_local_path", path.to_string_lossy()),
                     Err(err) => insert_string(result, "poster_save_error", format!("{err:#}")),
                 }

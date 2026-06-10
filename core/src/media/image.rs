@@ -4,12 +4,16 @@ use std::time::Instant;
 use crate::agent::{Block, Message, MessageRole, ToolSchema};
 use anyhow::Result;
 use base64::Engine;
+use futures::StreamExt;
 use serde_json::Value;
 
 use crate::media::common::{detect_media_type, insert_string, short, url_suffix, MediaUnavailable};
 use crate::media::md5;
 use crate::media::processor::MediaProcessor;
 
+/// Max simultaneous image downloads for one note. Topic-scan media downloads
+/// may request a full carousel, so keep CDN requests bounded.
+const IMAGE_DOWNLOAD_CONCURRENCY: usize = 8;
 /// Max simultaneous vision (LLM) calls when enriching a note's images. Bounded
 /// so a 12-image note doesn't fire a dozen concurrent requests at the provider.
 const VISION_CONCURRENCY: usize = 4;
@@ -149,18 +153,23 @@ impl MediaProcessor {
         }
 
         let t_batch = Instant::now();
-        let downloads = images
+        let urls: Vec<String> = images
             .iter()
             .map(|image| {
-                let url = image
+                image
                     .get("url")
                     .and_then(Value::as_str)
                     .unwrap_or("")
-                    .to_string();
-                self.safe_download(url, referer.to_string())
+                    .to_string()
             })
-            .collect::<Vec<_>>();
-        let download_results = futures::future::join_all(downloads).await;
+            .collect();
+        let downloads = urls
+            .into_iter()
+            .map(|url| self.safe_download(url, referer.to_string()));
+        let download_results: Vec<_> = futures::stream::iter(downloads)
+            .buffered(IMAGE_DOWNLOAD_CONCURRENCY)
+            .collect()
+            .await;
         self.timing
             .record("image_download_batch", t_batch.elapsed());
 

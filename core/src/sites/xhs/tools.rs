@@ -636,11 +636,8 @@ impl Tool for ReadNoteTool {
             .await?;
         if value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             if let Some(entity) = value.get("entity") {
-                self.history.record(
-                    entity,
-                    &options.level,
-                    options.include_media || options.download_media,
-                );
+                self.history
+                    .record(entity, &options.level, options.include_media);
             }
         }
         Ok(json_result(&value))
@@ -694,11 +691,8 @@ impl Tool for ExtractNoteTool {
             .extract_note_with_options(wait_seconds, options.clone())
             .await?;
         let value = serde_json::to_value(&note)?;
-        self.history.record(
-            &value,
-            &options.level,
-            options.include_media || options.download_media,
-        );
+        self.history
+            .record(&value, &options.level, options.include_media);
         Ok(json_result(&value))
     }
 }
@@ -1153,7 +1147,7 @@ impl Tool for TopicScanTool {
         // top comments).
         let level = "deep";
         let comment_count = TOPIC_SCAN_COMMENTS;
-        let requested_media = include_media || download_media;
+        let requested_media = include_media;
         let can_use_cached_reads = !download_media;
         let want = num_notes.max(1) as usize;
 
@@ -1401,4 +1395,28 @@ fn sanitize_for_filename(value: &str) -> String {
         .chars()
         .take(48)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_media_does_not_imply_include_media() {
+        let options = read_note_options(&json!({ "download_media": true }));
+
+        assert!(options.download_media);
+        assert!(!options.include_media);
+    }
+
+    #[test]
+    fn include_media_remains_independent_from_download_media() {
+        let options = read_note_options(&json!({
+            "include_media": true,
+            "download_media": false,
+        }));
+
+        assert!(options.include_media);
+        assert!(!options.download_media);
+    }
 }
