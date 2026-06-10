@@ -56,12 +56,15 @@ cargo install --path cli --force
 常用命令：
 
 ```bash
-socai topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个打开帖子，获取内容
-socai topic_scan "运营爆款思路" --num-notes 10 --download-media       # 同时下载帖子图片/视频到 run_dir/site_media/
-socai search_notes "运营爆款思路" --num-notes 100 --filter sort=最新          # 只打开搜索结果页，拿帖子标题/点赞/封面，不读正文
-socai extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
+socai xhs topic_scan "运营爆款思路" --num-notes 30 --filter publish_time=一周内   # 搜索并逐个打开帖子，获取内容
+socai xhs topic_scan "运营爆款思路" --num-notes 10 --download-media       # 同时下载帖子图片/视频到 run_dir/site_media/
+socai xhs search_notes "运营爆款思路" --num-notes 100 --filter sort=最新          # 只打开搜索结果页，拿帖子标题/点赞/封面，不读正文
+socai xhs extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
 socai stop                                                                 # 停止 daemon（关闭工具标签页）
 ```
+
+> 命令按站点分组（第一个站点是小红书 `xhs`）。旧的不带站点的写法（如
+> `socai topic_scan …`）仍然可用，但已废弃并会打印警告，请迁移到 `socai xhs …`。
 
 Options:
 
