@@ -76,6 +76,7 @@ in [Website deployment](docs/website-deployment.md).
 | [Data model](docs/data-model.md) | Run artifacts, desktop task index, and timeline replay. |
 | [CLI telemetry schema](docs/telemetry-schema.md) | Telemetry schema, privacy, and configuration contract for the CLI daemon. |
 | [Telemetry runbook](docs/development/telemetry-runbook.md) | Maintainer runbook for operating CLI telemetry. |
+| [Release flow](docs/release-flow.md) | GitHub Release workflow, platform build graph, assets, and installer smoke tests. |
 | [Website deployment](docs/website-deployment.md) | Vercel deployment runbook for `socai.io`. |
 | [Website launch QA](docs/website-launch-qa.md) | Launch checklist used for the `socai.io` rollout. |
 | [Browser automation on CDP](docs/browser-automation-evolution.md) | Conceptual map of CDP and how browser-automation frameworks evolved on it. |

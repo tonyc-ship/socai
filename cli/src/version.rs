@@ -11,7 +11,8 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LATEST_RELEASE_URL: &str = "https://github.com/socai-io/socai/releases/latest";
 const MACOS_INSTALL_SCRIPT_URL: &str =
     "https://github.com/socai-io/socai/releases/latest/download/install.sh";
-const MACOS_UPDATE_COMMAND: &str = "socai update";
+const WINDOWS_INSTALL_COMMAND: &str = "(Invoke-WebRequest -UseBasicParsing https://github.com/socai-io/socai/releases/latest/download/install.ps1).Content | Invoke-Expression";
+const UPDATE_COMMAND: &str = "socai update";
 const CHECK_INTERVAL: u64 = 24 * 60 * 60;
 const FAILED_CHECK_INTERVAL: u64 = 60 * 60;
 const NOTIFY_INTERVAL: u64 = 24 * 60 * 60;
@@ -81,7 +82,7 @@ pub async fn print_version_command(no_check: bool, json: bool) -> Result<()> {
                     },
                     update_available,
                     release_url: latest.html_url.as_deref(),
-                    upgrade_command: update_available.then(suggested_upgrade_command).flatten(),
+                    upgrade_command: update_available.then(upgrade_command_for_report).flatten(),
                     error: None,
                 },
                 json,
@@ -108,9 +109,14 @@ pub async fn print_version_command(no_check: bool, json: bool) -> Result<()> {
 }
 
 pub async fn run_update_command() -> Result<()> {
-    if !cfg!(target_os = "macos") {
+    if cfg!(target_os = "windows") {
         anyhow::bail!(
-            "socai update currently supports macOS release binaries only; see https://github.com/socai-io/socai#cli for the source/Cargo fallback"
+            "socai update does not replace a running Windows socai.exe yet; rerun the installer instead: {WINDOWS_INSTALL_COMMAND}"
+        );
+    }
+    if !managed_update_supported() {
+        anyhow::bail!(
+            "socai update currently supports macOS release-binary installs only; see https://github.com/socai-io/socai#cli for the source/Cargo fallback"
         );
     }
 
@@ -122,7 +128,7 @@ pub async fn run_update_command() -> Result<()> {
 
     let install_dir =
         managed_install_dir().context("could not determine the managed socai install directory")?;
-    let install_path = install_dir.join("socai");
+    let install_path = managed_install_path(&install_dir);
     ensure_current_exe_is_managed(&install_path)?;
 
     println!(
@@ -132,7 +138,7 @@ pub async fn run_update_command() -> Result<()> {
     );
 
     let tmp_dir = make_update_temp_dir()?;
-    let installer_path = tmp_dir.join("install.sh");
+    let installer_path = tmp_dir.join(installer_file_name());
     let result: Result<()> = async {
         download_installer(&installer_path).await?;
         run_installer(&installer_path, &install_dir).await?;
@@ -286,6 +292,22 @@ fn managed_install_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".socai").join("bin"))
 }
 
+fn managed_install_path(install_dir: &Path) -> PathBuf {
+    install_dir.join(managed_binary_name())
+}
+
+fn managed_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "socai.exe"
+    } else {
+        "socai"
+    }
+}
+
+fn managed_update_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
 fn ensure_current_exe_is_managed(install_path: &Path) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to resolve current socai executable")?;
@@ -313,25 +335,29 @@ fn make_update_temp_dir() -> Result<PathBuf> {
 }
 
 async fn download_installer(installer_path: &Path) -> Result<()> {
-    println!("downloading installer: {MACOS_INSTALL_SCRIPT_URL}");
-    let status = tokio::process::Command::new("curl")
-        .arg("-fsSL")
-        .arg(MACOS_INSTALL_SCRIPT_URL)
-        .arg("-o")
-        .arg(installer_path)
-        .status()
+    let url = installer_url();
+    println!("downloading installer: {url}");
+    let bytes = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(format!("socai/{CURRENT_VERSION}"))
+        .build()?
+        .get(url)
+        .send()
         .await
-        .context("failed to run curl for socai installer download")?;
-    if !status.success() {
-        anyhow::bail!("socai installer download failed with status {status}");
-    }
+        .context("failed to download socai installer")?
+        .error_for_status()
+        .context("socai installer download failed")?
+        .bytes()
+        .await
+        .context("failed to read socai installer download")?;
+    fs::write(installer_path, bytes).context("failed to write socai installer")?;
     Ok(())
 }
 
 async fn run_installer(installer_path: &Path, install_dir: &Path) -> Result<()> {
     println!("installing to {}", install_dir.display());
-    let status = tokio::process::Command::new("sh")
-        .arg(installer_path)
+    let mut command = installer_command(installer_path);
+    let status = command
         .env("SOCAI_INSTALL_DIR", install_dir)
         .status()
         .await
@@ -340,6 +366,20 @@ async fn run_installer(installer_path: &Path, install_dir: &Path) -> Result<()> 
         anyhow::bail!("socai installer failed with status {status}");
     }
     Ok(())
+}
+
+fn installer_file_name() -> &'static str {
+    "install.sh"
+}
+
+fn installer_url() -> &'static str {
+    MACOS_INSTALL_SCRIPT_URL
+}
+
+fn installer_command(installer_path: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("sh");
+    command.arg(installer_path);
+    command
 }
 
 async fn stop_existing_daemon() {
@@ -480,21 +520,31 @@ fn cache_path() -> Option<PathBuf> {
 }
 
 fn suggested_upgrade_command() -> Option<String> {
-    if cfg!(target_os = "macos")
+    if managed_update_supported()
         && managed_install_dir()
-            .map(|dir| ensure_current_exe_is_managed(&dir.join("socai")).is_ok())
+            .map(|dir| ensure_current_exe_is_managed(&managed_install_path(&dir)).is_ok())
             .unwrap_or(false)
     {
-        Some(MACOS_UPDATE_COMMAND.into())
+        Some(UPDATE_COMMAND.into())
     } else {
         None
     }
 }
 
+fn upgrade_command_for_report() -> Option<String> {
+    suggested_upgrade_command().or_else(|| {
+        if cfg!(target_os = "windows") {
+            Some(WINDOWS_INSTALL_COMMAND.into())
+        } else {
+            None
+        }
+    })
+}
+
 fn upgrade_instruction() -> String {
-    if let Some(command) = suggested_upgrade_command() {
+    if let Some(command) = upgrade_command_for_report() {
         format!("Run `{command}` to upgrade.")
-    } else if cfg!(target_os = "macos") {
+    } else if managed_update_supported() {
         "See https://github.com/socai-io/socai#cli for install/update options.".into()
     } else {
         "See https://github.com/socai-io/socai#cli for the source/Cargo fallback.".into()
