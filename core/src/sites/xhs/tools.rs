@@ -150,12 +150,13 @@ pub async fn topic_scan_command(
     tab_label: Option<&str>,
     filters: Option<&Value>,
     num_notes: Option<i64>,
+    download_media: bool,
     debug_snapshot: bool,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
-        topic_scan_input(query, tab_label, filters, num_notes)?,
+        topic_scan_input(query, tab_label, filters, num_notes, download_media)?,
         debug_snapshot,
     )
     .await
@@ -198,6 +199,7 @@ fn topic_scan_input(
     tab_label: Option<&str>,
     filters: Option<&Value>,
     num_notes: Option<i64>,
+    download_media: bool,
 ) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
@@ -208,6 +210,9 @@ fn topic_scan_input(
     }
     if let Some(n) = num_notes {
         input["num_notes"] = json!(n.max(1));
+    }
+    if download_media {
+        input["download_media"] = json!(true);
     }
     Ok(input)
 }
@@ -377,6 +382,7 @@ fn read_note_options(input: &Value) -> ReadNoteOptions {
     ReadNoteOptions {
         level: get_str(input, "level").unwrap_or("lite").to_string(),
         include_media: get_bool(input, "include_media", false),
+        download_media: get_bool(input, "download_media", false),
         max_images: get_i64(input, "max_images", 12).max(1) as usize,
         max_video_frames: get_i64(input, "max_video_frames", 4).max(1) as usize,
     }
@@ -446,7 +452,10 @@ impl Tool for SearchNotesTool {
         let query = get_str(&input, "query")
             .ok_or_else(|| anyhow::anyhow!("missing query"))?
             .to_string();
-        let filters = input.get("filters").filter(|value| !value.is_null()).cloned();
+        let filters = input
+            .get("filters")
+            .filter(|value| !value.is_null())
+            .cloned();
         let wait_seconds = get_f64(&input, "wait_seconds", 2.0);
         let num_notes = input
             .get("num_notes")
@@ -569,6 +578,7 @@ impl Tool for ReadNoteTool {
                 "wait_seconds": { "type": "number", "default": 6.0 },
                 "level": { "type": "string", "enum": ["card", "lite", "deep"], "default": "lite" },
                 "include_media": { "type": "boolean", "default": false },
+                "download_media": { "type": "boolean", "default": false },
                 "max_images": { "type": "integer", "default": 12, "minimum": 1 },
                 "max_video_frames": { "type": "integer", "default": 4, "minimum": 1 }
             }
@@ -586,11 +596,13 @@ impl Tool for ReadNoteTool {
 
         // Cross-run dedup: short-circuit when a previous run already covers
         // this note at the requested level + media. Only fires when note_id
-        // is known up front.
+        // is known up front. Downloads are intentionally never skipped because
+        // the caller expects fresh local files in the current run dir.
         if let Some(id) = note_id.as_deref().filter(|s| !s.trim().is_empty()) {
-            if self
-                .history
-                .is_satisfied_by(id, &options.level, options.include_media)
+            if !options.download_media
+                && self
+                    .history
+                    .is_satisfied_by(id, &options.level, options.include_media)
             {
                 let entry = self.history.get(id).unwrap_or_default();
                 return Ok(json_result(&json!({
@@ -600,6 +612,7 @@ impl Tool for ReadNoteTool {
                     "note_id": id,
                     "requested_level": options.level,
                     "requested_include_media": options.include_media,
+                    "requested_download_media": options.download_media,
                     "history": entry,
                 })));
             }
@@ -607,7 +620,11 @@ impl Tool for ReadNoteTool {
 
         let xhs = XhsPageRuntime::new_with_media(
             &self.page,
-            media_for(ctx, self.llm_provider.clone(), options.include_media)?,
+            media_for(
+                ctx,
+                self.llm_provider.clone(),
+                options.include_media || options.download_media,
+            )?,
         );
         let value = xhs
             .read_note_with_options(
@@ -619,8 +636,11 @@ impl Tool for ReadNoteTool {
             .await?;
         if value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             if let Some(entity) = value.get("entity") {
-                self.history
-                    .record(entity, &options.level, options.include_media);
+                self.history.record(
+                    entity,
+                    &options.level,
+                    options.include_media || options.download_media,
+                );
             }
         }
         Ok(json_result(&value))
@@ -652,6 +672,7 @@ impl Tool for ExtractNoteTool {
                 "wait_seconds": { "type": "number", "default": 8.0 },
                 "level": { "type": "string", "enum": ["card", "lite", "deep"], "default": "lite" },
                 "include_media": { "type": "boolean", "default": false },
+                "download_media": { "type": "boolean", "default": false },
                 "max_images": { "type": "integer", "default": 12, "minimum": 1 },
                 "max_video_frames": { "type": "integer", "default": 4, "minimum": 1 }
             }
@@ -663,14 +684,21 @@ impl Tool for ExtractNoteTool {
         let options = read_note_options(&input);
         let xhs = XhsPageRuntime::new_with_media(
             &self.page,
-            media_for(ctx, self.llm_provider.clone(), options.include_media)?,
+            media_for(
+                ctx,
+                self.llm_provider.clone(),
+                options.include_media || options.download_media,
+            )?,
         );
         let note = xhs
             .extract_note_with_options(wait_seconds, options.clone())
             .await?;
         let value = serde_json::to_value(&note)?;
-        self.history
-            .record(&value, &options.level, options.include_media);
+        self.history.record(
+            &value,
+            &options.level,
+            options.include_media || options.download_media,
+        );
         Ok(json_result(&value))
     }
 }
@@ -1007,7 +1035,7 @@ impl Tool for ExtractProfileTool {
     }
 }
 
-/// topic_scan(query, tab_label?, filters?, num_notes?) -> aggregated topic bundle
+/// topic_scan(query, tab_label?, filters?, num_notes?, download_media?) -> aggregated topic bundle
 ///
 /// Composite macro: search → optional tab switch → optional search filters →
 /// collect up to `num_notes` cards in page order (scrolling the feed only when
@@ -1041,10 +1069,12 @@ impl Tool for TopicScanTool {
          collect up to `num_notes` cards in page order (scrolling only if the \
          first page is too small) → open each note and read its body + top \
          comments → return one compact bundle (search results + selected cards \
-         + note bodies + comments). Defaults to 10 notes; pass a larger \
-         `num_notes` to scan more (each note is opened, so latency scales with \
-         it). Prefer this for XHS topic research. Do not repeat the same scan \
-         unless the previous one was clearly insufficient."
+         + note bodies + comments). Pass `download_media=true` to download \
+         note images/videos into the run dir and include local paths. Defaults \
+         to 10 notes; pass a larger `num_notes` to scan more (each note is \
+         opened, so latency scales with it). Prefer this for XHS topic \
+         research. Do not repeat the same scan unless the previous one was \
+         clearly insufficient."
     }
 
     fn input_schema(&self) -> Value {
@@ -1062,6 +1092,11 @@ impl Tool for TopicScanTool {
                     "description": "Number of notes to read (body + top comments each). The first results page is used directly; only if it holds fewer than this does the feed scroll for more. Each note is opened, so latency scales with this.",
                     "default": DEFAULT_NUM_NOTES,
                     "minimum": 1
+                },
+                "download_media": {
+                    "type": "boolean",
+                    "description": "Download note images/videos into the command run_dir and include local_path fields in returned notes.",
+                    "default": false
                 }
             },
             "required": ["query"]
@@ -1082,8 +1117,13 @@ impl Tool for TopicScanTool {
         // and pull top comments. Per-note image vision is off (it's the one
         // genuinely expensive enrichment and not needed for topic research).
         let include_media = false;
+        let download_media = get_bool(&input, "download_media", false);
 
-        let media = media_for(ctx, self.llm_provider.clone(), include_media)?;
+        let media = media_for(
+            ctx,
+            self.llm_provider.clone(),
+            include_media || download_media,
+        )?;
         let media_baseline: Option<TimingSnapshot> = media.as_ref().map(|m| m.timing().snapshot());
         let xhs = XhsPageRuntime::new_with_media(&self.page, media.clone());
 
@@ -1113,7 +1153,8 @@ impl Tool for TopicScanTool {
         // top comments).
         let level = "deep";
         let comment_count = TOPIC_SCAN_COMMENTS;
-        let requested_media = include_media;
+        let requested_media = include_media || download_media;
+        let can_use_cached_reads = !download_media;
         let want = num_notes.max(1) as usize;
 
         // Read top-to-bottom: pull cards from the results state (which only
@@ -1158,7 +1199,10 @@ impl Tool for TopicScanTool {
 
             // Dedup: skip notes already processed at this level or deeper
             // within the same run OR in a previous run (cross-run history).
-            if !card.note_id.is_empty()
+            // Media downloads are never cache-skipped: the caller expects
+            // fresh files under this command's run_dir.
+            if can_use_cached_reads
+                && !card.note_id.is_empty()
                 && ctx.has_processed_note(&card.note_id, level, requested_media)
             {
                 notes.push(json!({
@@ -1169,7 +1213,8 @@ impl Tool for TopicScanTool {
                 }));
                 continue;
             }
-            if !card.note_id.is_empty()
+            if can_use_cached_reads
+                && !card.note_id.is_empty()
                 && self
                     .history
                     .is_satisfied_by(&card.note_id, level, requested_media)
@@ -1191,7 +1236,8 @@ impl Tool for TopicScanTool {
                     6.0,
                     ReadNoteOptions {
                         level: level.to_string(),
-                        include_media: requested_media,
+                        include_media,
+                        download_media,
                         max_images: 12,
                         max_video_frames: 4,
                     },
@@ -1285,6 +1331,7 @@ impl Tool for TopicScanTool {
                 "selected": selected.len(),
                 "comments_per_note": TOPIC_SCAN_COMMENTS,
                 "include_media": include_media,
+                "download_media": download_media,
             },
             "timing": {
                 "media": media_timing,

@@ -54,6 +54,10 @@ enum Command {
         /// holds fewer.
         #[arg(long = "num-notes")]
         num_notes: Option<i64>,
+        /// Download note images/videos into the command run_dir and include
+        /// local_path fields in the JSON output.
+        #[arg(long = "download-media")]
+        download_media: bool,
         #[arg(long)]
         pretty: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
@@ -138,6 +142,7 @@ async fn main() -> Result<()> {
             tab,
             filter,
             num_notes,
+            download_media,
             pretty,
             debug_snapshot,
         } => {
@@ -150,6 +155,9 @@ async fn main() -> Result<()> {
             }
             if let Some(n) = num_notes {
                 input["num_notes"] = serde_json::json!(n.max(1));
+            }
+            if download_media {
+                input["download_media"] = serde_json::json!(true);
             }
 
             let result =

@@ -78,7 +78,8 @@ pub async fn tool_topic_scan(
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
-    let result = topic_scan_command(page.clone(), &query, None, None, num_notes, false).await;
+    let result =
+        topic_scan_command(page.clone(), &query, None, None, num_notes, false, false).await;
     close_page(page).await;
     result.map_err(|e| format!("{e:#}"))
 }

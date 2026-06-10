@@ -457,8 +457,10 @@ const SocaiXhsPageScripts = (() => {
   }
 
   // ── note content extraction (root-scoped + visible-only) ─────
-  function detectNoteType(root) {
-    return root?.querySelector?.('video') ? 'video' : 'image';
+  function detectNoteType(root, stateVideo = null) {
+    if (root?.querySelector?.('video')) return 'video';
+    if (stateVideo?.is_video || stateVideo?.best_url || (stateVideo?.streams || []).length) return 'video';
+    return 'image';
   }
 
   function extractNoteIdFromUrl() {
@@ -536,14 +538,129 @@ const SocaiXhsPageScripts = (() => {
     return cleaned;
   }
 
-  function collectVideoInfo(root) {
+  function unwrapStateValue(value) {
+    if (value && typeof value === 'object') {
+      if ('_value' in value) return value._value;
+      if ('value' in value && Object.keys(value).length <= 2) return value.value;
+    }
+    return value;
+  }
+
+  function noteFromInitialState(noteId) {
+    try {
+      const state = window.__INITIAL_STATE__ || {};
+      const noteState = unwrapStateValue(state.note) || {};
+      const detailMap = unwrapStateValue(noteState.noteDetailMap) || {};
+      const keys = [];
+      if (noteId) keys.push(noteId);
+      for (const key of Object.keys(detailMap)) {
+        if (!keys.includes(key)) keys.push(key);
+      }
+      for (const key of keys) {
+        const detail = unwrapStateValue(detailMap[key]);
+        const note = unwrapStateValue(detail?.note || detail);
+        if (note && typeof note === 'object') return note;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function collectStateStreamVariants(stream) {
+    const variants = [];
+    const seen = new Set();
+    const pushVariant = (item, codec) => {
+      item = unwrapStateValue(item);
+      if (!item || typeof item !== 'object') return;
+      const backupUrls = Array.isArray(item.backupUrls) ? item.backupUrls
+        : (Array.isArray(item.backup_urls) ? item.backup_urls : []);
+      const url = item.masterUrl || item.master_url || item.url || item.urlDefault || backupUrls[0] || '';
+      const value = absUrl(url || '');
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      variants.push({
+        url: value,
+        backup_urls: backupUrls.map(absUrl).filter(Boolean),
+        width: Number(item.width) || null,
+        height: Number(item.height) || null,
+        size: Number(item.size) || null,
+        codec: item.videoCodec || item.video_codec || codec || '',
+        format: item.format || item.videoFormat || '',
+      });
+    };
+    const pushBucket = (bucket, codec) => {
+      bucket = unwrapStateValue(bucket);
+      if (Array.isArray(bucket)) {
+        for (const item of bucket) pushVariant(item, codec);
+      } else if (bucket && typeof bucket === 'object') {
+        pushVariant(bucket, codec);
+      }
+    };
+    if (stream && typeof stream === 'object') {
+      pushBucket(stream.h265, 'h265');
+      pushBucket(stream.h264, 'h264');
+      pushBucket(stream.av1, 'av1');
+      for (const [codec, bucket] of Object.entries(stream)) {
+        if (!['h265', 'h264', 'av1'].includes(codec)) pushBucket(bucket, codec);
+      }
+    }
+    return variants;
+  }
+
+  function videoInfoFromInitialState(noteId) {
+    const note = noteFromInitialState(noteId);
+    const media = note?.video?.media || note?.video || null;
+    const stream = media?.stream || media?.streams || null;
+    const variants = collectStateStreamVariants(stream);
+    if (media && typeof media === 'object') {
+      const directUrl = media.masterUrl || media.master_url || media.url || media.playUrl || '';
+      if (directUrl && !variants.some((item) => item.url === absUrl(directUrl))) {
+        variants.push({
+          url: absUrl(directUrl),
+          backup_urls: [],
+          width: Number(media.width) || null,
+          height: Number(media.height) || null,
+          size: Number(media.size) || null,
+          codec: media.videoCodec || media.video_codec || '',
+          format: media.format || '',
+        });
+      }
+    }
+    const h2651080 = variants.find((item) => /h265/i.test(item.codec) && Number(item.width) === 1080);
+    const score = (item) => {
+      const codecScore = /h265/i.test(item.codec) ? 3 : (/h264/i.test(item.codec) ? 2 : 1);
+      return codecScore * 1e12 + (Number(item.width) || 0) * 1e8 + (Number(item.size) || 0);
+    };
+    const best = h2651080 || variants.slice().sort((a, b) => score(b) - score(a))[0] || null;
+    const sourceUrls = [];
+    for (const item of variants) {
+      for (const url of [item.url, ...(item.backup_urls || [])]) {
+        if (url && !sourceUrls.includes(url)) sourceUrls.push(url);
+      }
+    }
+    return {
+      is_video: !!(note?.type === 'video' || note?.video || media || best || variants.length),
+      best_url: best?.url || '',
+      width: best?.width || null,
+      height: best?.height || null,
+      size: best?.size || null,
+      codec: best?.codec || '',
+      duration_s: Number(media?.video?.duration ?? media?.duration ?? note?.video?.duration) || null,
+      source_urls: sourceUrls,
+      streams: variants,
+    };
+  }
+
+  function collectVideoInfo(root, stateVideo = null) {
     const video = root.querySelector?.('video');
+    stateVideo = stateVideo || videoInfoFromInitialState(extractNoteIdFromUrl());
     const candidates = [];
     const push = (url, source) => {
       const value = absUrl(url || '');
       if (!value || candidates.some((item) => item.url === value)) return;
       candidates.push({ url: value, source });
     };
+    push(stateVideo.best_url, 'initial_state');
+    for (const url of stateVideo.source_urls || []) push(url, 'initial_state');
     if (video) {
       push(video.currentSrc, 'video.currentSrc');
       push(video.src, 'video.src');
@@ -558,13 +675,20 @@ const SocaiXhsPageScripts = (() => {
       }
     } catch (e) {}
     const poster = video?.poster || root.querySelector?.('img')?.src || '';
+    const resolvedUrl = candidates.find((item) => /^https?:/.test(item.url) && !item.url.startsWith('blob:'))?.url || candidates[0]?.url || '';
     return {
       url: candidates[0]?.url || '',
-      resolved_url: candidates.find((item) => /^https?:/.test(item.url) && !item.url.startsWith('blob:'))?.url || candidates[0]?.url || '',
+      resolved_url: resolvedUrl,
+      master_url: stateVideo.best_url || '',
       poster_url: cleanImageUrl(poster),
-      duration_s: Number.isFinite(video?.duration) ? video.duration : null,
+      duration_s: Number.isFinite(video?.duration) ? video.duration : stateVideo.duration_s,
+      width: stateVideo.width,
+      height: stateVideo.height,
+      size: stateVideo.size,
+      codec: stateVideo.codec,
       source_urls: candidates.map((item) => item.url),
       candidates,
+      state_streams: stateVideo.streams || [],
     };
   }
 
@@ -642,11 +766,13 @@ const SocaiXhsPageScripts = (() => {
     const locationText = cleanLocationText(
       firstVisibleText(['.location, .poi, [class*="location"], [class*="poi"]'], root, { excludeComments: true })
     );
-    const type = detectNoteType(root);
-    const imageUrls = collectImageUrls(root);
-    const video = type === 'video' ? collectVideoInfo(root) : null;
+    const noteId = extractNoteIdFromUrl();
+    const stateVideo = videoInfoFromInitialState(noteId);
+    const type = detectNoteType(root, stateVideo);
+    const imageUrls = type === 'video' ? [] : collectImageUrls(root);
+    const video = type === 'video' ? collectVideoInfo(root, stateVideo) : null;
     return {
-      note_id: extractNoteIdFromUrl(),
+      note_id: noteId,
       url: location.href,
       type,
       title,

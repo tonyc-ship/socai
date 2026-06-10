@@ -91,7 +91,8 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
 - Manual note read: use `read_note(index=N)` or `read_note(note_id=...)`.
   Use `level="card"` for metadata only, `level="lite"` for body/comments, and
   `level="deep"` plus `include_media=true` only when images, OCR, video, or
-  visual evidence materially matters.
+  visual evidence materially matters. Use `download_media=true` when the user
+  explicitly wants local image/video files rather than OCR/vision enrichment.
 - Creator analysis: navigate/open a profile, then use `extract_profile`.
   Keep creator inventory/style analysis separate from keyword/topic sampling
   unless the user explicitly asks for both.
@@ -99,6 +100,8 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
   then `extract_comments` when more visible comments are needed.
 - Media-heavy tasks: use deep reads sparingly. OCR, vision, transcription, and
   frame extraction depend on optional local/cloud capabilities and can be slow.
+  `download_media=true` only downloads files into the run dir and avoids those
+  expensive enrichment steps.
 
 ## Reading Levels
 
@@ -120,7 +123,8 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
   short-circuit notes already covered at the requested level and media
   setting — the returned payload has `skipped: true` plus the prior
   `history` entry. To deepen prior analysis, request a higher `level` (e.g.
-  `deep` after a `lite`) or set `include_media: true`.
+  `deep` after a `lite`) or set `include_media: true`. Media downloads are not
+  cache-skipped because fresh local files are expected in the current run dir.
 - Keep DOM text, comment evidence, image OCR/vision, and video transcript/frame
   evidence labeled separately in final answers.
 - If a read returns a stale-note warning or note-id mismatch, close the current

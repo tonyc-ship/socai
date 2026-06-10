@@ -13,6 +13,79 @@ use crate::media::md5;
 use crate::media::processor::MediaProcessor;
 
 impl MediaProcessor {
+    /// Download the playable video (and poster, when present) to the run's
+    /// media directory without transcription, frame extraction, OCR, or vision.
+    /// The returned video object preserves the input shape and adds
+    /// `local_path` / `poster_local_path` where downloads succeed.
+    pub async fn download_video(
+        &self,
+        video: &Value,
+        note_id: &str,
+        title: &str,
+        referer: &str,
+    ) -> Value {
+        let mut result = video.clone();
+        if !result.is_object() {
+            result = crate::media::common::empty_object();
+        }
+        let label = if !note_id.trim().is_empty() {
+            note_id
+        } else if !title.trim().is_empty() {
+            title
+        } else {
+            "video"
+        };
+
+        let poster_url = result
+            .get("poster_url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if !poster_url.is_empty() {
+            match self
+                .download_file(
+                    &poster_url,
+                    referer,
+                    &format!("{label}_poster"),
+                    &url_suffix(&poster_url, ".jpg"),
+                )
+                .await
+            {
+                Ok(path) => insert_string(&mut result, "poster_local_path", path.to_string_lossy()),
+                Err(err) => insert_string(&mut result, "poster_download_error", format!("{err:#}")),
+            }
+        }
+
+        let source = downloadable_video_url(&result);
+        if source.is_empty() {
+            insert_string(
+                &mut result,
+                "download_error",
+                "downloadable video URL not found (blob: URLs cannot be downloaded)",
+            );
+            return result;
+        }
+
+        match self
+            .download_file_with_timeout(
+                &source,
+                referer,
+                label,
+                &url_suffix(&source, ".mp4"),
+                Duration::from_secs(
+                    self.config
+                        .ffmpeg_timeout_s
+                        .max(self.config.request_timeout_s),
+                ),
+            )
+            .await
+        {
+            Ok(path) => insert_string(&mut result, "local_path", path.to_string_lossy()),
+            Err(err) => insert_string(&mut result, "download_error", format!("{err:#}")),
+        }
+        result
+    }
+
     pub async fn enrich_video(
         &self,
         video: &Value,
@@ -238,4 +311,43 @@ impl MediaProcessor {
         paths.sort();
         Ok(paths)
     }
+}
+
+fn downloadable_video_url(video: &Value) -> String {
+    fn clean(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+            && !trimmed.starts_with("blob:")
+        {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    }
+
+    for key in ["resolved_url", "master_url", "url"] {
+        if let Some(url) = video.get(key).and_then(Value::as_str).and_then(clean) {
+            return url;
+        }
+    }
+
+    for key in ["source_urls", "backup_urls"] {
+        if let Some(arr) = video.get(key).and_then(Value::as_array) {
+            for item in arr {
+                if let Some(url) = item.as_str().and_then(clean) {
+                    return url;
+                }
+            }
+        }
+    }
+
+    if let Some(candidates) = video.get("candidates").and_then(Value::as_array) {
+        for item in candidates {
+            if let Some(url) = item.get("url").and_then(Value::as_str).and_then(clean) {
+                return url;
+            }
+        }
+    }
+
+    String::new()
 }

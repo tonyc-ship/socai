@@ -132,10 +132,73 @@ impl MediaProcessor {
             )
             .await?;
         self.timing.record("vision_grid", t0.elapsed());
-        Ok(parse_grid_descriptions(
-            &response.text_blocks.join("\n"),
-            n,
-        ))
+        Ok(parse_grid_descriptions(&response.text_blocks.join("\n"), n))
+    }
+
+    /// Download note images to the run's media directory without OCR or vision
+    /// enrichment. The returned image objects preserve the input shape and add
+    /// `local_path` (or a `download_error` / `save_error`) per image.
+    pub async fn download_images(
+        &self,
+        images: &[Value],
+        referer: &str,
+        label: &str,
+    ) -> Vec<Value> {
+        if images.is_empty() {
+            return Vec::new();
+        }
+
+        let t_batch = Instant::now();
+        let downloads = images
+            .iter()
+            .map(|image| {
+                let url = image
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                self.safe_download(url, referer.to_string())
+            })
+            .collect::<Vec<_>>();
+        let download_results = futures::future::join_all(downloads).await;
+        self.timing
+            .record("image_download_batch", t_batch.elapsed());
+
+        images
+            .iter()
+            .zip(download_results)
+            .enumerate()
+            .map(|(idx, (image, (payload, error)))| {
+                let url = image
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let mut item = image.clone();
+                if url.is_empty() {
+                    insert_string(&mut item, "download_error", "image URL is empty");
+                    return item;
+                }
+                if let Some(error) = error {
+                    insert_string(&mut item, "download_error", error);
+                    return item;
+                }
+                if payload.is_empty() {
+                    insert_string(&mut item, "download_error", "download returned no bytes");
+                    return item;
+                }
+                let path = self.save_bytes(
+                    &payload,
+                    &format!("{label}_{}", idx + 1),
+                    &url_suffix(url, ".jpg"),
+                );
+                match path {
+                    Ok(path) => insert_string(&mut item, "local_path", path.to_string_lossy()),
+                    Err(err) => insert_string(&mut item, "save_error", format!("{err:#}")),
+                }
+                item
+            })
+            .collect()
     }
 
     pub async fn enrich_images(
@@ -253,7 +316,11 @@ impl MediaProcessor {
                         for (k, &idx) in batch.iter().enumerate() {
                             match descs.get(k) {
                                 Some(text) if !text.trim().is_empty() => {
-                                    insert_string(&mut items[idx].0, "vision_description", text.clone());
+                                    insert_string(
+                                        &mut items[idx].0,
+                                        "vision_description",
+                                        text.clone(),
+                                    );
                                 }
                                 _ => {}
                             }
