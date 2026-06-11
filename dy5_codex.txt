@@ -1,0 +1,1941 @@
+➜  ~ cd socai
+➜  socai git:(site-creation) ✗ codex --dangerously-bypass-approvals-and-sandbox
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.139.0)                   │
+│                                              │
+│ model:       gpt-5.5 high   /model to change │
+│ directory:   ~/socai                         │
+│ permissions: YOLO mode                       │
+╰──────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+
+› 请执行core/src/sites/creation/SKILL.md 这个skill，帮我新增支持抖音
+
+
+• 我会先读一下 repo 里的站点创建 skill 和相关记忆，确认新增站点的约定与是否需要先补齐输入，再决定能直接实现到什么程度。
+
+• Explored
+  └ Search creation_skill|socai-new-site|new-site|SiteSpec|dy|douyin|missing URL|workflow|output|login in MEMORY.md
+    Read SKILL.md
+    List sites
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我已经读完 core/src/sites/creation/SKILL.md。它把“先补齐目标 URL、流程、步骤、输出字段、登录状态”设为开始编码前置条件；现在这条请求还缺这些信息，所以我先停在确认阶
+  段，不会直接改站点代码。
+
+• Explored
+  └ Read SKILL.md
+
+• Ran git status --short --branch
+  └ ## site-creation
+    ?? self_creation_memo.md
+
+• Explored
+  └ Search dy|douyin|抖音|SiteSpec|XHS_SITE|page_state in README.md
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我也检查了当前分支状态：在 site-creation 上，当前没有 core/src/sites/dy/，只有一个未跟踪的 self_creation_memo.md，我不会动它。下一步需要你给抖音 workflow 的具体目
+  标。
+
+• Explored
+  └ Read registry.rs, mod.rs, README.md, tools.rs, SKILL.md, MEMORY.md, 2026-06-10T12-57-14-81sW-socai_douyin_site_support_and_branch_commit.md
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 补充一点：记忆里显示之前有过一个 dy 的最小 scaffold 被提交到 dy2 分支，但当前 site-creation 分支不包含它。我可以在你确认需求后选择复用那份 scaffold 或在当前分支按同
+  样路径重新落地。
+
+• Ran git branch --list --all | sed -n '1,80p'
+  └   debug-snapshot-recorder
+      dev/tian/add-xhs-search-filter
+    … +66 lines (ctrl + t to view transcript)
+      remotes/origin/xhs-extraction-overhaul
+      remotes/pr/101
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已按 core/src/sites/creation/SKILL.md 开始执行。这个 skill 的第一步是硬门槛：新增站点前不能直接写实现代码，必须先确认需求。当前我没有改代码；当前分支 site-creation
+  里也还没有 core/src/sites/dy/。
+
+  请直接补这 5 点：
+
+  1. 抖音入口 URL：https://www.douyin.com/，还是某个搜索页/视频页/用户主页？
+  2. 你要完成的流程：搜索视频、读取视频详情、读取评论、读取用户主页，还是别的？
+  3. 人类操作步骤：搜索框输入、回车/点击搜索、滚动、点开视频、展开评论等，按你期望的流程描述。
+  4. 输出字段：例如 title、author、video_url、like_count、comment_count、comments、publish_time 等。
+  5. 登录状态：是否需要登录？你当前 Chrome 里的抖音账号是否已经可用？
+
+  补齐后我会按 skill 继续：优先做 dy 站点 scaffold 和一个 page_state --debug-snapshot 观察入口，再基于真实 snapshot 一步步加具体操作，不猜 DOM。
+  另外本机有之前的 dy2 分支包含过最小抖音 scaffold，我会在实现时先对比复用，不覆盖当前未跟踪的 self_creation_memo.md。
+
+─ Worked for 1m 13s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› 1. https://www.douyin.com/
+      2. 搜索关键词，然后拿到每个视频的信息，比如拿30个视频的信息
+      3. 就是在抖音主页，搜索框输入关键词，然后拿搜索结果里的视频
+      4. 这些信息能有就尽量有，没有的就算了
+      5. 已登录
+    不要参考之前dy2等分支的改动，那些都作废了
+  另外，有的时候抖音网页版会限流，被限流时打开网页的时候会一直等待在空白页，直到4、5分钟才显示出来
+
+
+• 收到。关键约束我按新的处理：入口是 https://www.douyin.com/，目标是搜索关键词并尽量收集约 30 个视频卡片信息，浏览器已登录；之前 dy2/dy*
+  分支全部不参考。另一个实现重点是抖音空白页限流可能 4-5 分钟后才恢复，所以等待策略不能用普通短超时误判失败。
+
+• Updated Plan
+  └ □ Inspect current site runner and XHS patterns
+    □ Scaffold fresh dy site and registry wiring
+    □ Add page_state snapshot command and validate
+    □ Iterate search_videos via real snapshots
+    □ Run checks and report results
+
+• 我先读现有 xhs 的工具/页面/runner 结构，重点找可复用的 SiteSpec、debug snapshot、命令包装和 CDP 操作方式。然后会从当前分支重新建 dy，不从旧分支拷代码。
+
+• Explored
+  └ Read runner.rs, tools.rs, page.rs
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现有架构足够：SiteSpec 自动暴露 CLI/daemon/TUI/desktop，run_tool_command 已经负责 run_dir 和 --debug-snapshot。我会只新增 core/src/sites/dy/、注册表和 README 示例，
+  不改 CLI/app 壳层。
+
+• Explored
+  └ Read page.rs, runner.rs, session.rs
+    Search fn expect_object|script_ok|number|sleep_ms|press_key|navigate_with_timeout|mouse_wheel|scroll in page.rs
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我会先落一个“可观察”的 dy page_state 和 dy search_videos 骨架：search_videos 会用页面脚本找搜索框、输入关键词、按回车、滚动并抽取卡片；如果限流导致空白页，会返回明确
+  的 blank_or_throttled 状态并支持更长等待参数。接下来开始编辑文件。
+
+• Explored
+  └ Read session.rs, page.rs, mod.rs, entities.rs
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 先按 skill 的第一轮落 page_state：只负责打开/复用抖音主页并读取页面状态，不做搜索。这样可以用 snapshot 验证首页、登录和限流状态，再基于真实页面继续加搜索输入。
+
+• Edited 8 files (+386 -1)
+  └ core/src/sites/dy/entities.rs (+45 -0)
+     1 +use serde::{Deserialize, Serialize};
+     2 +
+     3 +#[derive(Debug, Clone, Serialize, Deserialize)]
+     4 +pub struct DouyinVideoCard {
+     5 +    pub video_id: String,
+     6 +    pub url: String,
+     7 +    pub title: String,
+     8 +    pub author: String,
+     9 +    pub author_url: String,
+    10 +    pub likes: String,
+    11 +    pub comments: String,
+    12 +    pub shares: String,
+    13 +    pub cover_url: String,
+    14 +    pub position: usize,
+    15 +}
+    16 +
+    17 +pub fn normalize_douyin_url(raw: &str) -> String {
+    18 +    let trimmed = raw.trim();
+    19 +    if trimmed.is_empty() {
+    20 +        return String::new();
+    21 +    }
+    22 +    if trimmed.starts_with("//") {
+    23 +        return format!("https:{trimmed}");
+    24 +    }
+    25 +    if trimmed.starts_with('/') {
+    26 +        return format!("https://www.douyin.com{trimmed}");
+    27 +    }
+    28 +    trimmed.to_string()
+    29 +}
+    30 +
+    31 +pub fn extract_video_id(url: &str) -> String {
+    32 +    for marker in ["/video/", "/note/"] {
+    33 +        if let Some(rest) = url.split(marker).nth(1) {
+    34 +            let id = rest
+    35 +                .split(['?', '#', '/', '&'])
+    36 +                .next()
+    37 +                .unwrap_or_default()
+    38 +                .trim();
+    39 +            if !id.is_empty() {
+    40 +                return id.to_string();
+    41 +            }
+    42 +        }
+    43 +    }
+    44 +    String::new()
+    45 +}
+
+  └ core/src/sites/dy/knowledge.md (+10 -0)
+     1 +# Douyin site notes
+     2 +
+     3 +- Site id: `dy`; home URL: `https://www.douyin.com/`.
+     4 +- Douyin web may throttle by keeping the page visually blank for 4-5 minutes.
+     5 +  Commands therefore use long waits by default and report
+     6 +  `blank_or_throttled` instead of treating a blank page as an immediate hard
+     7 +  failure.
+     8 +- Current first-step tool: `page_state`. Use it with `--debug-snapshot` to
+     9 +  verify whether the homepage/search UI is visible before implementing or
+    10 +  relying on deeper workflows.
+
+  └ core/src/sites/dy/mod.rs (+10 -0)
+     1 +pub mod entities;
+     2 +pub mod page;
+     3 +pub mod tools;
+     4 +
+     5 +pub use self::entities::DouyinVideoCard;
+     6 +pub use self::page::{DouyinPageRuntime, DOUYIN_HOME_URL};
+     7 +pub use self::tools::{
+     8 +    dy_agent_instructions, dy_agent_tools, dy_tools, dy_tools_with_llm_provider, DY_KNOWLEDGE,
+     9 +    DY_SITE,
+    10 +};
+
+  └ core/src/sites/dy/page.rs (+112 -0)
+      1 +use std::time::{Duration, Instant};
+      2 +
+      3 +use anyhow::Result;
+      4 +use serde_json::{Map, Value};
+      5 +
+      6 +use crate::cdp::PageSession;
+      7 +
+      8 +pub const DOUYIN_HOME_URL: &str = "https://www.douyin.com/";
+      9 +
+     10 +const PAGE_SCRIPTS_JS: &str = include_str!("page_scripts.js");
+     11 +const DOUYIN_PAGE_SCRIPT_FUNCTIONS: &[&str] = &["pageState"];
+     12 +
+     13 +pub struct DouyinPageRuntime<'a> {
+     14 +    page: &'a PageSession,
+     15 +}
+     16 +
+     17 +impl<'a> DouyinPageRuntime<'a> {
+     18 +    pub fn new(page: &'a PageSession) -> Self {
+     19 +        Self { page }
+     20 +    }
+     21 +
+     22 +    pub async fn run_script(&self, name: &str, arg: Option<&Value>) -> Result<Value> {
+     23 +        if !DOUYIN_PAGE_SCRIPT_FUNCTIONS.contains(&name) {
+     24 +            anyhow::bail!("Unknown Douyin page script: {name}");
+     25 +        }
+     26 +        let args = match arg {
+     27 +            None => String::new(),
+     28 +            Some(v) => serde_json::to_string(v)?,
+     29 +        };
+     30 +        let expr = format!(
+     31 +            "{PAGE_SCRIPTS_JS}\n// SOCAI_DOUYIN_CALL: {name}\nreturn SocaiDouyinPageScripts.{name}({args});"
+     32 +        );
+     33 +        self.page.evaluate_json(&expr).await
+     34 +    }
+     35 +
+     36 +    pub async fn current_url(&self) -> Result<String> {
+     37 +        Ok(self
+     38 +            .page
+     39 +            .page_info()
+     40 +            .await?
+     41 +            .get("url")
+     42 +            .and_then(Value::as_str)
+     43 +            .unwrap_or_default()
+     44 +            .to_string())
+     45 +    }
+     46 +
+     47 +    pub async fn ensure_douyin(&self, navigate_if_needed: bool, timeout_seconds: f64) -> Result<()> {
+     48 +        let url = self.current_url().await.unwrap_or_default();
+     49 +        if url.contains("douyin.com") {
+     50 +            return Ok(());
+     51 +        }
+     52 +        if navigate_if_needed {
+     53 +            self.page
+     54 +                .navigate_with_timeout(DOUYIN_HOME_URL, timeout_seconds)
+     55 +                .await?;
+     56 +            return Ok(());
+     57 +        }
+     58 +        anyhow::bail!(
+     59 +            "Current page is not Douyin: {}",
+     60 +            if url.is_empty() { "unknown" } else { &url }
+     61 +        );
+     62 +    }
+     63 +
+     64 +    pub async fn wait_until_interactive(&self, timeout_seconds: f64) -> Result<Value> {
+     65 +        let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds.max(0.5));
+     66 +        let mut latest = Value::Object(Map::new());
+     67 +        while Instant::now() < deadline {
+     68 +            latest = self.detect_state().await?;
+     69 +            if !latest
+     70 +                .get("blank_or_throttled")
+     71 +                .and_then(Value::as_bool)
+     72 +                .unwrap_or(true)
+     73 +            {
+     74 +                return Ok(latest);
+     75 +            }
+     76 +            sleep_ms(1000).await;
+     77 +        }
+     78 +        Ok(latest)
+     79 +    }
+     80 +
+     81 +    pub async fn detect_state(&self) -> Result<Value> {
+     82 +        self.ensure_douyin(false, 0.0).await?;
+     83 +        self.expect_object("pageState", None).await
+     84 +    }
+     85 +
+     86 +    async fn expect_object(&self, name: &str, arg: Option<&Value>) -> Result<Value> {
+     87 +        let value = self.run_script(name, arg).await?;
+     88 +        if value.is_object() {
+     89 +            Ok(value)
+     90 +        } else {
+     91 +            anyhow::bail!(
+     92 +                "Douyin page script {name} returned {}, expected object",
+     93 +                value_type(&value)
+     94 +            );
+     95 +        }
+     96 +    }
+     97 +}
+     98 +
+     99 +fn value_type(value: &Value) -> &'static str {
+    100 +    match value {
+    101 +        Value::Null => "null",
+    102 +        Value::Bool(_) => "bool",
+    103 +        Value::Number(_) => "number",
+    104 +        Value::String(_) => "string",
+    105 +        Value::Array(_) => "array",
+    106 +        Value::Object(_) => "object",
+    107 +    }
+    108 +}
+    109 +
+    110 +async fn sleep_ms(ms: u64) {
+    111 +    tokio::time::sleep(Duration::from_millis(ms)).await;
+    112 +}
+
+  └ core/src/sites/dy/page_scripts.js (+73 -0)
+     1 +(function () {
+     2 +  function text(node) {
+     3 +    return (node && (node.innerText || node.textContent) || '').replace(/\s+/g, ' ').trim();
+     4 +  }
+     5 +
+     6 +  function normUrl(value) {
+     7 +    if (!value) return '';
+     8 +    try {
+     9 +      return new URL(value, location.href).href;
+    10 +    } catch (_) {
+    11 +      return String(value || '');
+    12 +    }
+    13 +  }
+    14 +
+    15 +  function visible(el) {
+    16 +    if (!el || !el.getBoundingClientRect) return false;
+    17 +    const rect = el.getBoundingClientRect();
+    18 +    const style = window.getComputedStyle(el);
+    19 +    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    20 +  }
+    21 +
+    22 +  function center(el) {
+    23 +    const rect = el.getBoundingClientRect();
+    24 +    return {
+    25 +      x: Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)),
+    26 +      y: Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2)),
+    27 +      w: rect.width,
+    28 +      h: rect.height,
+    29 +    };
+    30 +  }
+    31 +
+    32 +  function hasUsefulBody() {
+    33 +    return text(document.body).length > 20 || document.querySelectorAll('input, textarea, [contenteditable="true"], a[href], video').length > 0;
+    34 +  }
+    35 +
+    36 +  function pageState() {
+    37 +    const bodyText = text(document.body);
+    38 +    const inputs = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"], [role="searchbox"]'))
+    39 +      .filter(visible)
+    40 +      .slice(0, 8)
+    41 +      .map((el) => {
+    42 +        const rect = center(el);
+    43 +        return {
+    44 +          tag: el.tagName.toLowerCase(),
+    45 +          role: el.getAttribute('role') || '',
+    46 +          placeholder: el.getAttribute('placeholder') || '',
+    47 +          aria_label: el.getAttribute('aria-label') || '',
+    48 +          text: text(el).slice(0, 80),
+    49 +          x: rect.x,
+    50 +          y: rect.y,
+    51 +          w: rect.w,
+    52 +          h: rect.h,
+    53 +        };
+    54 +      });
+    55 +    const loginRequired = /登录|验证码|扫码|手机号/.test(bodyText) && /登录后|立即登录|扫码登录|验证码/.test(bodyText);
+    56 +    const blankOrThrottled = document.readyState !== 'complete' || !hasUsefulBody();
+    57 +    return {
+    58 +      ok: true,
+    59 +      site: 'dy',
+    60 +      url: location.href,
+    61 +      title: document.title || '',
+    62 +      ready_state: document.readyState,
+    63 +      body_text_len: bodyText.length,
+    64 +      blank_or_throttled: blankOrThrottled,
+    65 +      login_required: loginRequired,
+    66 +      search_inputs: inputs,
+    67 +    };
+    68 +  }
+    69 +
+    70 +  window.SocaiDouyinPageScripts = {
+    71 +    pageState,
+    72 +  };
+    73 +})();
+
+  └ core/src/sites/dy/tools.rs (+134 -0)
+      1 +use std::sync::Arc;
+      2 +
+      3 +use async_trait::async_trait;
+      4 +use serde_json::{json, Value};
+      5 +
+      6 +use crate::agent::{Backend as LlmProvider, Tool, ToolContext, ToolResult};
+      7 +use crate::cdp::PageSession;
+      8 +use crate::sites::dy::{DouyinPageRuntime, DOUYIN_HOME_URL};
+      9 +use crate::sites::registry::{ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen};
+     10 +use crate::sites::runner::{get_f64, json_result, run_tool_command, ToolCommand};
+     11 +
+     12 +pub const DY_KNOWLEDGE: &str = include_str!("knowledge.md");
+     13 +
+     14 +pub fn dy_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
+     15 +    dy_tools_with_llm_provider(page, None)
+     16 +}
+     17 +
+     18 +pub fn dy_tools_with_llm_provider(
+     19 +    page: Arc<PageSession>,
+     20 +    _llm_provider: Option<Arc<dyn LlmProvider>>,
+     21 +) -> Vec<Arc<dyn Tool>> {
+     22 +    vec![Arc::new(PageStateTool { page }) as Arc<dyn Tool>]
+     23 +}
+     24 +
+     25 +pub async fn dy_agent_tools(
+     26 +    page: Arc<PageSession>,
+     27 +    llm_provider: Arc<dyn LlmProvider>,
+     28 +) -> anyhow::Result<Vec<Arc<dyn Tool>>> {
+     29 +    let _ = DouyinPageRuntime::new(&page)
+     30 +        .ensure_douyin(true, 330.0)
+     31 +        .await;
+     32 +    Ok(dy_tools_with_llm_provider(page, Some(llm_provider)))
+     33 +}
+     34 +
+     35 +pub fn dy_agent_instructions(extra: &str) -> String {
+     36 +    let base = DY_KNOWLEDGE.trim().to_string();
+     37 +    let extra = extra.trim();
+     38 +    if extra.is_empty() {
+     39 +        base
+     40 +    } else {
+     41 +        format!("{extra}\n\n{base}")
+     42 +    }
+     43 +}
+     44 +
+     45 +pub static DY_SITE: SiteSpec = SiteSpec {
+     46 +    id: "dy",
+     47 +    about: "Douyin (douyin.com)",
+     48 +    home_url: DOUYIN_HOME_URL,
+     49 +    agent_tools: |page, llm| Box::pin(dy_agent_tools(page, llm)),
+     50 +    agent_instructions: dy_agent_instructions,
+     51 +    commands: &[SiteCommand {
+     52 +        name: "page_state",
+     53 +        tool_name: "page_state",
+     54 +        about: "Open or reuse Douyin and print page state as JSON.",
+     55 +        args: &[CommandArg {
+     56 +            key: "wait_seconds",
+     57 +            long: Some("wait-seconds"),
+     58 +            value_name: "SECONDS",
+     59 +            help: "Maximum wait for a non-blank Douyin page. Use 300+ when the web page is throttled.",
+     60 +            required: false,
+     61 +            kind: ArgKind::Int,
+     62 +        }],
+     63 +        slow: SlowWhen::Always,
+     64 +        run: run_page_state,
+     65 +    }],
+     66 +};
+     67 +
+     68 +fn run_page_state(
+     69 +    page: Arc<PageSession>,
+     70 +    args: Value,
+     71 +    debug_snapshot: bool,
+     72 +) -> BoxFuture<Value> {
+     73 +    Box::pin(async move {
+     74 +        let wait_seconds = get_f64(&args, "wait_seconds", 330.0);
+     75 +        run_tool_command(
+     76 +            ToolCommand {
+     77 +                site_id: "dy",
+     78 +                command_name: "page_state",
+     79 +                tool_name: "page_state",
+     80 +                before: Some(Box::new(move |page| {
+     81 +                    Box::pin(async move {
+     82 +                        let runtime = DouyinPageRuntime::new(&page);
+     83 +                        runtime.ensure_douyin(true, wait_seconds).await?;
+     84 +                        let _ = runtime.wait_until_interactive(wait_seconds).await?;
+     85 +                        Ok(())
+     86 +                    })
+     87 +                })),
+     88 +                after: None,
+     89 +            },
+     90 +            page.clone(),
+     91 +            &dy_tools(page),
+     92 +            args,
+     93 +            debug_snapshot,
+     94 +        )
+     95 +        .await
+     96 +    })
+     97 +}
+     98 +
+     99 +pub struct PageStateTool {
+    100 +    page: Arc<PageSession>,
+    101 +}
+    102 +
+    103 +#[async_trait]
+    104 +impl Tool for PageStateTool {
+    105 +    fn name(&self) -> &str {
+    106 +        "page_state"
+    107 +    }
+    108 +
+    109 +    fn description(&self) -> &str {
+    110 +        "Read Douyin page state, including URL, title, candidate search inputs, \
+    111 +         login hints, and whether the page still looks blank/throttled. This \
+    112 +         may wait several minutes on Douyin web throttling."
+    113 +    }
+    114 +
+    115 +    fn input_schema(&self) -> Value {
+    116 +        json!({
+    117 +            "type": "object",
+    118 +            "properties": {
+    119 +                "wait_seconds": {
+    120 +                    "type": "number",
+    121 +                    "description": "Maximum wait for the Douyin page to become non-blank.",
+    122 +                    "default": 330
+    123 +                }
+    124 +            }
+    125 +        })
+    126 +    }
+    127 +
+    128 +    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    129 +        let wait_seconds = get_f64(&input, "wait_seconds", 330.0);
+    130 +        let runtime = DouyinPageRuntime::new(&self.page);
+    131 +        let state = runtime.wait_until_interactive(wait_seconds).await?;
+    132 +        Ok(json_result(&state))
+    133 +    }
+    134 +}
+
+  └ core/src/sites/mod.rs (+1 -0)
+    2  pub mod runner;
+    3 +pub mod dy;
+    4  pub mod xhs;
+
+  └ core/src/sites/registry.rs (+1 -1)
+    94  /// Every registered site. Site order is also CLI help order.
+    95 -static SITES: &[&SiteSpec] = &[&crate::sites::xhs::XHS_SITE];
+    95 +static SITES: &[&SiteSpec] = &[&crate::sites::xhs::XHS_SITE, &crate::sites::dy::DY_SITE];
+    96
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• dy page_state 的第一轮代码已经落地，包含 330 秒默认等待来覆盖你提到的限流空白页。现在先做编译检查和 CLI help，然后跑一次带 snapshot 的页面观察。
+
+• Ran cargo check -q
+  └ (no output)
+
+• Ran cargo run -q -p socai-cli -- dy --help
+  └ Douyin (douyin.com)
+
+    … +6 lines (ctrl + t to view transcript)
+    Options:
+      -h, --help  Print help
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译和 socai dy --help 都通过了。接下来运行 dy page_state --debug-snapshot，如果 Chrome 首次弹 debugging 确认，需要你在弹窗里允许；如果抖音刚好限流，这条命令最多会等
+  约 5 分半钟。
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• page_state 还在运行，符合长等待路径；我继续等它完成或产出 run_dir/snapshot。
+
+• Ran cargo run -q -p socai-cli -- dy page_state --debug-snapshot --wait-seconds 330
+  └ Error: Request timed out.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 第一次 page_state 被客户端超时打断，说明虽然站点命令标记了 slow，但当前超时链路仍没覆盖 330 秒等待。我先查 CLI/daemon 的超时预算，把 dy page_state/search_videos 的慢
+  命令路径接上，再重跑 snapshot。
+
+• Explored
+  └ Read main.rs
+    Search SlowWhen|slow|timeout|Request timed out|LONG|SECONDS|dispatch|command\.run in cli
+    Read daemon.rs, main.rs
+    Search DEFAULT_COMMAND_TIMEOUT|LONG_COMMAND_TIMEOUT|Request timed out|request timed out in daemon.rs
+
+• Ran ps -axo pid,command | rg 'socai|chromiumoxide|__daemon|__bridge' | rg -v rg
+  └ 49859 /Users/tonychong/.local/bin/claude daemon run --json-path /Users/tonychong/.claude/daemon.json --log-file /Users/tonychong/.claude/daemon.log --origin
+    transient --spawned-by {"label":"claude","cwd":"/Users/tonychong/socai","pid":74295}
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 查到 CLI 本身默认超时其实有 600/1200 秒，不是问题源头；Request timed out. 更像是底层 CDP/Chrome 操作在 goto 或连接阶段超时。我要把抖音导航从“必须等待 goto 完成”改成
+  更宽容：先触发导航，超时后仍继续轮询当前页面状态，这样限流空白页不会直接失败。
+
+• Explored
+  └ Search Request timed out|timed out|goto\(|request timeout|Timeout in registry
+
+• Ran RUST_BACKTRACE=1 cargo run -q -p socai-cli -- dy page_state --debug-snapshot --wait-seconds 5
+  └ Error: ExceptionDetails { exception_id: 1, text: "Uncaught", line_number: 75, column_number: 0, script_id: Some(ScriptId("547")), url: None, stack_trace: None,
+    exception: Some(RemoteObject { type: Object, subtype: Some(Error), class_name: Some("SyntaxError"), value: None, unserializable_value: None, description:
+    … +77 lines (ctrl + t to view transcript)
+                 at /Users/tonychong/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:205:5
+      37: _main
+
+• Ran rg -n "fn wrap_expression|wrap_expression" core/src/cdp/session.rs && sed -n '280,340p' core/src/cdp/session.rs && tail -20 core/src/sites/xhs/page_scripts.js
+  └ 171:        let wrapped = wrap_expression(expression);
+    312:fn wrap_expression(expression: &str) -> String {
+    … +82 lines (ctrl + t to view transcript)
+      };
+    })();
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 实际失败点不是长等待，而是新 page_scripts.js 调用方式触发了 Chrome 的 Illegal return statement。我会把 dy 的脚本注入改成显式 IIFE 包裹，避免依赖通用 wrapper 的
+  return 检测。
+
+• Edited core/src/sites/dy/page.rs (+1 -1)
+    30          let expr = format!(
+    31 -            "{PAGE_SCRIPTS_JS}\n// SOCAI_DOUYIN_CALL: {name}\nreturn SocaiDouyinPageScripts.{name}({args});"
+    31 +            "(function() {{\n{PAGE_SCRIPTS_JS}\n// SOCAI_DOUYIN_CALL: {name}\nreturn SocaiDouyinPageScripts.{name}({args});\n}})()"
+    32          );
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 脚本注入修好了。现在重跑短等待版 page_state，先确认页面状态和 snapshot 目录能生成。
+
+• Ran cargo check -q
+  └ (no output)
+
+• Ran cargo run -q -p socai-cli -- dy page_state --debug-snapshot --wait-seconds 5 --pretty
+  └ socai daemon was started from a different build; restarting it
+    run_dir: /Users/tonychong/.socai/runs/20260611_171446_dy_page_state
+    … +21 lines (ctrl + t to view transcript)
+      "url": "https://www.douyin.com/jingxuan"
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 第一轮 snapshot 验证通过：抖音打开到了 /jingxuan，页面非空、未提示登录，搜索框坐标和 placeholder 都拿到了。下一步按这个真实页面结构加“点击搜索框、输入关键词、回车、
+  等待结果页”的单点能力。
+
+• Explored
+  └ List snapshots
+    List snapshots
+    Search 搜索|感兴趣|douyin|video|input|search in dom.html
+
+• Ran jq '.nodes[]? | select(.name.value? | test("搜索|Search|感兴趣")) | {role:.role.value,name:.name.value,value:.value.value}' /Users/tonychong/.socai/
+  │ runs/20260611_171446_dy_page_state/snapshots/*/a11y.json | head -80
+  └ jq: error (at /Users/tonychong/.socai/runs/20260611_171446_dy_page_state/snapshots/00001_171446_726/a11y.json:1846): null (null) cannot be matched, as it is not a
+    string
+    jq: error (at /Users/tonychong/.socai/runs/20260611_171446_dy_page_state/snapshots/00002_171446_923/a11y.json:1846): null (null) cannot be matched, as it is not a
+    string
+
+• Viewed Image
+  └ ~/.socai/runs/20260611_171446_dy_page_state/snapshots/00002_171446_923/screenshot.jpg
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 从 snapshot 看到稳定信号：搜索框有 data-e2e="searchbar-input"，按钮有 data-e2e="searchbar-button"，视频卡片带 data-aweme-id 和 /video/<id>。我会基于这些结构加
+  search_videos，先跑小样本确认搜索页，再扩到 30 个。
+
+• Edited 2 files (+369 -2)
+  └ core/src/sites/dy/page.rs (+211 -2)
+      3  use anyhow::Result;
+      4 -use serde_json::{Map, Value};
+      4 +use serde_json::{json, Map, Value};
+      5
+      6  use crate::cdp::PageSession;
+      7 +use crate::sites::dy::entities::DouyinVideoCard;
+      8
+        ⋮
+     11  const PAGE_SCRIPTS_JS: &str = include_str!("page_scripts.js");
+     11 -const DOUYIN_PAGE_SCRIPT_FUNCTIONS: &[&str] = &["pageState"];
+     12 +const DOUYIN_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
+     13 +    "pageState",
+     14 +    "searchInput",
+     15 +    "setSearchInput",
+     16 +    "searchState",
+     17 +    "videoCards",
+     18 +    "scrollFeed",
+     19 +];
+     20 +const SEARCH_TRANSITION_TIMEOUT_S: f64 = 20.0;
+     21
+        ⋮
+     94
+     95 +    pub async fn search_videos(
+     96 +        &self,
+     97 +        query: &str,
+     98 +        wait_seconds: f64,
+     99 +        num_videos: usize,
+    100 +    ) -> Result<Value> {
+    101 +        let keyword = query.trim();
+    102 +        if keyword.is_empty() {
+    103 +            anyhow::bail!("query is required");
+    104 +        }
+    105 +        self.ensure_douyin(true, wait_seconds.max(330.0)).await?;
+    106 +        let initial = self.wait_until_interactive(wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S)).await?;
+    107 +        if initial
+    108 +            .get("blank_or_throttled")
+    109 +            .and_then(Value::as_bool)
+    110 +            .unwrap_or(false)
+    111 +        {
+    112 +            return Ok(json!({
+    113 +                "ok": false,
+    114 +                "query": keyword,
+    115 +                "reason": "blank_or_throttled",
+    116 +                "state": initial,
+    117 +                "count": 0,
+    118 +                "cards": [],
+    119 +            }));
+    120 +        }
+    121 +
+    122 +        let submit = self.submit_search(keyword, wait_seconds).await?;
+    123 +        let ok = script_ok(&submit);
+    124 +        let cards = if ok {
+    125 +            self.collect_video_cards(num_videos.max(1)).await?
+    126 +        } else {
+    127 +            Vec::new()
+    128 +        };
+    129 +        Ok(json!({
+    130 +            "ok": ok,
+    131 +            "query": keyword,
+    132 +            "submit": submit,
+    133 +            "url": self.current_url().await?,
+    134 +            "count": cards.len(),
+    135 +            "cards": cards,
+    136 +            "reason": if ok { "" } else { submit.get("error").and_then(Value::as_str).unwrap_or("search_submit_failed") },
+    137 +        }))
+    138 +    }
+    139 +
+    140 +    async fn submit_search(&self, query: &str, wait_seconds: f64) -> Result<Value> {
+    141 +        let loc = self.expect_object("searchInput", None).await?;
+    142 +        if !script_ok(&loc) {
+    143 +            return Ok(json!({
+    144 +                "ok": false,
+    145 +                "strategy": "search_input_unavailable",
+    146 +                "error": loc.get("error").and_then(Value::as_str).unwrap_or_default(),
+    147 +                "state": loc,
+    148 +            }));
+    149 +        }
+    150 +        if let Some(input) = loc.get("input") {
+    151 +            self.page.click(number(input, "x"), number(input, "y")).await?;
+    152 +            sleep_ms(150).await;
+    153 +        }
+    154 +        let set = self
+    155 +            .expect_object("setSearchInput", Some(&json!({ "query": query })))
+    156 +            .await?;
+    157 +        if !script_ok(&set) {
+    158 +            return Ok(json!({
+    159 +                "ok": false,
+    160 +                "strategy": "set_search_input_failed",
+    161 +                "error": set.get("error").and_then(Value::as_str).unwrap_or_default(),
+    162 +                "state": set,
+    163 +            }));
+    164 +        }
+    165 +
+    166 +        self.page.press_key("Enter").await?;
+    167 +        let state = self
+    168 +            .wait_for_search_transition(query, wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S))
+    169 +            .await?;
+    170 +        if search_transition_ok(&state) {
+    171 +            return Ok(json!({
+    172 +                "ok": true,
+    173 +                "strategy": "input_enter",
+    174 +                "state": state,
+    175 +                "url": self.current_url().await?,
+    176 +            }));
+    177 +        }
+    178 +
+    179 +        if let Some(submit) = loc.get("submit") {
+    180 +            let x = number(submit, "x");
+    181 +            let y = number(submit, "y");
+    182 +            if x > 0.0 && y > 0.0 {
+    183 +                self.page.click(x, y).await?;
+    184 +                let state = self
+    185 +                    .wait_for_search_transition(query, wait_seconds.max(SEARCH_TRANSITION_TIMEOUT_S))
+    186 +                    .await?;
+    187 +                if search_transition_ok(&state) {
+    188 +                    return Ok(json!({
+    189 +                        "ok": true,
+    190 +                        "strategy": "search_button_click",
+    191 +                        "state": state,
+    192 +                        "url": self.current_url().await?,
+    193 +                    }));
+    194 +                }
+    195 +            }
+    196 +        }
+    197 +
+    198 +        Ok(json!({
+    199 +            "ok": false,
+    200 +            "strategy": "manual_submit_failed",
+    201 +            "state": state,
+    202 +            "url": self.current_url().await?,
+    203 +            "error": if state.get("blank_or_throttled").and_then(Value::as_bool).unwrap_or(false) {
+    204 +                "blank_or_throttled"
+    205 +            } else if state.get("login_required").and_then(Value::as_bool).unwrap_or(false) {
+    206 +                "login_required"
+    207 +            } else {
+    208 +                "Search did not transition to a Douyin result page"
+    209 +            },
+    210 +        }))
+    211 +    }
+    212 +
+    213 +    async fn wait_for_search_transition(&self, query: &str, timeout_s: f64) -> Result<Value> {
+    214 +        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s.max(0.5));
+    215 +        let mut latest = Value::Object(Map::new());
+    216 +        while Instant::now() < deadline {
+    217 +            latest = self
+    218 +                .expect_object("searchState", Some(&json!({ "query": query })))
+    219 +                .await?;
+    220 +            if search_transition_ok(&latest) {
+    221 +                return Ok(latest);
+    222 +            }
+    223 +            sleep_ms(400).await;
+    224 +        }
+    225 +        Ok(latest)
+    226 +    }
+    227 +
+    228 +    async fn extract_video_cards(&self, limit: usize) -> Result<Vec<DouyinVideoCard>> {
+    229 +        let raw = self
+    230 +            .expect_array("videoCards", Some(&json!({ "limit": limit })))
+    231 +            .await?;
+    232 +        Ok(raw
+    233 +            .into_iter()
+    234 +            .filter_map(|item| serde_json::from_value(item).ok())
+    235 +            .collect())
+    236 +    }
+    237 +
+    238 +    async fn collect_video_cards(&self, target: usize) -> Result<Vec<DouyinVideoCard>> {
+    239 +        const MAX_STALLS: usize = 4;
+    240 +        let mut cards = self.extract_video_cards(target).await?;
+    241 +        let mut stalls = 0usize;
+    242 +        while cards.len() < target && stalls < MAX_STALLS {
+    243 +            let before = cards.len();
+    244 +            self.expect_object("scrollFeed", Some(&json!({ "nudge_up": false })))
+    245 +                .await?;
+    246 +            sleep_ms(1200).await;
+    247 +            cards = self.extract_video_cards(target).await?;
+    248 +            if cards.len() <= before {
+    249 +                self.expect_object("scrollFeed", Some(&json!({ "nudge_up": true })))
+    250 +                    .await?;
+    251 +                sleep_ms(700).await;
+    252 +                cards = self.extract_video_cards(target).await?;
+    253 +            }
+    254 +            if cards.len() <= before {
+    255 +                stalls += 1;
+    256 +            } else {
+    257 +                stalls = 0;
+    258 +            }
+    259 +        }
+    260 +        cards.truncate(target);
+    261 +        Ok(cards)
+    262 +    }
+    263 +
+    264      async fn expect_object(&self, name: &str, arg: Option<&Value>) -> Result<Value> {
+        ⋮
+    274      }
+    275 +
+    276 +    async fn expect_array(&self, name: &str, arg: Option<&Value>) -> Result<Vec<Value>> {
+    277 +        let value = self.run_script(name, arg).await?;
+    278 +        value.as_array().cloned().ok_or_else(|| {
+    279 +            anyhow::anyhow!(
+    280 +                "Douyin page script {name} returned {}, expected array",
+    281 +                value_type(&value)
+    282 +            )
+    283 +        })
+    284 +    }
+    285 +}
+    286 +
+    287 +fn search_transition_ok(value: &Value) -> bool {
+    288 +    value
+    289 +        .get("blank_or_throttled")
+    290 +        .and_then(Value::as_bool)
+    291 +        .unwrap_or(false)
+    292 +        == false
+    293 +        && (value.get("card_count").and_then(Value::as_u64).unwrap_or(0) > 0
+    294 +            || value
+    295 +                .get("has_no_results")
+    296 +                .and_then(Value::as_bool)
+    297 +                .unwrap_or(false))
+    298 +}
+    299 +
+    300 +fn number(value: &Value, key: &str) -> f64 {
+    301 +    value.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+    302 +}
+    303 +
+    304 +fn script_ok(value: &Value) -> bool {
+    305 +    value.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    306  }
+
+  └ core/src/sites/dy/page_scripts.js (+158 -0)
+     69
+     70 +  function searchInput() {
+     71 +    const candidates = [
+     72 +      '[data-e2e="searchbar-input"]',
+     73 +      'input[placeholder*="搜索"]',
+     74 +      'textarea[placeholder*="搜索"]',
+     75 +      '[contenteditable="true"][data-e2e*="search"]',
+     76 +      '[role="searchbox"]',
+     77 +    ];
+     78 +    const input = candidates.flatMap((selector) => Array.from(document.querySelectorAll(selector))).find(visible);
+     79 +    if (!input) {
+     80 +      return { ok: false, error: 'search_input_not_found', state: pageState() };
+     81 +    }
+     82 +    const submit = document.querySelector('[data-e2e="searchbar-button"]') ||
+     83 +      Array.from(document.querySelectorAll('button')).find((btn) => visible(btn) && /搜索/.test(text(btn)));
+     84 +    return {
+     85 +      ok: true,
+     86 +      input: center(input),
+     87 +      submit: submit && visible(submit) ? center(submit) : null,
+     88 +      placeholder: input.getAttribute('placeholder') || '',
+     89 +      value: input.value || text(input),
+     90 +    };
+     91 +  }
+     92 +
+     93 +  function setNativeValue(el, value) {
+     94 +    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+     95 +    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+     96 +    if (descriptor && descriptor.set) {
+     97 +      descriptor.set.call(el, value);
+     98 +    } else {
+     99 +      el.value = value;
+    100 +    }
+    101 +  }
+    102 +
+    103 +  function setSearchInput(arg) {
+    104 +    const query = String((arg && arg.query) || '').trim();
+    105 +    const loc = searchInput();
+    106 +    if (!loc.ok) return loc;
+    107 +    const input = document.elementFromPoint(loc.input.x, loc.input.y);
+    108 +    const target = input && (input.matches('input, textarea, [contenteditable="true"]')
+    109 +      ? input
+    110 +      : input.closest('input, textarea, [contenteditable="true"]'));
+    111 +    if (!target) {
+    112 +      return { ok: false, error: 'search_input_target_missing', loc };
+    113 +    }
+    114 +    target.focus();
+    115 +    if (target.isContentEditable) {
+    116 +      target.textContent = query;
+    117 +    } else {
+    118 +      setNativeValue(target, query);
+    119 +    }
+    120 +    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: query }));
+    121 +    target.dispatchEvent(new Event('change', { bubbles: true }));
+    122 +    return { ok: true, query, value: target.value || text(target), loc: searchInput() };
+    123 +  }
+    124 +
+    125 +  function cardNodes() {
+    126 +    const nodes = Array.from(document.querySelectorAll('[data-aweme-id], a[href*="/video/"], [href*="/video/"]'));
+    127 +    const cards = [];
+    128 +    const seen = new Set();
+    129 +    for (const node of nodes) {
+    130 +      const card = node.closest('[data-aweme-id]') ||
+    131 +        node.closest('a[href*="/video/"], [href*="/video/"]') ||
+    132 +        node;
+    133 +      if (!card || seen.has(card)) continue;
+    134 +      seen.add(card);
+    135 +      if (!visible(card)) continue;
+    136 +      cards.push(card);
+    137 +    }
+    138 +    return cards;
+    139 +  }
+    140 +
+    141 +  function videoIdFromUrl(url) {
+    142 +    const match = String(url || '').match(/\/(?:video|note)\/([^/?#]+)/);
+    143 +    return match ? match[1] : '';
+    144 +  }
+    145 +
+    146 +  function videoCards(arg) {
+    147 +    const limit = Math.max(1, Number((arg && arg.limit) || 30));
+    148 +    const cards = [];
+    149 +    const seen = new Set();
+    150 +    for (const card of cardNodes()) {
+    151 +      const linkNode = card.matches('a[href*="/video/"], [href*="/video/"]')
+    152 +        ? card
+    153 +        : card.querySelector('a[href*="/video/"], [href*="/video/"]');
+    154 +      const rawHref = (linkNode && (linkNode.href || linkNode.getAttribute('href'))) ||
+    155 +        card.getAttribute('href') ||
+    156 +        '';
+    157 +      const url = normUrl(rawHref);
+    158 +      const videoId = card.getAttribute('data-aweme-id') || videoIdFromUrl(url);
+    159 +      if (!videoId && !url) continue;
+    160 +      const key = videoId || url;
+    161 +      if (seen.has(key)) continue;
+    162 +      seen.add(key);
+    163 +
+    164 +      const img = card.querySelector('img');
+    165 +      const allText = text(card);
+    166 +      const titleNode = card.querySelector('[title], [aria-label]') ||
+    167 +        card.querySelector('[class*="title"], [class*="desc"]');
+    168 +      let title = (img && img.alt) || text(titleNode) || '';
+    169 +      if (!title) {
+    170 +        const lines = allText.split(/\s{2,}|(?=@)/).map((line) => line.trim()).filter(Boolean);
+    171 +        title = lines.find((line) => !line.startsWith('@')) || allText;
+    172 +      }
+    173 +      const authorMatch = allText.match(/@([^\s·]+)/);
+    174 +      const author = authorMatch ? authorMatch[1] : '';
+    175 +      const countMatches = Array.from(allText.matchAll(/(\d+(?:\.\d+)?\s*(?:万|w|W|k|K)?)/g)).map((m) => m[1].replace(/\s+/g, ''));
+    176 +      cards.push({
+    177 +        video_id: videoId,
+    178 +        url,
+    179 +        title: title.trim(),
+    180 +        author,
+    181 +        author_url: normUrl((card.querySelector('a[href*="/user/"]') || {}).href || ''),
+    182 +        likes: countMatches[0] || '',
+    183 +        comments: '',
+    184 +        shares: '',
+    185 +        cover_url: normUrl((img && (img.currentSrc || img.src)) || ''),
+    186 +        position: cards.length,
+    187 +      });
+    188 +      if (cards.length >= limit) break;
+    189 +    }
+    190 +    return cards;
+    191 +  }
+    192 +
+    193 +  function searchState(arg) {
+    194 +    const query = String((arg && arg.query) || '').trim();
+    195 +    const cards = videoCards({ limit: 3 });
+    196 +    const bodyText = text(document.body);
+    197 +    return {
+    198 +      ok: true,
+    199 +      url: location.href,
+    200 +      title: document.title || '',
+    201 +      ready_state: document.readyState,
+    202 +      query,
+    203 +      query_visible: query ? bodyText.includes(query) || decodeURIComponent(location.href).includes(query) : false,
+    204 +      card_count: cards.length,
+    205 +      blank_or_throttled: document.readyState !== 'complete' || !hasUsefulBody(),
+    206 +      login_required: /登录后|扫码登录|验证码|立即登录/.test(bodyText),
+    207 +      has_no_results: /暂无|没有找到|无结果|换个词/.test(bodyText),
+    208 +    };
+    209 +  }
+    210 +
+    211 +  function scrollFeed(arg) {
+    212 +    const down = !(arg && arg.nudge_up);
+    213 +    const delta = down ? Math.floor(window.innerHeight * 0.85) : -Math.floor(window.innerHeight * 0.35);
+    214 +    const candidates = Array.from(document.querySelectorAll('.route-scroll-container, [class*="scroll"], main, body, html'));
+    215 +    const scrollable = candidates.find((el) => {
+    216 +      if (!visible(el) && el !== document.body && el !== document.documentElement) return false;
+    217 +      return el.scrollHeight > el.clientHeight + 20;
+    218 +    }) || document.scrollingElement || document.documentElement;
+    219 +    scrollable.scrollBy({ top: delta, left: 0, behavior: 'instant' });
+    220 +    return { ok: true, delta, y: scrollable.scrollTop || window.scrollY, card_count: videoCards({ limit: 999 }).length };
+    221 +  }
+    222 +
+    223    window.SocaiDouyinPageScripts = {
+    224      pageState,
+    225 +    searchInput,
+    226 +    setSearchInput,
+    227 +    searchState,
+    228 +    videoCards,
+    229 +    scrollFeed,
+    230    };
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 搜索页逻辑已经加到 page.rs/page_scripts.js。现在把它暴露成 socai dy search_videos <QUERY> --num-videos N，然后编译并跑一个小样本。
+
+• Edited core/src/sites/dy/tools.rs (+131 -18)
+      8  use crate::sites::dy::{DouyinPageRuntime, DOUYIN_HOME_URL};
+      9 -use crate::sites::registry::{ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen};
+     10 -use crate::sites::runner::{get_f64, json_result, run_tool_command, ToolCommand};
+      9 +use crate::sites::registry::{
+     10 +    required_string, ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen,
+     11 +};
+     12 +use crate::sites::runner::{get_f64, get_i64, json_result, run_tool_command, ToolCommand};
+     13
+        ⋮
+     23  ) -> Vec<Arc<dyn Tool>> {
+     22 -    vec![Arc::new(PageStateTool { page }) as Arc<dyn Tool>]
+     24 +    vec![
+     25 +        Arc::new(SearchVideosTool { page: page.clone() }) as Arc<dyn Tool>,
+     26 +        Arc::new(PageStateTool { page }),
+     27 +    ]
+     28  }
+        ⋮
+     55      agent_instructions: dy_agent_instructions,
+     51 -    commands: &[SiteCommand {
+     52 -        name: "page_state",
+     53 -        tool_name: "page_state",
+     54 -        about: "Open or reuse Douyin and print page state as JSON.",
+     55 -        args: &[CommandArg {
+     56 -            key: "wait_seconds",
+     57 -            long: Some("wait-seconds"),
+     58 -            value_name: "SECONDS",
+     59 -            help: "Maximum wait for a non-blank Douyin page. Use 300+ when the web page is throttled.",
+     60 -            required: false,
+     61 -            kind: ArgKind::Int,
+     62 -        }],
+     63 -        slow: SlowWhen::Always,
+     64 -        run: run_page_state,
+     65 -    }],
+     56 +    commands: &[
+     57 +        SiteCommand {
+     58 +            name: "search_videos",
+     59 +            tool_name: "search_videos",
+     60 +            about: "Search Douyin and print video result cards as JSON.",
+     61 +            args: &[
+     62 +                CommandArg {
+     63 +                    key: "query",
+     64 +                    long: None,
+     65 +                    value_name: "QUERY",
+     66 +                    help: "Search query",
+     67 +                    required: true,
+     68 +                    kind: ArgKind::Str,
+     69 +                },
+     70 +                CommandArg {
+     71 +                    key: "num_videos",
+     72 +                    long: Some("num-videos"),
+     73 +                    value_name: "N",
+     74 +                    help: "Number of video cards to collect by scrolling. Defaults to 30.",
+     75 +                    required: false,
+     76 +                    kind: ArgKind::Int,
+     77 +                },
+     78 +                CommandArg {
+     79 +                    key: "wait_seconds",
+     80 +                    long: Some("wait-seconds"),
+     81 +                    value_name: "SECONDS",
+     82 +                    help: "Maximum wait for page/search transitions. Use 300+ when Douyin web is throttled.",
+     83 +                    required: false,
+     84 +                    kind: ArgKind::Int,
+     85 +                },
+     86 +            ],
+     87 +            slow: SlowWhen::Always,
+     88 +            run: run_search_videos,
+     89 +        },
+     90 +        SiteCommand {
+     91 +            name: "page_state",
+     92 +            tool_name: "page_state",
+     93 +            about: "Open or reuse Douyin and print page state as JSON.",
+     94 +            args: &[CommandArg {
+     95 +                key: "wait_seconds",
+     96 +                long: Some("wait-seconds"),
+     97 +                value_name: "SECONDS",
+     98 +                help: "Maximum wait for a non-blank Douyin page. Use 300+ when the web page is throttled.",
+     99 +                required: false,
+    100 +                kind: ArgKind::Int,
+    101 +            }],
+    102 +            slow: SlowWhen::Always,
+    103 +            run: run_page_state,
+    104 +        },
+    105 +    ],
+    106  };
+    107
+    108 +fn run_search_videos(
+    109 +    page: Arc<PageSession>,
+    110 +    args: Value,
+    111 +    debug_snapshot: bool,
+    112 +) -> BoxFuture<Value> {
+    113 +    Box::pin(async move {
+    114 +        run_tool_command(
+    115 +            ToolCommand {
+    116 +                site_id: "dy",
+    117 +                command_name: "search_videos",
+    118 +                tool_name: "search_videos",
+    119 +                before: None,
+    120 +                after: None,
+    121 +            },
+    122 +            page.clone(),
+    123 +            &dy_tools(page),
+    124 +            args,
+    125 +            debug_snapshot,
+    126 +        )
+    127 +        .await
+    128 +    })
+    129 +}
+    130 +
+    131  fn run_page_state(
+        ⋮
+    161
+    162 +pub struct SearchVideosTool {
+    163 +    page: Arc<PageSession>,
+    164 +}
+    165 +
+    166 +#[async_trait]
+    167 +impl Tool for SearchVideosTool {
+    168 +    fn name(&self) -> &str {
+    169 +        "search_videos"
+    170 +    }
+    171 +
+    172 +    fn description(&self) -> &str {
+    173 +        "Search Douyin for videos matching `query` and return visible result \
+    174 +         cards (video id, URL, title, author, cover, and any engagement text \
+    175 +         the page exposes). Defaults to 30 cards and may wait several minutes \
+    176 +         if Douyin web is throttled."
+    177 +    }
+    178 +
+    179 +    fn input_schema(&self) -> Value {
+    180 +        json!({
+    181 +            "type": "object",
+    182 +            "properties": {
+    183 +                "query": { "type": "string", "description": "Search query" },
+    184 +                "num_videos": {
+    185 +                    "type": "integer",
+    186 +                    "description": "Number of video cards to collect by scrolling.",
+    187 +                    "default": 30,
+    188 +                    "minimum": 1
+    189 +                },
+    190 +                "wait_seconds": {
+    191 +                    "type": "number",
+    192 +                    "description": "Maximum wait for page/search transitions.",
+    193 +                    "default": 330
+    194 +                }
+    195 +            },
+    196 +            "required": ["query"]
+    197 +        })
+    198 +    }
+    199 +
+    200 +    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    201 +        let query = required_string(&input, "query")?;
+    202 +        let wait_seconds = get_f64(&input, "wait_seconds", 330.0);
+    203 +        let num_videos = get_i64(&input, "num_videos", 30).max(1) as usize;
+    204 +        let runtime = DouyinPageRuntime::new(&self.page);
+    205 +        let value = runtime
+    206 +            .search_videos(&query, wait_seconds, num_videos)
+    207 +            .await?;
+    208 +        Ok(json_result(&value))
+    209 +    }
+    210 +}
+    211 +
+    212  pub struct PageStateTool {
+
+• Ran rustfmt core/src/sites/dy/entities.rs core/src/sites/dy/mod.rs core/src/sites/dy/page.rs core/src/sites/dy/tools.rs core/src/sites/mod.rs core/src/sites/
+  │ registry.rs
+  └ error[E0670]: `async fn` is not permitted in Rust 2015
+      --> /Users/tonychong/socai/core/src/sites/dy/page.rs:31:9
+    … +344 lines (ctrl + t to view transcript)
+
+    Error writing files: failed to resolve mod `runner`: cannot parse /Users/tonychong/socai/core/src/sites/runner.rs
+
+• Ran cargo check -q
+  └ (no output)
+
+• Ran cargo run -q -p socai-cli -- dy --help
+  └ Douyin (douyin.com)
+
+    … +7 lines (ctrl + t to view transcript)
+    Options:
+      -h, --help  Print help
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• cargo check 和 CLI help 通过了；刚才单独 rustfmt 没带 edition 参数，所以它按 Rust 2015 解析失败，代码本身没问题。我会用 --edition 2024 重新格式化这些新文件。
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/entities.rs core/src/sites/dy/mod.rs core/src/sites/dy/page.rs core/src/sites/dy/tools.rs core/src/sites/mod.rs core/
+  │ src/sites/registry.rs && cargo check -q
+  └ (no output)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 格式化和编译都 OK。现在跑 search_videos 小样本并打开 snapshot，看搜索提交和抽取是否匹配真实页面。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 30 --debug-snapshot --pretty
+  └ socai daemon was started from a different build; restarting it
+    Error: Request timed out.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 小样本命令仍在跑，应该是在搜索跳转和结果加载阶段。等它完成后我会看最后一帧截图和 DOM，再决定需要修搜索提交还是抽取规则。
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• search_videos 还是在底层请求阶段超时，没有返回 run_dir；这通常发生在 daemon 新建站点页时先用 home_url 做了一次默认导航，而抖音可能卡住。我要把站点 home_url 改成当前
+  已验证的 /jingxuan，并让 runtime 自己的首次导航命中这个更快入口；后续工具仍会从主页搜索框操作。
+
+• Ran sed -n '1,140p' core/src/runtime/handle.rs 2>/dev/null || true
+  └ (no output)
+
+• Explored
+  └ Search ensure_site_page|home_url|navigate_with_timeout\(start_url|start_url in runtime
+    Search Request timed out in chromiumoxide*
+
+• Ran ps -axo pid,command | rg 'socai|__daemon|__bridge|Chrome|Google Chrome' | rg -v rg | sed -n '1,80p'
+  └ 10710 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/149.0.7827.54/Helpers/Google Chrome Helper
+    (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --origin-trial-disabled-features=CanvasTextNg|WebAssemblyCustomDescriptors
+    … +79 lines (ctrl + t to view transcript)
+    --variations-seed-version=20260609-090056.369000-production --pseudonymization-salt-handle=1935764596,r,6303955538488275831,1692077937062809986,4
+    --trace-process-track-uuid=3190709005052708474
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我确认了失败发生在 runtime 首次 ensure_site_page 的默认 60 秒导航阶段，还没进入 search_videos 的 run_dir 包装。这个路径对抖音不够宽容，所以要改 core runtime：站点页
+  首次导航失败时保留页面，把错误交给站点工具处理，而不是在外层直接中断。
+
+• Explored
+  └ Read engine.rs
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 为了避免影响其他站点，我不改通用 runtime；只把 dy 的 SiteSpec.home_url 设为空，让 daemon 先创建空白页，然后由 dy 工具用自己的 330 秒等待策略打开抖音。这样只改变抖音
+  站点的启动路径。
+
+• Edited core/src/sites/dy/tools.rs (+3 -1)
+    52      about: "Douyin (douyin.com)",
+    53 -    home_url: DOUYIN_HOME_URL,
+    53 +    // Let Douyin tools own first navigation so they can use a much longer
+    54 +    // timeout for the site's occasional 4-5 minute blank-page throttling.
+    55 +    home_url: "",
+    56      agent_tools: |page, llm| Box::pin(dy_agent_tools(page, llm)),
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• dy 现在不会在 daemon 外层做 60 秒预导航，首次打开由站点工具自己处理。接下来重启旧 daemon，重跑小样本。
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/tools.rs && cargo check -q
+  └ warning: unused import: `DOUYIN_HOME_URL`
+     --> core/src/sites/dy/tools.rs:8:24
+    … +4 lines (ctrl + t to view transcript)
+      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ warning: unused import: `DOUYIN_HOME_URL`
+     --> core/src/sites/dy/tools.rs:8:24
+    … +7 lines (ctrl + t to view transcript)
+    socai cdp bridge stopped
+    cleaned up 1 lingering socai helper process(es)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 重启完成，但编译暴露了一个未使用 import 警告；我先清掉，保持检查干净，再继续跑搜索。
+
+• Edited core/src/sites/dy/tools.rs (+1 -1)
+    7  use crate::cdp::PageSession;
+    8 -use crate::sites::dy::{DOUYIN_HOME_URL, DouyinPageRuntime};
+    8 +use crate::sites::dy::DouyinPageRuntime;
+    9  use crate::sites::registry::{
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/tools.rs && cargo check -q
+  └ (no output)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 搜索小样本仍在运行，但这次已经越过了外层启动阶段，没有立刻报错。我继续等完整结果。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 30 --debug-snapshot --pretty
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 30 --debug-snapshot --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_171915_dy_search_videos_咖啡
+    {
+    … +23 lines (ctrl + t to view transcript)
+      "url": "https://www.douyin.com/jingxuan/search/%E5%92%96%E5%95%A1?aid=4a7d4445-92c5-4684-8742-3b246273e077&type=general"
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 还在等待页面变成可交互状态。考虑到你提到抖音会空白 4-5 分钟，这条路径符合预期；我会继续等到工具自己返回状态。
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在搜索提交成功跳到了 /jingxuan/search/咖啡，但抽取规则没找到卡片。按 skill 继续看该 run 的最新截图和 DOM，修正“搜索结果页视频卡片”的识别规则。
+
+• Explored
+  └ List snapshots
+    List snapshots
+    Search 咖啡|data-aweme|aweme|/video/|search|综合|用户|视频|related-card|douyin-search in dom.html
+
+• Ran jq -r '.nodes[]? | select((.name.value? // "") | test("咖啡|视频|综合|搜索|用户")) | [.role.value, (.name.value // ""), (.value.value // "")] | @tsv' /Users/
+  │ tonychong/.socai/runs/20260611_171915_dy_search_videos_咖啡/snapshots/*/a11y.json | sed -n '1,120p'
+  └ (no output)
+
+• Viewed Image
+  └ ~/.socai/runs/20260611_171915_dy_search_videos_咖啡/snapshots/00022_171931_422/screenshot.jpg
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 截图显示搜索结果已经正常加载，且当前页有视频卡片；问题是抽取脚本只找 /video/ 链接和 data-aweme-id，但搜索页卡片实际是 search-result-card 包裹，部分链接/ID藏在父级
+  waterfall_item_<id>。我会改抽取入口用 .search-result-card 和 waterfall_item_。
+
+• Ran rg -o "id=\"waterfall_item_[0-9]+\"|data-aweme-id=\"[0-9]+\"|href=\"[^"]*(video|note)[^"]*\"" /Users/tonychong/.socai/runs/20260611_171915_dy_search_videos_咖啡/
+  │ snapshots/00022_171931_422/dom.html | head -80
+  └ zsh:1: bad pattern: id="waterfall_item_[0-9]+"|data-aweme-id="[0-9]+"|href="[^]*(video|note)[^]*"
+
+• Explored
+  └ Search search-result-card|waterfall_item_|href=\"https://www.douyin.com/(video|note)|href=\"//www.douyin.com/(video|note)|data-aweme-id|RBpYLmIg|trjxC5lo|AgRax2gG
+  in
+           dom.html
+
+• Ran perl -0ne 'while(/<div class="oWmZEHuF" id="waterfall_item_[\s\S]*?<\/div><\/div><\/div><\/div><\/div><\/div><\/div>/g){print substr($&,0,2500),"\n---\n";
+  │ last}' /Users/tonychong/.socai/runs/20260611_171915_dy_search_videos_咖啡/snapshots/00022_171931_422/dom.html
+  └ <div class="oWmZEHuF" id="waterfall_item_7354264417699204363" style="height: 426px; width: 245.25px; transform: translate(13px, 25px); visibility: visible;"><div
+    class="search-result-card"><div class="FrfjJSkC"><div class="flex flex-col"><div class="yb3knZ7b videoImage" style="padding-top: 133.333%;"><div
+    … +12 lines (ctrl + t to view transcript)
+    span></span><span class="Yftofmx6"> · 2024年4月6日</span></div></div></div></div></div></div></div>
+    ---
+
+• Edited core/src/sites/dy/page_scripts.js (+20 -8)
+    125    function cardNodes() {
+    126 -    const nodes = Array.from(document.querySelectorAll('[data-aweme-id], a[href*="/video/"], [href*="/video/"]'));
+    126 +    const nodes = Array.from(document.querySelectorAll(
+    127 +      '.search-result-card, [id^="waterfall_item_"], [data-aweme-id], a[href*="/video/"], [href*="/video/"]'
+    128 +    ));
+    129      const cards = [];
+        ⋮
+    131      for (const node of nodes) {
+    130 -      const card = node.closest('[data-aweme-id]') ||
+    132 +      const card = node.closest('[id^="waterfall_item_"]') ||
+    133 +        node.closest('.search-result-card') ||
+    134 +        node.closest('[data-aweme-id]') ||
+    135          node.closest('a[href*="/video/"], [href*="/video/"]') ||
+        ⋮
+    157          : card.querySelector('a[href*="/video/"], [href*="/video/"]');
+    158 +      const isLive = !!card.querySelector('a[href*="live.douyin.com"]') || /直播中|直播间/.test(text(card));
+    159 +      const hasVideoSignal = !!card.querySelector('.videoImage, [class*="videoImage"]') ||
+    160 +        !!card.querySelector('[class*="duration"], .cxEIO6RG') ||
+    161 +        !!linkNode ||
+    162 +        !!card.getAttribute('data-aweme-id');
+    163 +      if (isLive || !hasVideoSignal) continue;
+    164        const rawHref = (linkNode && (linkNode.href || linkNode.getAttribute('href'))) ||
+        ⋮
+    166          '';
+    157 -      const url = normUrl(rawHref);
+    158 -      const videoId = card.getAttribute('data-aweme-id') || videoIdFromUrl(url);
+    167 +      const idMatch = (card.id || '').match(/^waterfall_item_(\d+)/);
+    168 +      const videoId = card.getAttribute('data-aweme-id') || videoIdFromUrl(rawHref) || (idMatch ? idMatch[1] : '');
+    169 +      const url = normUrl(rawHref || (videoId ? `/video/${videoId}` : ''));
+    170        if (!videoId && !url) continue;
+        ⋮
+    177        const titleNode = card.querySelector('[title], [aria-label]') ||
+    167 -        card.querySelector('[class*="title"], [class*="desc"]');
+    178 +        card.querySelector('.RBpYLmIg, .trjxC5lo, [class*="title"], [class*="desc"]');
+    179        let title = (img && img.alt) || text(titleNode) || '';
+        ⋮
+    183        }
+    173 -      const authorMatch = allText.match(/@([^\s·]+)/);
+    174 -      const author = authorMatch ? authorMatch[1] : '';
+    184 +      const author = text(card.querySelector('.lGzJpEad, .j5CaTxWe')) ||
+    185 +        ((allText.match(/@([^\s·]+)/) || [])[1] || '');
+    186 +      const likeNode = card.querySelector('.GiEcbsyC span');
+    187        const countMatches = Array.from(allText.matchAll(/(\d+(?:\.\d+)?\s*(?:万|w|W|k|K)?)/g)).map((m) => m[1].replace(/\s+/g, ''));
+        ⋮
+    193          author_url: normUrl((card.querySelector('a[href*="/user/"]') || {}).href || ''),
+    182 -        likes: countMatches[0] || '',
+    194 +        likes: text(likeNode) || countMatches[0] || '',
+    195          comments: '',
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 抽取规则已改为搜索页真实结构：.search-result-card、waterfall_item_<id>、.videoImage、.RBpYLmIg、.lGzJpEad，并过滤直播卡。现在重跑同一个小样本。
+
+• Ran cargo check -q
+  └ (no output)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 小样本第二轮在跑，当前是在等待搜索页重新加载。上一轮已经确认页面有结果，这轮主要验证抽取 JSON 是否拿到卡片。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 30 --debug-snapshot --pretty
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 30 --debug-snapshot --pretty
+  └ socai daemon was started from a different build; restarting it
+    Error: Request timed out.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次等待时间更长，可能又遇到了抖音空白页/慢加载，命令仍在 330 秒预算内。我继续等最终状态，不中途打断。
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 第二轮长时间后仍被 CDP 的 Request timed out 直接中断，说明问题在 page.goto 这类导航请求本身，不是我们的业务等待。我要把抖音首次打开改成“触发 window.location.assign
+  后轮询页面状态”，不等待 Chrome 的导航请求完成；这更适合你说的空白页限流场景。
+
+• Edited core/src/sites/dy/page.rs (+31 -5)
+     65          if navigate_if_needed {
+     66 -            self.page
+     67 -                .navigate_with_timeout(DOUYIN_HOME_URL, timeout_seconds)
+     68 -                .await?;
+     66 +            self.soft_navigate(DOUYIN_HOME_URL).await?;
+     67 +            let _ = self.wait_until_interactive(timeout_seconds).await?;
+     68              return Ok(());
+        ⋮
+     77          let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds.max(0.5));
+     79 -        let mut latest = Value::Object(Map::new());
+     78 +        let mut latest = json!({
+     79 +            "ok": false,
+     80 +            "blank_or_throttled": true,
+     81 +            "reason": "waiting_for_douyin",
+     82 +        });
+     83          while Instant::now() < deadline {
+     81 -            latest = self.detect_state().await?;
+     84 +            latest = match self.detect_state().await {
+     85 +                Ok(state) => state,
+     86 +                Err(err) => json!({
+     87 +                    "ok": false,
+     88 +                    "blank_or_throttled": true,
+     89 +                    "reason": "detect_state_failed",
+     90 +                    "error": err.to_string(),
+     91 +                    "url": self.current_url().await.unwrap_or_default(),
+     92 +                }),
+     93 +            };
+     94              if !latest
+        ⋮
+    105
+    106 +    async fn soft_navigate(&self, url: &str) -> Result<()> {
+    107 +        let url = serde_json::to_string(url)?;
+    108 +        let expr = format!(
+    109 +            "window.location.assign({url}); return {{ ok: true, url: window.location.href }};"
+    110 +        );
+    111 +        match self.page.evaluate_json(&expr).await {
+    112 +            Ok(_) => Ok(()),
+    113 +            // The page may start unloading before Chrome returns the evaluate
+    114 +            // result. Treat that as a successful navigation trigger; the
+    115 +            // polling path will verify where we actually landed.
+    116 +            Err(_) => Ok(()),
+    117 +        }
+    118 +    }
+    119 +
+    120      pub async fn detect_state(&self) -> Result<Value> {
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 导航改成软触发了。先用 page_state --wait-seconds 15 验证这条启动路径不会再被 goto 卡死。
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/page.rs && cargo check -q
+  └ error[E0733]: recursion in an async fn requires boxing
+       --> core/src/sites/dy/page.rs:56:5
+    … +58 lines (ctrl + t to view transcript)
+    For more information about this error, try `rustc --explain E0733`.
+    error: could not compile `socai-core` (lib) due to 2 previous errors
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ error[E0733]: recursion in an async fn requires boxing
+       --> core/src/sites/dy/page.rs:56:5
+    … +58 lines (ctrl + t to view transcript)
+    For more information about this error, try `rustc --explain E0733`.
+    error: could not compile `socai-core` (lib) due to 2 previous errors
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译发现 ensure_douyin -> wait_until_interactive -> detect_state -> ensure_douyin 形成 async 递归。我把等待从 ensure_douyin 里拆出去，保持 ensure 只触发导航，等待仍
+  由工具显式调用。
+
+• Edited core/src/sites/dy/page.rs (+0 -1)
+    66              self.soft_navigate(DOUYIN_HOME_URL).await?;
+    67 -            let _ = self.wait_until_interactive(timeout_seconds).await?;
+    67              return Ok(());
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 拆分完成。重新编译、停掉旧 daemon，然后跑短等待 page_state。
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/page.rs && cargo check -q
+  └ warning: unused variable: `timeout_seconds`
+      --> core/src/sites/dy/page.rs:59:9
+    … +4 lines (ctrl + t to view transcript)
+       = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ warning: unused variable: `timeout_seconds`
+      --> core/src/sites/dy/page.rs:59:9
+    … +6 lines (ctrl + t to view transcript)
+    socai rust daemon stopped
+    socai cdp bridge stopped
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 还有一个未使用参数警告，我会改掉，避免最终检查有噪音。
+
+• Edited core/src/sites/dy/page.rs (+1 -1)
+    58          navigate_if_needed: bool,
+    59 -        timeout_seconds: f64,
+    59 +        _timeout_seconds: f64,
+    60      ) -> Result<()> {
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/page.rs && cargo check -q
+  └ (no output)
+
+• Ran cargo run -q -p socai-cli -- dy page_state --wait-seconds 15 --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_172547_dy_page_state
+    {
+    … +20 lines (ctrl + t to view transcript)
+      "url": "https://www.douyin.com/jingxuan"
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 软导航路径验证通过，8 秒左右拿到了非空抖音页面。现在再跑 search_videos 小样本。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 5 --wait-seconds 45 --debug-snapshot --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_172556_dy_search_videos_咖啡
+    {
+    … +83 lines (ctrl + t to view transcript)
+      "url": "https://www.douyin.com/jingxuan/search/%E5%92%96%E5%95%A1?aid=e34ce1b0-645d-48ba-a792-db80ab18821f&type=general"
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 小样本通过：已搜索“咖啡”，拿到 5 个视频卡片，字段包括 video_id/url/title/author/likes/cover_url。接下来验证目标规模 30 条，再跑另外两个关键词做回归。
+
+• Updated Plan
+  └ ✔ Inspect current site runner and XHS patterns
+    ✔ Scaffold fresh dy site and registry wiring
+    ✔ Add page_state snapshot command and validate
+    □ Iterate search_videos via real snapshots
+    □ Run checks and report results
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "咖啡" --num-videos 30 --wait-seconds 60 --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_172616_dy_search_videos_咖啡
+    {
+    … +383 lines (ctrl + t to view transcript)
+      "url": "https://www.douyin.com/jingxuan/search/%E5%92%96%E5%95%A1?aid=2fb142be-5fc9-4b7d-8df8-3a7e85b37acd&type=general"
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 目标规模验证通过：咖啡 --num-videos 30 返回 30 条。现在跑两个不同关键词，确认不是只对当前页面结构偶然生效。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 10 --wait-seconds 45 --pretty | jq '{ok, query, count, first: .cards[0] |
+  │ {video_id,title,author,likes,url}}'
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_172639_dy_search_videos_露营
+    {
+    … +9 lines (ctrl + t to view transcript)
+      }
+    }
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "AI工具" --num-videos 8 --wait-seconds 45 --pretty | jq '{ok, query, count, first: .cards[0] |
+  │ {video_id,title,author,likes,url}}'
+  └ run_dir: /Users/tonychong/.socai/runs/20260611_172643_dy_search_videos_AI工具
+    {
+    … +9 lines (ctrl + t to view transcript)
+      }
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 实现和实测已满足主流程。现在补两类收尾：把抖音工具和已知页面结构写进 knowledge.md，并在 README 的用户命令里加一条 socai dy search_videos 示例；同时给 URL/ID 解析补一
+  个轻量单元测试。
+
+• Edited 3 files (+43 -1)
+  └ README.md (+2 -1)
+    62  socai xhs extract_note --note-id <id>                                          # 从当前结果页抽取某个帖子
+    63 +socai dy search_videos "咖啡" --num-videos 30                                  # 搜索抖音并拿视频卡片信息
+    64  socai stop                                                                 # 停止 daemon（关闭工具标签页）
+       ⋮
+    66
+    66 -> 命令按站点分组（第一个站点是小红书 `xhs`）。旧的不带站点的写法（如
+    67 +> 命令按站点分组（例如小红书 `xhs`、抖音 `dy`）。旧的不带站点的写法（如
+    68  > `socai topic_scan …`）仍然可用，但已废弃并会打印警告，请迁移到 `socai xhs …`。
+
+  └ core/src/sites/dy/entities.rs (+29 -0)
+    45  }
+    46 +
+    47 +#[cfg(test)]
+    48 +mod tests {
+    49 +    use super::*;
+    50 +
+    51 +    #[test]
+    52 +    fn normalizes_relative_douyin_url() {
+    53 +        assert_eq!(
+    54 +            normalize_douyin_url("/video/123"),
+    55 +            "https://www.douyin.com/video/123"
+    56 +        );
+    57 +        assert_eq!(
+    58 +            normalize_douyin_url("//www.douyin.com/video/123"),
+    59 +            "https://www.douyin.com/video/123"
+    60 +        );
+    61 +    }
+    62 +
+    63 +    #[test]
+    64 +    fn extracts_video_id_from_video_or_note_url() {
+    65 +        assert_eq!(
+    66 +            extract_video_id("https://www.douyin.com/video/7354264417699204363?foo=1"),
+    67 +            "7354264417699204363"
+    68 +        );
+    69 +        assert_eq!(
+    70 +            extract_video_id("https://www.douyin.com/note/123456#comment"),
+    71 +            "123456"
+    72 +        );
+    73 +    }
+    74 +}
+
+  └ core/src/sites/dy/knowledge.md (+12 -0)
+    10    relying on deeper workflows.
+    11 +- `search_videos` starts from the homepage/top search box, enters the keyword,
+    12 +  submits with Enter, then extracts cards from the search-result waterfall.
+    13 +  Use `--num-videos` to scroll for more cards; default is 30.
+    14 +- Observed stable-ish selectors on 2026-06-11:
+    15 +  `data-e2e="searchbar-input"`, `data-e2e="searchbar-button"`,
+    16 +  `.search-result-card`, parent ids like `waterfall_item_<video_id>`,
+    17 +  `.videoImage`, `.RBpYLmIg` for title text, `.lGzJpEad` for author, and
+    18 +  `.GiEcbsyC span` for visible like/play count text.
+    19 +- Search-result "综合" includes non-video modules such as live rooms and topic
+    20 +  cards. The extractor filters obvious live cards and keeps cards with video
+    21 +  signals; fields absent from the search card, such as comments/shares, are
+    22 +  returned as empty strings.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 收尾文档和单测已加。接下来跑完整检查：格式化、cargo test、CLI help、目标命令小样本和 git diff --check。
+
+• Ran git diff --check
+  └ (no output)
+
+• Ran git status --short --branch
+  └ ## site-creation
+     M README.md
+    … +8 lines (ctrl + t to view transcript)
+    ?? core/src/sites/dy/
+    ?? self_creation_memo.md
+
+• Ran cargo run -q -p socai-cli -- dy --help
+  └ Douyin (douyin.com)
+
+    … +7 lines (ctrl + t to view transcript)
+    Options:
+      -h, --help  Print help
+
+• Ran rustfmt --edition 2024 core/src/sites/dy/entities.rs core/src/sites/dy/mod.rs core/src/sites/dy/page.rs core/src/sites/dy/tools.rs core/src/sites/mod.rs core/
+  │ src/sites/registry.rs && cargo test -q
+  └
+    running 17 tests
+    … +26 lines (ctrl + t to view transcript)
+    test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 检查发现 rustfmt 通过 mod.rs 递归格式化了已有 runner.rs 和 xhs/*，这不是本次任务范围。我会只撤回这些由我造成的格式化噪音，保留 dy、registry、README 的改动。
+
+• Ran git diff -- core/src/sites/runner.rs core/src/sites/xhs/entities.rs core/src/sites/xhs/history.rs core/src/sites/xhs/mod.rs core/src/sites/xhs/page.rs core/src/
+  │ sites/xhs/tools.rs | sed -n '1,240p'
+  └ diff --git a/core/src/sites/runner.rs b/core/src/sites/runner.rs
+    index 259248e..2fc05d5 100644
+    … +106 lines (ctrl + t to view transcript)
+
+     /// Default number of notes `topic_scan` reads when the caller doesn't specify.
+
+⚠ Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这些无关 diff 只是 import 排序。我会用 patch 精确还原它们，不碰用户未跟踪文件。
+
+• Edited 6 files (+18 -18)
+  └ core/src/sites/runner.rs (+3 -3)
+    11
+    12 -use serde_json::{Value, json};
+    12 +use serde_json::{json, Value};
+    13
+    14 -use crate::agent::{Tool, ToolContext, ToolResult, make_run_dir};
+    15 -use crate::cdp::{PageSession, with_snapshot_recording};
+    14 +use crate::agent::{make_run_dir, Tool, ToolContext, ToolResult};
+    15 +use crate::cdp::{with_snapshot_recording, PageSession};
+    16  use crate::sites::registry::BoxFuture;
+
+  └ core/src/sites/xhs/entities.rs (+1 -1)
+    1  use serde::{Deserialize, Serialize};
+    2 -use serde_json::{Map, Value, json};
+    2 +use serde_json::{json, Map, Value};
+    3
+
+  └ core/src/sites/xhs/history.rs (+1 -1)
+    19  use serde::{Deserialize, Serialize};
+    20 -use serde_json::{Value, json};
+    20 +use serde_json::{json, Value};
+    21
+
+  └ core/src/sites/xhs/mod.rs (+5 -5)
+     5
+     6 -pub use self::entities::{XhsAuthorProfile, XhsNote, XhsNoteCard, parse_count_text};
+     6 +pub use self::entities::{parse_count_text, XhsAuthorProfile, XhsNote, XhsNoteCard};
+     7  pub use self::history::{HistoryEntry, HistorySnapshot, XhsHistoryStore};
+     8 -pub use self::page::{ReadNoteOptions, XHS_HOME_URL, XhsPageRuntime};
+     8 +pub use self::page::{ReadNoteOptions, XhsPageRuntime, XHS_HOME_URL};
+     9  pub use self::tools::{
+    10 -    XHS_KNOWLEDGE, XHS_SITE, close_open_note, ensure_search_ready, extract_note_command,
+    11 -    search_notes_command, topic_scan_command, xhs_agent_instructions, xhs_agent_tools, xhs_tools,
+    12 -    xhs_tools_with_llm_provider,
+    10 +    close_open_note, ensure_search_ready, extract_note_command, search_notes_command,
+    11 +    topic_scan_command, xhs_agent_instructions, xhs_agent_tools, xhs_tools,
+    12 +    xhs_tools_with_llm_provider, XHS_KNOWLEDGE, XHS_SITE,
+    13  };
+
+  └ core/src/sites/xhs/page.rs (+2 -2)
+     7  use anyhow::Result;
+     8 -use serde_json::{Map, Value, json};
+     8 +use serde_json::{json, Map, Value};
+     9
+    10 -use crate::sites::xhs::entities::{XhsNote, XhsNoteCard, normalize_url};
+    10 +use crate::sites::xhs::entities::{normalize_url, XhsNote, XhsNoteCard};
+    11
+
+  └ core/src/sites/xhs/tools.rs (+6 -6)
+    11  use crate::cdp::PageSession;
+    12 -use crate::media::{MediaProcessor, TimingSnapshot, timing_delta};
+    12 +use crate::media::{timing_delta, MediaProcessor, TimingSnapshot};
+    13  use async_trait::async_trait;
+    14 -use serde_json::{Map, Value, json};
+    14 +use serde_json::{json, Map, Value};
+    15
+    16  use crate::sites::registry::{
+    17 -    ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen, required_string,
+    17 +    required_string, ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen,
+    18  };
+    19  use crate::sites::runner::{
+    20 -    PageHook, ToolCommand, get_bool, get_f64, get_i64, get_str, insert_optional_str, json_result,
+    21 -    run_tool_command, trimmed_required,
+    20 +    get_bool, get_f64, get_i64, get_str, insert_optional_str, json_result, run_tool_command,
+    21 +    trimmed_required, PageHook, ToolCommand,
+    22  };
+       ⋮
+    24  use crate::sites::xhs::{
+    25 -    ReadNoteOptions, XHS_HOME_URL, XhsHistoryStore, XhsNoteCard, XhsPageRuntime,
+    25 +    ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime, XHS_HOME_URL,
+    26  };
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 无关格式化噪音已撤回。现在重新确认工作树只剩本次抖音相关改动和原本的未跟踪备忘录。
+
+• Ran git diff --name-only
+  └ README.md
+    core/src/sites/mod.rs
+    core/src/sites/registry.rs
+
+• Ran git status --short --branch
+  └ ## site-creation
+     M README.md
+    … +2 lines (ctrl + t to view transcript)
+    ?? core/src/sites/dy/
+    ?? self_creation_memo.md
+
+• Ran git diff -- core/src/sites/runner.rs core/src/sites/xhs/entities.rs core/src/sites/xhs/history.rs core/src/sites/xhs/mod.rs core/src/sites/xhs/page.rs core/src/
+  │ sites/xhs/tools.rs
+  └ (no output)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 工作树现在只剩：README、站点注册、全新的 core/src/sites/dy/，以及原本存在的 self_creation_memo.md（未动）。我再跑一遍最终验证。
+
+• Ran git diff --check
+  └ (no output)
+
+• Ran cargo run -q -p socai-cli -- dy --help
+  └ Douyin (douyin.com)
+
+    … +7 lines (ctrl + t to view transcript)
+    Options:
+      -h, --help  Print help
+
+• Ran cargo test -q
+  └
+    running 17 tests
+    … +26 lines (ctrl + t to view transcript)
+    test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "AI工具" --num-videos 3 --wait-seconds 30 --pretty | jq '{ok, query, count, ids: [.cards[].video_id]}'
+  └ socai daemon was started from a different build; restarting it
+    run_dir: /Users/tonychong/.socai/runs/20260611_172835_dy_search_videos_AI工具
+    … +8 lines (ctrl + t to view transcript)
+      ]
+    }
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 最终验证通过，包括 cargo test、dy --help、git diff --check 和一次最新的 AI工具 小样本。最后我看一下 diff 规模，整理交付说明。
+
+• Ran git diff --stat
+  └  README.md                  | 3 ++-
+     core/src/sites/mod.rs      | 7 ++++---
+     core/src/sites/registry.rs | 2 +-
+     3 files changed, 7 insertions(+), 5 deletions(-)
+
+• Ran git diff -- README.md core/src/sites/mod.rs core/src/sites/registry.rs | sed -n '1,220p'
+  └ diff --git a/README.md b/README.md
+    index 2cd2c14..7b4580e 100644
+    … +44 lines (ctrl + t to view transcript)
+     pub fn all_sites() -> &'static [&'static SiteSpec] {
+         SITES
+
+• Ran git status --short --branch
+  └ ## site-creation
+     M README.md
+    … +2 lines (ctrl + t to view transcript)
+    ?? core/src/sites/dy/
+    ?? self_creation_memo.md
+
+• Explored
+  └ List dy
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• core/src/sites/mod.rs 里还有 rustfmt 造成的导出排序变化；虽然文件本来要改，但这不是必要 diff。我会把它收窄到只新增 pub mod dy;。
+
+• Edited core/src/sites/mod.rs (+3 -3)
+     6  pub use registry::{
+     7 -    AgentToolsFn, ArgKind, BoxFuture, CommandArg, CommandRunFn, SiteCommand, SiteSpec, SlowWhen,
+     8 -    all_sites, find_site, required_string,
+     7 +    all_sites, find_site, required_string, AgentToolsFn, ArgKind, BoxFuture, CommandArg,
+     8 +    CommandRunFn, SiteCommand, SiteSpec, SlowWhen,
+     9  };
+    10 -pub use runner::{PageHook, ToolCommand, run_tool_command};
+    10 +pub use runner::{run_tool_command, PageHook, ToolCommand};
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• diff 已收窄。最后跑一次 cargo check 和状态确认，不再运行会递归改格式的 rustfmt。
+
+• Ran git diff --check
+  └ (no output)
+
+• Ran git diff --stat && git status --short --branch
+  └  README.md                  | 3 ++-
+     core/src/sites/mod.rs      | 1 +
+    … +6 lines (ctrl + t to view transcript)
+    ?? core/src/sites/dy/
+    ?? self_creation_memo.md
+
+• Ran cargo check -q
+  └ (no output)
+
+• Ran git diff -- core/src/sites/mod.rs
+  └ diff --git a/core/src/sites/mod.rs b/core/src/sites/mod.rs
+    index d32edb1..a0601d5 100644
+    … +5 lines (ctrl + t to view transcript)
+     pub mod runner;
+     pub mod xhs;
+
+• Updated Plan
+  └ ✔ Inspect current site runner and XHS patterns
+    ✔ Scaffold fresh dy site and registry wiring
+    ✔ Add page_state snapshot command and validate
+    ✔ Iterate search_videos via real snapshots
+    ✔ Run checks and report results
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已按 core/src/sites/creation/SKILL.md 从当前分支重新新增抖音支持，没有参考 dy2/dy* 分支。
+
+  完成内容：
+
+  - 新增 core/src/sites/dy：entities.rs、page.rs、page_scripts.js、tools.rs、knowledge.md、mod.rs
+  - 注册 dy 站点到 core/src/sites/mod.rs 和 core/src/sites/registry.rs
+  - 新增命令：socai dy search_videos "咖啡" --num-videos 30
+  - 保留 page_state --debug-snapshot 观察入口
+  - README 加了抖音命令示例
+  - 针对抖音空白页/限流：dy 不走 daemon 外层 60 秒预导航，改由站点工具触发导航并按 330 秒默认预算轮询页面状态
+
+  实测结果：
+
+  - 咖啡 --num-videos 5：成功返回 5 条
+  - 咖啡 --num-videos 30：成功返回 30 条
+  - 露营 --num-videos 10：成功返回 10 条
+  - AI工具 --num-videos 8：成功返回 8 条
+  - 最终又跑了 AI工具 --num-videos 3，成功返回 3 条
+
+  验证通过：
+
+  - cargo test -q
+  - cargo check -q
+  - cargo run -q -p socai-cli -- dy --help
+  - git diff --check
+
+  注意：当前搜索结果页能稳定拿到 video_id/url/title/author/likes/cover_url。评论数、分享数这类字段搜索卡片上没有稳定暴露，所以现在按空字符串返回；没有进入视频详情页读
+  取深层数据。self_creation_memo.md 是原本未跟踪文件，我没有动。
+
+─ Worked for 19m 08s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
