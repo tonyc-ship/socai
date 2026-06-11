@@ -17,7 +17,9 @@ use crate::sites::registry::{
     required_string, ArgKind, BoxFuture, CommandArg, SiteCommand, SiteSpec, SlowWhen,
 };
 use crate::sites::xhs::page::XHS_SEARCH_FILTERS;
-use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime, XHS_HOME_URL};
+use crate::sites::xhs::{
+    ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime, XHS_HOME_URL,
+};
 
 /// Default number of notes `topic_scan` reads when the caller doesn't specify.
 const DEFAULT_NUM_NOTES: i64 = 10;
