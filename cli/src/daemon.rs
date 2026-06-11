@@ -4,14 +4,12 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use socai_core::runtime::SocaiRuntime;
-use socai_core::sites::xhs::{
-    extract_note_command, search_notes_command, topic_scan_command, XHS_HOME_URL,
-};
+use socai_core::sites::{find_site, SiteCommand, SiteSpec};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -43,12 +41,65 @@ const LOG_NAME: &str = "rust-daemon.log";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// The daemon only serves a CLI of the exact same build. A version mismatch
+/// is a hard error the user has to reconcile (update or rebuild); a same-
+/// version binary change (dev rebuild) restarts the daemon automatically.
+const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+const CODE_VERSION_MISMATCH: &str = "version-mismatch";
+const CODE_STALE_DAEMON: &str = "stale-daemon";
+
+static BUILD_ID: OnceLock<String> = OnceLock::new();
+
+/// Fingerprint (size + mtime) of the executable this process started from.
+/// The daemon pins it at startup — before a rebuild can swap the file under
+/// the same path — so comparing it against the calling CLI detects a stale
+/// daemon even when the package version did not change.
+fn process_build_id() -> &'static str {
+    BUILD_ID.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| std::fs::metadata(exe).ok())
+            .and_then(|meta| {
+                let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+                Some(format!("{}-{}", meta.len(), mtime.as_nanos()))
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    })
+}
+
+/// Daemon failures that need different client-side recovery: a version
+/// mismatch must fail, a stale daemon is restarted automatically.
+#[derive(Debug)]
+enum DaemonClientError {
+    VersionMismatch(String),
+    StaleDaemon(String),
+}
+
+impl std::fmt::Display for DaemonClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaemonClientError::VersionMismatch(message)
+            | DaemonClientError::StaleDaemon(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for DaemonClientError {}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct DaemonRequest {
     id: String,
+    /// Site id the command belongs to. Empty (legacy clients) means "xhs".
+    #[serde(default)]
+    site: String,
     command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<String>,
+    /// CLI package version + binary fingerprint. Empty for legacy clients.
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    build_id: String,
     #[serde(default)]
     args: Value,
     #[serde(default)]
@@ -84,6 +135,40 @@ struct DaemonResponse {
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// Machine-readable failure class (e.g. version-mismatch, stale-daemon).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    /// Daemon build identity; missing on responses from legacy daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    build_id: Option<String>,
+}
+
+impl DaemonResponse {
+    fn success(id: String, result: Value) -> Self {
+        Self {
+            id,
+            ok: true,
+            result: Some(result),
+            error: None,
+            code: None,
+            version: Some(PROTOCOL_VERSION.to_string()),
+            build_id: Some(process_build_id().to_string()),
+        }
+    }
+
+    fn failure(id: String, code: Option<&str>, error: String) -> Self {
+        Self {
+            id,
+            ok: false,
+            result: None,
+            error: Some(error),
+            code: code.map(str::to_string),
+            version: Some(PROTOCOL_VERSION.to_string()),
+            build_id: Some(process_build_id().to_string()),
+        }
+    }
 }
 
 struct DaemonPaths {
@@ -112,6 +197,8 @@ struct DaemonState {
 }
 
 pub async fn run_daemon() -> Result<()> {
+    // Pin the binary fingerprint before a rebuild can swap the file under us.
+    let _ = process_build_id();
     let paths = daemon_paths()?;
     fs::create_dir_all(&paths.home).await?;
     cleanup_stale_ipc(&paths).await?;
@@ -153,24 +240,44 @@ pub async fn run_daemon() -> Result<()> {
         }
     }
 
-    state.lock().await.shutdown().await?;
+    // Unlink our IPC endpoint before the slow browser teardown: a successor
+    // daemon may bind a fresh socket at this path right away, and removing it
+    // after shutdown would yank the new daemon's endpoint from under it.
     cleanup_stale_ipc(&paths).await?;
     let _ = fs::remove_file(&paths.pid).await;
+    state.lock().await.shutdown().await?;
     Ok(())
 }
 
-pub async fn send_or_spawn(command: &str, args: Value, command_timeout: Duration) -> Result<Value> {
-    match send_request(command, args.clone(), command_timeout).await {
-        Ok(result) => Ok(result),
-        Err(_) => {
-            spawn_daemon().await?;
-            send_request(command, args, command_timeout).await
+pub async fn send_or_spawn(
+    site: &str,
+    command: &str,
+    args: Value,
+    command_timeout: Duration,
+) -> Result<Value> {
+    let err = match send_request(site, command, args.clone(), command_timeout).await {
+        Ok(result) => return Ok(result),
+        Err(err) => err,
+    };
+    match err.downcast_ref::<DaemonClientError>() {
+        // A different release serving this CLI is never acceptable — the user
+        // has to bring both onto the same version.
+        Some(DaemonClientError::VersionMismatch(_)) => return Err(err),
+        // Same version, different binary (typically a dev rebuild): replace
+        // the daemon so commands never run on stale code.
+        Some(DaemonClientError::StaleDaemon(_)) => {
+            eprintln!("socai daemon was started from a different build; restarting it");
+            let _ = stop_daemon().await;
+            wait_for_daemon_exit().await;
         }
+        None => {}
     }
+    spawn_daemon().await?;
+    send_request(site, command, args, command_timeout).await
 }
 
 pub async fn stop_daemon() -> Result<bool> {
-    match send_request("shutdown", json!({}), Duration::from_secs(10)).await {
+    match send_request("", "shutdown", json!({}), Duration::from_secs(10)).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -218,12 +325,37 @@ async fn handle_request(
     let telemetry = request.telemetry.clone();
     let auth_token = { state.lock().await.auth_token.clone() };
     if !daemon_request_authorized(request.auth.as_deref(), auth_token.as_deref()) {
-        return DaemonResponse {
-            id,
-            ok: false,
-            result: None,
-            error: Some("daemon authentication failed".into()),
-        };
+        return DaemonResponse::failure(id, None, "daemon authentication failed".into());
+    }
+
+    // Site commands only run for a CLI of the exact same build. ping and
+    // shutdown stay exempt so `socai stop` works across any version pairing.
+    if !matches!(command.as_str(), "ping" | "shutdown") {
+        if request.version != PROTOCOL_VERSION {
+            let cli_version = if request.version.is_empty() {
+                "<unknown>"
+            } else {
+                request.version.as_str()
+            };
+            return DaemonResponse::failure(
+                id,
+                Some(CODE_VERSION_MISMATCH),
+                format!(
+                    "socai daemon {PROTOCOL_VERSION} cannot serve CLI {cli_version}; \
+                     run `socai stop`, then update or rebuild so both use the same version"
+                ),
+            );
+        }
+        if request.build_id != process_build_id() {
+            return DaemonResponse::failure(
+                id,
+                Some(CODE_STALE_DAEMON),
+                format!(
+                    "socai daemon was started from a different build of {PROTOCOL_VERSION} \
+                     (the binary changed since it started)"
+                ),
+            );
+        }
     }
 
     let result = async {
@@ -236,30 +368,27 @@ async fn handle_request(
             return Ok(json!({ "ok": true }));
         }
 
+        let site_id = if request.site.trim().is_empty() {
+            "xhs"
+        } else {
+            request.site.trim()
+        };
+        let site = find_site(site_id).ok_or_else(|| anyhow!("unknown site: {site_id}"))?;
+        let spec = site
+            .command(&command)
+            .ok_or_else(|| anyhow!("unknown {site_id} command: {command}"))?;
+
         let mut state = state.lock().await;
         state.last_activity = Instant::now();
-        match command.as_str() {
-            "search_notes" => state.search_notes(&id, request.args, &telemetry).await,
-            "topic_scan" => state.topic_scan(&id, request.args, &telemetry).await,
-            "extract_note" => state.extract_note(&id, request.args, &telemetry).await,
-            other => Err(anyhow!("unknown daemon command: {other}")),
-        }
+        state
+            .run_site_command(&id, site, spec, request.args, &telemetry)
+            .await
     }
     .await;
 
     match result {
-        Ok(result) => DaemonResponse {
-            id,
-            ok: true,
-            result: Some(result),
-            error: None,
-        },
-        Err(err) => DaemonResponse {
-            id,
-            ok: false,
-            result: None,
-            error: Some(format!("{err:#}")),
-        },
+        Ok(result) => DaemonResponse::success(id, result),
+        Err(err) => DaemonResponse::failure(id, None, format!("{err:#}")),
     }
 }
 
@@ -274,26 +403,34 @@ fn daemon_request_authorized(request_auth: Option<&str>, daemon_auth: Option<&st
 }
 
 impl DaemonState {
-    async fn search_notes(
+    async fn run_site_command(
         &mut self,
         request_id: &str,
+        site: &'static SiteSpec,
+        spec: &'static SiteCommand,
         args: Value,
         telemetry: &DaemonTelemetry,
     ) -> Result<Value> {
         let started = Instant::now();
         let result = async {
-            let query = required_string(&args, "query")?;
-            let filters = args.get("filters");
-            let num_notes = args.get("num_notes").and_then(Value::as_i64);
             let debug_snapshot = debug_snapshot_flag(&args);
-            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            search_notes_command(page, &query, filters, num_notes, debug_snapshot).await
+            // Route CDP through the bridge (spawning it on first use) so the
+            // chrome connection — and its allow-debugging consent — survives
+            // daemon restarts. Falls back to a direct connect when the bridge
+            // can't start.
+            crate::bridge::ensure_bridge_env().await;
+            let page = self
+                .runtime
+                .ensure_site_page(site.id, site.home_url)
+                .await?;
+            (spec.run)(page, args.clone(), debug_snapshot).await
         }
         .await;
         self.track_tool_trace(
             request_id,
-            "search_notes",
-            "search_notes",
+            site.id,
+            spec.name,
+            spec.tool_name,
             &args,
             telemetry,
             started,
@@ -302,77 +439,11 @@ impl DaemonState {
         result
     }
 
-    async fn topic_scan(
-        &mut self,
-        request_id: &str,
-        args: Value,
-        telemetry: &DaemonTelemetry,
-    ) -> Result<Value> {
-        let started = Instant::now();
-        let result = async {
-            let query = required_string(&args, "query")?;
-            let tab_label = args.get("tab_label").and_then(Value::as_str);
-            let filters = args.get("filters");
-            let num_notes = args.get("num_notes").and_then(Value::as_i64);
-            let download_media = args
-                .get("download_media")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let debug_snapshot = debug_snapshot_flag(&args);
-            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            topic_scan_command(
-                page,
-                &query,
-                tab_label,
-                filters,
-                num_notes,
-                download_media,
-                debug_snapshot,
-            )
-            .await
-        }
-        .await;
-        self.track_tool_trace(
-            request_id,
-            "topic_scan",
-            "topic_scan",
-            &args,
-            telemetry,
-            started,
-            &result,
-        );
-        result
-    }
-
-    async fn extract_note(
-        &mut self,
-        request_id: &str,
-        args: Value,
-        telemetry: &DaemonTelemetry,
-    ) -> Result<Value> {
-        let started = Instant::now();
-        let result = async {
-            let note_id = required_string(&args, "note_id")?;
-            let debug_snapshot = debug_snapshot_flag(&args);
-            let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
-            extract_note_command(page, &note_id, debug_snapshot).await
-        }
-        .await;
-        self.track_tool_trace(
-            request_id,
-            "extract_note",
-            "read_note",
-            &args,
-            telemetry,
-            started,
-            &result,
-        );
-        result
-    }
-
+    #[allow(clippy::too_many_arguments)]
     fn track_tool_trace(
         &self,
         request_id: &str,
+        site_id: &str,
         command: &str,
         tool_name: &str,
         input: &Value,
@@ -384,7 +455,7 @@ impl DaemonState {
             return;
         }
 
-        let mut props = base_trace_props(request_id, command, tool_name);
+        let mut props = base_trace_props(request_id, site_id, command, tool_name);
         props.insert(
             "duration_ms".into(),
             json!(started.elapsed().as_millis() as u64),
@@ -406,18 +477,23 @@ impl DaemonState {
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        let _ = self.runtime.close_site_session("xhs").await;
+        let _ = self.runtime.close_all_site_sessions().await;
         self.runtime.disconnect_browser().await;
         Ok(())
     }
 }
 
-fn base_trace_props(request_id: &str, command: &str, tool_name: &str) -> Map<String, Value> {
+fn base_trace_props(
+    request_id: &str,
+    site_id: &str,
+    command: &str,
+    tool_name: &str,
+) -> Map<String, Value> {
     let mut props = Map::new();
     props.insert("request_id".into(), json!(request_id));
     props.insert("command".into(), json!(command));
     props.insert("tool_name".into(), json!(tool_name));
-    props.insert("site".into(), json!("xhs"));
+    props.insert("site".into(), json!(site_id));
     props
 }
 
@@ -637,13 +713,21 @@ mod tests {
     }
 }
 
-async fn send_request(command: &str, args: Value, request_timeout: Duration) -> Result<Value> {
+async fn send_request(
+    site: &str,
+    command: &str,
+    args: Value,
+    request_timeout: Duration,
+) -> Result<Value> {
     let paths = daemon_paths()?;
     let (stream, auth) = connect_daemon(&paths).await?;
     let request = DaemonRequest {
         id: request_id(),
+        site: site.to_string(),
         command: command.to_string(),
         auth,
+        version: PROTOCOL_VERSION.to_string(),
+        build_id: process_build_id().to_string(),
         args,
         telemetry: DaemonTelemetry {
             enabled: telemetry_enabled(),
@@ -665,12 +749,29 @@ async fn send_request(command: &str, args: Value, request_timeout: Duration) -> 
         }
         let response: DaemonResponse = serde_json::from_str(line.trim_end())?;
         if !response.ok {
-            return Err(anyhow!(
-                "{}",
-                response
-                    .error
-                    .unwrap_or_else(|| "daemon command failed".to_string())
-            ));
+            let message = response
+                .error
+                .unwrap_or_else(|| "daemon command failed".to_string());
+            return Err(match response.code.as_deref() {
+                Some(CODE_VERSION_MISMATCH) => {
+                    anyhow::Error::new(DaemonClientError::VersionMismatch(message))
+                }
+                Some(CODE_STALE_DAEMON) => {
+                    anyhow::Error::new(DaemonClientError::StaleDaemon(message))
+                }
+                _ => anyhow!("{message}"),
+            });
+        }
+        // Legacy daemons (pre build checking) execute commands without
+        // validating; their responses lack the build identity. Treat them as
+        // stale so they get replaced rather than silently serving old code.
+        if !matches!(command, "ping" | "shutdown")
+            && (response.version.as_deref() != Some(PROTOCOL_VERSION)
+                || response.build_id.as_deref() != Some(process_build_id()))
+        {
+            return Err(anyhow::Error::new(DaemonClientError::StaleDaemon(
+                "socai daemon predates build checking or runs a different build".to_string(),
+            )));
         }
         response
             .result
@@ -685,33 +786,11 @@ async fn spawn_daemon() -> Result<()> {
     fs::create_dir_all(&paths.home).await?;
     cleanup_stale_ipc(&paths).await?;
 
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.log)
-        .with_context(|| format!("open daemon log {}", paths.log.display()))?;
-    let stderr = log.try_clone()?;
-
-    let mut command = std::process::Command::new(std::env::current_exe()?);
-    command
-        .arg("__daemon")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr));
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    command.spawn().context("spawn socai rust daemon")?;
+    spawn_detached_subcommand("__daemon", &paths.log, |_| {})?;
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
-        if send_request("ping", json!({}), Duration::from_secs(2))
+        if send_request("", "ping", json!({}), Duration::from_secs(2))
             .await
             .is_ok()
         {
@@ -794,13 +873,30 @@ async fn connect_daemon(paths: &DaemonPaths) -> Result<(DaemonStream, Option<Str
 }
 
 #[cfg(unix)]
-async fn cleanup_stale_ipc(paths: &DaemonPaths) -> Result<()> {
-    if paths.socket.exists() {
-        fs::remove_file(&paths.socket)
-            .await
-            .with_context(|| format!("remove stale socket {}", paths.socket.display()))?;
+/// Give a just-stopped daemon a moment to unlink its IPC endpoint so the
+/// successor's pre-spawn cleanup doesn't race its exit cleanup.
+async fn wait_for_daemon_exit() {
+    let Ok(paths) = daemon_paths() else { return };
+    #[cfg(unix)]
+    let marker = paths.socket.clone();
+    #[cfg(windows)]
+    let marker = paths.endpoint.clone();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while marker.exists() && Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
     }
-    Ok(())
+}
+
+async fn cleanup_stale_ipc(paths: &DaemonPaths) -> Result<()> {
+    // A just-stopped daemon races us removing the same socket (its exit
+    // cleanup vs our pre-spawn cleanup), so a missing file is success.
+    match fs::remove_file(&paths.socket).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => {
+            Err(err).with_context(|| format!("remove stale socket {}", paths.socket.display()))
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -825,23 +921,56 @@ fn debug_snapshot_flag(args: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn required_string(args: &Value, key: &str) -> Result<String> {
-    let value = args
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("missing required argument: {key}"))?;
-    Ok(value.to_string())
+/// Spawn `socai <subcommand>` as a detached background process (own session
+/// on unix) with stdout/stderr appended to `log_path`. `configure` can adjust
+/// the command (e.g. env) before spawning. Shared by the daemon and the CDP
+/// bridge.
+pub(crate) fn spawn_detached_subcommand(
+    subcommand: &str,
+    log_path: &std::path::Path,
+    configure: impl FnOnce(&mut std::process::Command),
+) -> Result<std::process::Child> {
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("open log {}", log_path.display()))?;
+    let stderr = log.try_clone()?;
+
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .arg(subcommand)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr));
+    configure(&mut command);
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+        .spawn()
+        .with_context(|| format!("spawn socai {subcommand}"))
+}
+
+/// The socai state dir (`$SOCAI_HOME` or `~/.socai`), shared by the daemon
+/// and the CDP bridge.
+pub(crate) fn socai_home() -> Result<PathBuf> {
+    match std::env::var_os("SOCAI_HOME") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => Ok(home_dir()
+            .context("could not locate user home directory for ~/.socai")?
+            .join(".socai")),
+    }
 }
 
 fn daemon_paths() -> Result<DaemonPaths> {
-    let home = match std::env::var_os("SOCAI_HOME") {
-        Some(path) => PathBuf::from(path),
-        None => home_dir()
-            .context("could not locate user home directory for ~/.socai")?
-            .join(".socai"),
-    };
+    let home = socai_home()?;
 
     Ok(DaemonPaths {
         #[cfg(unix)]
@@ -882,3 +1011,72 @@ fn request_id() -> String {
         .as_millis();
     format!("{}-{millis}", std::process::id())
 }
+
+/// Best-effort sweep: terminate every lingering socai `__daemon` / `__bridge`
+/// process, no matter which binary or `SOCAI_HOME` spawned it. The graceful
+/// socket shutdown only reaches whoever currently owns the IPC endpoint, so
+/// this catches orphans left by restart races or crashes. Returns the number
+/// of processes signalled.
+pub async fn kill_lingering_helpers() -> usize {
+    let pids = lingering_helper_pids();
+    if pids.is_empty() {
+        return 0;
+    }
+    for pid in &pids {
+        signal_pid(*pid, false);
+    }
+    // Give them a moment to exit on SIGTERM, then SIGKILL any holdouts.
+    sleep(Duration::from_millis(400)).await;
+    for pid in &pids {
+        signal_pid(*pid, true);
+    }
+    pids.len()
+}
+
+/// PIDs of running `socai __daemon` / `socai __bridge` processes (excluding the
+/// caller). Identified by command line so it spans every install path.
+#[cfg(unix)]
+fn lingering_helper_pids() -> Vec<u32> {
+    let me = std::process::id();
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let (pid_str, cmd) = line.split_once(' ')?;
+            let pid: u32 = pid_str.trim().parse().ok()?;
+            if pid == me {
+                return None;
+            }
+            // The binary is always named `socai`; matching the exact
+            // `socai __daemon` / `socai __bridge` tail avoids hitting the
+            // `socai stop` process or unrelated programs.
+            (cmd.contains("socai __daemon") || cmd.contains("socai __bridge")).then_some(pid)
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn lingering_helper_pids() -> Vec<u32> {
+    // No cheap command-line process filter on Windows; the graceful socket
+    // shutdown remains the stop path there.
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn signal_pid(pid: u32, force: bool) {
+    let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+    // Safe FFI: kill() with a signal number; failures (already exited, not
+    // ours) are ignored on purpose.
+    unsafe {
+        libc::kill(pid as libc::pid_t, sig);
+    }
+}
+
+#[cfg(windows)]
+fn signal_pid(_pid: u32, _force: bool) {}
