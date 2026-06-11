@@ -17,8 +17,7 @@ use crate::cdp::PageSession;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send>>;
 
 /// Async factory: build the site's agent tools against a shared page.
-pub type AgentToolsFn =
-    fn(Arc<PageSession>, Arc<dyn LlmProvider>) -> BoxFuture<Vec<Arc<dyn Tool>>>;
+pub type AgentToolsFn = fn(Arc<PageSession>, Arc<dyn LlmProvider>) -> BoxFuture<Vec<Arc<dyn Tool>>>;
 
 /// One-shot CLI/daemon command: `(page, JSON args, debug_snapshot)` → JSON.
 pub type CommandRunFn = fn(Arc<PageSession>, Value, bool) -> BoxFuture<Value>;
@@ -93,7 +92,7 @@ impl SiteSpec {
 }
 
 /// Every registered site. Site order is also CLI help order.
-static SITES: &[&SiteSpec] = &[&crate::sites::xhs::XHS_SITE];
+static SITES: &[&SiteSpec] = &[&crate::sites::xhs::XHS_SITE, &crate::sites::dy::DY_SITE];
 
 pub fn all_sites() -> &'static [&'static SiteSpec] {
     SITES

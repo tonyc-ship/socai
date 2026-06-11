@@ -9,13 +9,14 @@ use crate::agent::{
     Message, OpenAICompatBackend, Provider, Tool,
 };
 use crate::cdp::{BrowserEvent, Cdp, PageSession, PageSessionManager, StatusPayload, TargetInfo};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::{sleep, Instant};
 
 use super::BrowserStatus;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
+const SITE_FIRST_OPEN_TIMEOUT_S: f64 = 300.0;
 
 /// Shared in-process runtime handle for one entrypoint. Tauri, TUI, and the
 /// CLI daemon each construct their own instance; the daemon is only an IPC
@@ -98,7 +99,9 @@ impl SocaiRuntime {
         wait_browser_connected(self).await?;
         let page = Arc::new(self.create_page("about:blank").await?);
         if !start_url.trim().is_empty() {
-            page.navigate_with_timeout(start_url, 60.0).await?;
+            page.navigate_with_timeout(start_url, SITE_FIRST_OPEN_TIMEOUT_S)
+                .await
+                .with_context(|| format!("open initial site page {start_url}"))?;
         }
         pages.insert(site_id.to_string(), page.clone());
         Ok(page)
@@ -133,7 +136,7 @@ impl Default for SocaiRuntime {
 }
 
 /// Wait until the runtime reports a connected browser, kicking off a connect
-/// if it isn't already in flight. Times out after 90s.
+/// if it isn't already in flight. Times out after 5 minutes.
 pub async fn wait_browser_connected(runtime: &SocaiRuntime) -> Result<()> {
     runtime.connect_browser();
     let deadline = Instant::now() + CONNECT_TIMEOUT;

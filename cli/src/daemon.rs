@@ -39,7 +39,7 @@ const ENDPOINT_NAME: &str = "rust-daemon-endpoint.json";
 const PID_NAME: &str = "rust-daemon.pid";
 const LOG_NAME: &str = "rust-daemon.log";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The daemon only serves a CLI of the exact same build. A version mismatch
 /// is a hard error the user has to reconcile (update or rebuild); a same-
@@ -410,7 +410,10 @@ impl DaemonState {
         let started = Instant::now();
         let result = async {
             let debug_snapshot = debug_snapshot_flag(&args);
-            let page = self.runtime.ensure_site_page(site.id, site.home_url).await?;
+            let page = self
+                .runtime
+                .ensure_site_page(site.id, site.home_url)
+                .await?;
             (spec.run)(page, args.clone(), debug_snapshot).await
         }
         .await;

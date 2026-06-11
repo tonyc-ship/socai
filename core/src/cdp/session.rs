@@ -115,10 +115,55 @@ impl PageSession {
     ) -> anyhow::Result<()> {
         self.snapshot_before().await;
         let timeout = seconds(timeout_seconds);
-        tokio::time::timeout(timeout, self.page.goto(url)).await??;
-        self.wait_for_load_state("domcontentloaded", timeout_seconds)
+        let before_url = self
+            .evaluate_json_raw("location.href")
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(ToOwned::to_owned));
+        let target = serde_json::to_string(url)?;
+        let script = format!("window.location.assign({target}); true");
+        tokio::time::timeout(timeout, self.evaluate_json_raw(&script)).await??;
+        let loaded = self
+            .wait_for_navigation_ready(before_url.as_deref(), url, timeout_seconds)
             .await?;
+        if !loaded {
+            anyhow::bail!("navigation did not reach DOM ready within {timeout_seconds:.1}s");
+        }
         Ok(())
+    }
+
+    async fn wait_for_navigation_ready(
+        &self,
+        before_url: Option<&str>,
+        target_url: &str,
+        timeout_seconds: f64,
+    ) -> anyhow::Result<bool> {
+        let deadline = Instant::now() + seconds(timeout_seconds);
+        while Instant::now() < deadline {
+            let state = self
+                .evaluate_json("return { url: location.href, readyState: document.readyState };")
+                .await
+                .ok();
+            let url = state
+                .as_ref()
+                .and_then(|v| v.get("url"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let ready = state
+                .as_ref()
+                .and_then(|v| v.get("readyState"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let navigation_started = match before_url {
+                Some(before) => before == target_url || before != url,
+                None => true,
+            };
+            if navigation_started && matches!(ready, "interactive" | "complete") {
+                return Ok(true);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Ok(false)
     }
 
     pub async fn wait_for_load_state(

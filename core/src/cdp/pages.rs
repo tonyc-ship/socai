@@ -1,10 +1,14 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::Context;
 use chromiumoxide::cdp::browser_protocol::target::CloseTargetParams;
 use chromiumoxide::Browser;
 
 use crate::cdp::connection::{Cdp, CdpState};
 use crate::cdp::session::PageSession;
+
+const PAGE_CREATE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Thin page factory over one CDP connection. Higher-level runtime code can
 /// decide whether a page belongs to a tool session, an agent run, or a debug
@@ -22,7 +26,10 @@ impl PageSessionManager {
     /// is not in `Connected` state.
     pub async fn create_page(&self, start_url: &str) -> anyhow::Result<PageSession> {
         let browser = self.browser().await?;
-        let page = browser.new_page(start_url).await?;
+        let page = tokio::time::timeout(PAGE_CREATE_TIMEOUT, browser.new_page(start_url))
+            .await
+            .context("create browser page timed out")?
+            .context("create browser page")?;
         Ok(PageSession::new(page))
     }
 

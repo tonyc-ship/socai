@@ -6,7 +6,7 @@ use chromiumoxide::cdp::browser_protocol::target::{
     EventTargetCreated, EventTargetDestroyed, EventTargetInfoChanged, GetTargetsParams,
     SetDiscoverTargetsParams,
 };
-use chromiumoxide::Browser;
+use chromiumoxide::{handler::HandlerConfig, Browser};
 use futures::StreamExt;
 use tracing::{debug, warn};
 
@@ -15,6 +15,7 @@ use crate::cdp::endpoint::{self, Endpoint};
 
 const MAX_ATTEMPTS: u8 = 3;
 const ATTEMPT_DELAY: Duration = Duration::from_millis(500);
+const CDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Cdp {
     /// Trigger an asynchronous connect attempt. Idempotent: if already
@@ -80,7 +81,12 @@ async fn try_connect_once(cdp: &Cdp) -> anyhow::Result<()> {
             )
         })?;
 
-    let (browser, mut handler) = Browser::connect(&endpoint.browser_ws_url).await?;
+    let handler_config = HandlerConfig {
+        request_timeout: CDP_REQUEST_TIMEOUT,
+        ..HandlerConfig::default()
+    };
+    let (browser, mut handler) =
+        Browser::connect_with_config(&endpoint.browser_ws_url, handler_config).await?;
 
     let cdp_for_pump = cdp.clone();
     let pump = tokio::spawn(async move {
