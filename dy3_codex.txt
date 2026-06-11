@@ -1,0 +1,1123 @@
+
+    48527 /bin/zsh -c ps -axo pid,command | rg 'socai-cli|target/debug/socai|cargo run'
+    48529 rg socai-cli|target/debug/socai|cargo run
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 当前 run 是 agent_20260610_225933_search_videos。我在看 snapshot 增长和滚动位置。
+
+• Ran cargo run -q -p socai-cli -- stop && cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 30 --debug-snapshot --pretty
+  └ socai rust daemon stopped
+    run_dir: /Users/tonychong/.socai/runs/agent_20260610_225933_search_videos
+    … +357 lines (ctrl + t to view transcript)
+      ]
+    }
+
+• Ran tail -40 /Users/tonychong/.socai/runs/agent_20260610_225933_search_videos/snapshots/index.jsonl
+  └ {"a11y_nodes":653,"dir":"00001_065934_447","dom_bytes":1035907,"has_a11y":true,"has_screenshot":true,"seq":1,"ts":"2026-06-11T06:59:34.447075+08:
+    00","url":"https://www.douyin.com/jingxuan"}
+    … +18 lines (ctrl + t to view transcript)
+    {"a11y_nodes":924,"dir":"00011_065941_860","dom_bytes":1285091,"has_a11y":true,"has_screenshot":true,"seq":11,"ts":"2026-06-11T06:59:41.860526+08
+    :00","url":"https://www.douyin.com/jingxuan/search/%E9%9C%B2%E8%90%A5?aid=4da1d190-67bd-4a5a-8abd-f366a65c6aa7&type=general"}
+
+• Explored
+  └ List snapshots
+
+• Ran wc -l /Users/tonychong/.socai/runs/agent_20260610_225933_search_videos/snapshots/index.jsonl
+  └       11 /Users/tonychong/.socai/runs/agent_20260610_225933_search_videos/snapshots/index.jsonl
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• snapshot 停在第 11 帧，说明页面已经稳定；命令还在收集循环里。为了不让测试卡太久，我会先等它自然返回；如果还慢，我会把 stall 策略调短，并先验证首屏
+  结果正确。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 结果字段现在对了，但因为搜索结果列表会虚拟化，滚动后 DOM 里只保留当前窗口附近的卡片，所以旧逻辑把前面的卡片覆盖掉了，最终只剩 20 条。我要改成跨滚动
+  累积去重，按 video_id/link 保留所有见过的卡片。
+
+• Explored
+  └ Read page.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 补丁上下文有点偏，我先按当前文件形状替换滚动收集函数。
+
+• Edited core/src/sites/dy/page.rs (+26 -19)
+    205      async fn collect_video_cards(&self, target: usize) -> Result<Vec<DyVideoCard>> {
+    206 -        const PRE_SCROLL_DELAY: Duration = Duration::from_millis(800);
+    207 -        const SETTLE_TIMEOUT: Duration = Duration::from_millis(3500);
+    208 -        const MAX_STALLS: usize = 4;
+    206 +        const POST_SCROLL_DELAY: Duration = Duration::from_millis(1800);
+    207 +        const MAX_STALLS: usize = 6;
+    208
+    210 -        let mut cards = self.extract_video_cards().await?;
+    209 +        let mut cards = Vec::new();
+    210 +        merge_cards(&mut cards, self.extract_video_cards().await?);
+    211          let mut stalls = 0usize;
+        ⋮
+    213              let before = cards.len();
+    214 -            sleep_ms(PRE_SCROLL_DELAY.as_millis() as u64).await;
+    214              self.run_script("scrollResults", Some(&json!({ "nudge_up": false })))
+    215                  .await?;
+    217 -            cards = self.wait_for_card_growth(before, SETTLE_TIMEOUT).await?;
+    216 +            sleep_ms(POST_SCROLL_DELAY.as_millis() as u64).await;
+    217 +            merge_cards(&mut cards, self.extract_video_cards().await?);
+    218
+        ⋮
+    221                      .await?;
+    222 -                cards = self.wait_for_card_growth(before, SETTLE_TIMEOUT).await?;
+    222 +                sleep_ms(POST_SCROLL_DELAY.as_millis() as u64).await;
+    223 +                merge_cards(&mut cards, self.extract_video_cards().await?);
+    224              }
+        ⋮
+    237      }
+    238 +}
+    239
+    238 -    async fn wait_for_card_growth(
+    239 -        &self,
+    240 -        baseline: usize,
+    241 -        timeout: Duration,
+    242 -    ) -> Result<Vec<DyVideoCard>> {
+    243 -        let deadline = Instant::now() + timeout;
+    244 -        loop {
+    245 -            sleep_ms(350).await;
+    246 -            let cards = self.extract_video_cards().await?;
+    247 -            if cards.len() > baseline || Instant::now() >= deadline {
+    248 -                return Ok(cards);
+    249 -            }
+    240 +fn merge_cards(into: &mut Vec<DyVideoCard>, batch: Vec<DyVideoCard>) {
+    241 +    for mut card in batch {
+    242 +        let key = if !card.video_id.is_empty() {
+    243 +            card.video_id.as_str()
+    244 +        } else {
+    245 +            card.link.as_str()
+    246 +        };
+    247 +        if key.is_empty() {
+    248 +            continue;
+    249 +        }
+    250 +        if into
+    251 +            .iter()
+    252 +            .any(|existing| existing.video_id == key || existing.link == key)
+    253 +        {
+    254 +            continue;
+    255          }
+    256 +        card.position = into.len() as i64;
+    257 +        into.push(card);
+    258      }
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 滚动收集已改成“见过的卡片累积去重”。现在编译并跑一组 30 条验证。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译通过。重启 daemon 后再跑 30 条；这次验证重点是数量和结果是否仍匹配“露营”。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 命令在跑，继续等结果。
+
+• Ran cargo run -q -p socai-cli -- stop && cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 30 --debug-snapshot --pretty
+  └ socai rust daemon stopped
+    Error: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次请求在外层直接超时，没有返回 JSON。我先看 run_dir 和 daemon 状态，判断是页面限流/Chrome连接，还是刚才的测试被 daemon 超时打断。
+
+• Explored
+  └ Search *search_videos in runs
+
+• Ran ps -axo pid,command | rg 'socai-cli|target/debug/socai|__daemon'
+  └ 48908 /Users/tonychong/socai/target/debug/socai __daemon
+    49033 /bin/zsh -c ps -axo pid,command | rg 'socai-cli|target/debug/socai|__daemon'
+    49035 rg socai-cli|target/debug/socai|__daemon
+
+• Ran tail -80 ~/.socai/rust-daemon.log
+  └ daemon client error: Broken pipe (os error 32)
+    daemon client error: Broken pipe (os error 32)
+    … +22 lines (ctrl + t to view transcript)
+    2026-06-04T09:51:55.115986Z  WARN socai_core::cdp::snapshot: debug-snapshot: a11y for node 5 failed: uninteresting: uninteresting
+    2026-06-04T09:51:55.321212Z  WARN socai_core::cdp::snapshot: debug-snapshot: a11y for node 6 failed: uninteresting: uninteresting
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次没有创建新的 run_dir，说明请求还没进入站点命令体，像是 daemon/Chrome 连接层卡住了一次，而不是新收集逻辑的问题。我重启 daemon，再先用不带
+  snapshot 的快速命令验证输出。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• daemon 已停。现在跑无 snapshot 的 30 条，减少页面调试开销。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 命令在跑，继续等返回。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 30 --pretty
+  └ Error: Request timed out.
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› 又被抖音限流了，请把每次首次打开网页的超时延长到5分钟。然后请继续
+
+
+• 明白。先把站点首次打开的导航超时从 60 秒改成 300 秒；这在 runtime 统一入口生效，dy/xhs 等站点首次创建页面都会用这个预算。然后我会清理可能残留的
+  daemon，再继续验证抖音搜索。
+
+• Ran ps -axo pid,command | rg 'target/debug/socai|socai-cli|cargo run'
+  └ 49094 /Users/tonychong/socai/target/debug/socai __daemon
+    49963 /bin/zsh -c ps -axo pid,command | rg 'target/debug/socai|socai-cli|cargo run'
+    49965 rg target/debug/socai|socai-cli|cargo run
+
+• Ran git diff -- core/src/runtime/engine.rs core/src/sites/dy/page.rs core/src/sites/dy/page_scripts.js core/src/sites/dy/tools.rs core/src/sites/
+  │ registry.rs core/src/sites/mod.rs
+  └ diff --git a/core/src/sites/mod.rs b/core/src/sites/mod.rs
+    index e93da77..dc56680 100644
+    … +28 lines (ctrl + t to view transcript)
+     pub fn all_sites() -> &'static [&'static SiteSpec] {
+         SITES
+
+• Explored
+  └ Read engine.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我看到旧 daemon 还在。先改超时常量，再停掉它重新起；这能避免它继续用旧二进制和旧页面状态。
+
+• Explored
+  └ Search navigate_with_timeout\([^,]+, 60\.0\)|60\.0\) in dy
+    Read page.rs, tools.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我会同时改 runtime 的统一首次打开，以及 dy 自己的 fallback 打开路径，避免页面被限流时 60 秒提前失败。
+
+• Edited 3 files (+10 -3)
+  └ core/src/runtime/engine.rs (+3 -1)
+     18  const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+     19 +const SITE_FIRST_OPEN_TIMEOUT_S: f64 = 300.0;
+     20
+        ⋮
+    101          if !start_url.trim().is_empty() {
+    101 -            page.navigate_with_timeout(start_url, 60.0).await?;
+    102 +            page.navigate_with_timeout(start_url, SITE_FIRST_OPEN_TIMEOUT_S)
+    103 +                .await?;
+    104          }
+
+  └ core/src/sites/dy/page.rs (+4 -1)
+    11  const PAGE_SCRIPTS_JS: &str = include_str!("page_scripts.js");
+    12 +const DY_OPEN_TIMEOUT_S: f64 = 300.0;
+    13  const DY_PAGE_SCRIPT_FUNCTIONS: &[&str] = &[
+       ⋮
+    62          if navigate_if_needed {
+    62 -            self.page.navigate_with_timeout(DY_HOME_URL, 60.0).await?;
+    63 +            self.page
+    64 +                .navigate_with_timeout(DY_HOME_URL, DY_OPEN_TIMEOUT_S)
+    65 +                .await?;
+    66              return Ok(());
+
+  └ core/src/sites/dy/tools.rs (+3 -1)
+     13  pub const DY_KNOWLEDGE: &str = include_str!("knowledge.md");
+     14 +const DY_OPEN_TIMEOUT_S: f64 = 300.0;
+     15
+        ⋮
+    118      if !current_url.contains("douyin.com") {
+    118 -        page.navigate_with_timeout(DY_HOME_URL, 60.0).await?;
+    119 +        page.navigate_with_timeout(DY_HOME_URL, DY_OPEN_TIMEOUT_S)
+    120 +            .await?;
+    121      }
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 超时已改。现在格式化/编译检查，然后停旧 daemon，继续跑一次较小的验证，再跑 30 条。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译通过。先停旧 daemon；如果抖音此刻仍限流，首次打开现在会最多等 5 分钟。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 先跑 --num-videos 8 快速验证搜索/抽取不受限流影响，确认后再尝试 30 条。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 命令仍在跑，可能正在首次打开或等待抖音恢复。我继续等；新超时允许最多 5 分钟，不会 60 秒就失败。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ Error: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 仍然 30 秒左右报 Request timed out，这说明不是我们外层 navigate_with_timeout(300s) 的 Tokio 超时，而是 chromiumoxide/CDP 的内部默认请求超时先触发
+  了。我要看本地依赖里的 goto 实现，改首次打开路径避开这个 30 秒内部超时。
+
+• Ran find /Users/tonychong/.socai/runs -maxdepth 1 -type d -name '*search_videos' -print | sort | tail -5 && ps -axo pid,command | rg 'target/debug/
+  │ socai|__daemon'
+  └ /Users/tonychong/.socai/runs/agent_20260610_105528_search_videos
+    /Users/tonychong/.socai/runs/agent_20260610_105552_search_videos
+    … +5 lines (ctrl + t to view transcript)
+    rg 'target/debug/socai|__daemon'
+    50364 rg target/debug/socai|__daemon
+
+• Explored
+  └ Search chromiumoxide in Cargo.lock
+    Search pub async fn goto|fn goto|Request timed out|timeout in registry
+    Search chromiumoxide|handler|goto|Request timed out
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 本地依赖确认 Request timed out 是 chromiumoxide 的 request_timeout。需要把 CDP 连接配置的 request_timeout 也升到 5 分钟，否则 Page.navigate 在 30
+  秒左右会先失败。
+
+• Explored
+  └ Read lifecycle.rs, page.rs, browser.rs
+    Search pub async fn connect in browser.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Browser::connect 有配置版，我会把连接配置的 request timeout 改成 5 分钟，这样所有 CDP 命令，尤其是首次 Page.navigate，不会在 30 秒被 chromiumoxide
+  自己超时。
+
+• Explored
+  └ Read browser.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我会在 CDP lifecycle 里用 HandlerConfig 设置 request_timeout=300s。这比只包一层 Tokio timeout 更有效，因为超时源头就在 handler。
+
+• Explored
+  └ Search pub use .*HandlerConfig|struct HandlerConfig|HandlerConfig in lib.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• HandlerConfig 在 chromiumoxide::handler 下；我先确认它是 public，再打补丁。
+
+• Explored
+  └ Read lib.rs, mod.rs
+    Search pub mod handler|mod handler in lib.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在改 CDP 连接配置。
+
+• Edited core/src/cdp/lifecycle.rs (+8 -2)
+     8  };
+     9 -use chromiumoxide::Browser;
+     9 +use chromiumoxide::{handler::HandlerConfig, Browser};
+    10  use futures::StreamExt;
+       ⋮
+    17  const ATTEMPT_DELAY: Duration = Duration::from_millis(500);
+    18 +const CDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+    19
+       ⋮
+    83
+    83 -    let (browser, mut handler) = Browser::connect(&endpoint.browser_ws_url).await?;
+    84 +    let handler_config = HandlerConfig {
+    85 +        request_timeout: CDP_REQUEST_TIMEOUT,
+    86 +        ..HandlerConfig::default()
+    87 +    };
+    88 +    let (browser, mut handler) =
+    89 +        Browser::connect_with_config(&endpoint.browser_ws_url, handler_config).await?;
+    90
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• CDP request timeout 也改成 5 分钟了。现在格式化/编译，再停旧 daemon，继续验证。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译通过。先停旧 daemon，然后跑 8 条快速验证；如果抖音限流仍未恢复，这次会等更久而不是 30 秒失败。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 开始验证。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 30 秒后没有失败，说明 CDP 内部 30 秒超时已经被放大了。继续等页面/限流恢复。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ Error: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次不再 30 秒失败，而是约 90 秒失败。下一层是 runtime 的 CONNECT_TIMEOUT=90s，也需要跟首次打开一起拉到 5 分钟；我继续把这个连接等待预算改成 300
+  秒。
+
+• Explored
+  └ Search *search_videos in runs
+
+• Ran tail -120 ~/.socai/rust-daemon.log
+  └ daemon client error: Broken pipe (os error 32)
+    daemon client error: Broken pipe (os error 32)
+    … +22 lines (ctrl + t to view transcript)
+    2026-06-04T09:51:55.115986Z  WARN socai_core::cdp::snapshot: debug-snapshot: a11y for node 5 failed: uninteresting: uninteresting
+    2026-06-04T09:51:55.321212Z  WARN socai_core::cdp::snapshot: debug-snapshot: a11y for node 6 failed: uninteresting: uninteresting
+
+• Ran ps -axo pid,command | rg 'target/debug/socai|__daemon'
+  └ 50682 /Users/tonychong/socai/target/debug/socai __daemon
+    50830 /bin/zsh -c ps -axo pid,command | rg 'target/debug/socai|__daemon'
+    50833 rg target/debug/socai|__daemon
+
+• Explored
+  └ Search CONNECT_TIMEOUT|STARTUP_TIMEOUT|Request timed out|Duration::from_secs\(90\) in core
+
+• Context compacted
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我会先把还残留的 90 秒首开/连接等待改成 5 分钟，再重启 daemon 做一次小样本验证；如果抖音仍限流，就以编译和本地路径验证为准说明边界。
+
+• Explored
+  └ Search CONNECT_TIMEOUT|STARTUP_TIMEOUT|Request timed out|Duration::from_secs\(90\)|SITE_FIRST_OPEN_TIMEOUT|CDP_REQUEST_TIMEOUT|DY_OPEN_TIMEOUT in
+           core
+    Read lifecycle.rs, daemon.rs, engine.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在能看到两个 90 秒路径还没改：core 的 CDP 连接等待和 cli 的 daemon 启动等待。它们都会发生在首次打开站点页之前，所以一起提到 5 分钟。
+
+• Edited 2 files (+3 -3)
+  └ cli/src/daemon.rs (+1 -1)
+    41  const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
+    42 -const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+    42 +const STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
+    43
+
+  └ core/src/runtime/engine.rs (+2 -2)
+     17
+     18 -const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+     18 +const CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
+     19  const SITE_FIRST_OPEN_TIMEOUT_S: f64 = 300.0;
+        ⋮
+    137  /// Wait until the runtime reports a connected browser, kicking off a connect
+    138 -/// if it isn't already in flight. Times out after 90s.
+    138 +/// if it isn't already in flight. Times out after 5 minutes.
+    139  pub async fn wait_browser_connected(runtime: &SocaiRuntime) -> Result<()> {
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 超时改完了，我先跑格式化和编译检查；通过后会停掉旧 daemon，避免旧进程继续使用 90 秒配置。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译检查已通过。接下来我重启 daemon 并用小数量搜索验证首开路径，先不直接跑 30 条，避免在抖音限流恢复边缘继续放大请求量。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 旧 daemon 已停止。我现在跑一次 dy search_videos 小样本验证，重点看 5 分钟首开超时是否生效，以及抖音结果提取是否还走得通。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次已经超过之前容易触发的早期等待阶段，还在运行中，没有立刻被 90 秒路径截断。我继续等它返回，最多按新的 5 分钟边界观察。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 命令仍在等待页面或结果状态，说明新的长等待路径正在覆盖原先短超时。继续观察返回结果；如果最终是抖音侧限流，我会保留这个结论，不再反复撞站点。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ Error: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 小样本仍然返回了 Request timed out，而且时间点不像 daemon 启动等待。现在我会查 daemon 日志和代码里的其他请求超时来源，找出还没覆盖到的那条路径。
+
+• Explored
+  └ Read rust-daemon.log
+    Search agent_*search_videos in runs
+    Search Request timed out|timeout\(|Duration::from_secs\(|request_timeout|with_timeout|navigate_with_timeout in core
+
+• Ran git diff -- core/src/runtime/engine.rs cli/src/daemon.rs core/src/cdp/lifecycle.rs core/src/sites/dy/page.rs core/src/sites/dy/tools.rs
+  └ diff --git a/cli/src/daemon.rs b/cli/src/daemon.rs
+    index e43fd1f..c65c0d7 100644
+    … +89 lines (ctrl + t to view transcript)
+         runtime.connect_browser();
+         let deadline = Instant::now() + CONNECT_TIMEOUT;
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 日志没有新的细节，失败也没有进入 search_videos run 目录，说明它还卡在站点页创建/导航之前或期间。我继续看 CDP session 的 goto 包装和 daemon 请求发
+  送，定位这个通用错误是从哪层冒出来的。
+
+• Explored
+  └ Read session.rs, daemon.rs
+    Search struct HandlerConfig|request_timeout in registry
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• chromiumoxide 的全局 request timeout 已经设置到了 300 秒，但错误文案仍像它抛出的 CDP 请求超时。我会在本地再看一层 page 创建实现，确认新 tab/session
+  有没有继承这份配置。
+
+• Explored
+  └ Search create_page|PageSessionManager|new_page|connect_with_config|Browser::connect in cdp
+    Read session.rs, connection.rs, mod.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• create_page("about:blank") 也会发一次 CDP Target.createTarget 请求，虽然不是抖音页面本身，但它也在首次打开链路里。下一步我会把 page 创建也包进同一
+  个 5 分钟常量，并给错误加上下文，避免之后只看到裸的 Request timed out。
+
+• Explored
+  └ Read pages.rs, browser.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• PageSessionManager 目前直接 await browser.new_page，没有外层超时和上下文。虽然 handler 已改到 300 秒，我会在这里显式套 300 秒，这样首次建 tab 不会
+  再被默认等待卡死，而且失败信息能指出是建页阶段。
+
+• Explored
+  └ Search connect_with_config|pub async fn new_page|pub async fn new_page in browser.rs
+    Read browser.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我确认 Browser::connect_with_config 的配置会传进 handler；裸错误更可能来自 browser.new_page 或 page.goto 内部等待。为了让行为符合“首次打开网页最长
+  5 分钟”，我会把建 tab 和首个 goto 都明确用同一常量包住并附加阶段上下文。
+
+• Explored
+  └ Search Request timed out in chromiumoxide-0.7.0
+    Search timeout\( in handler
+    Search with_context|context\( in cdp
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我找到错误文案来自 chromiumoxide::CdpError::RequestTimeout。这不是 CLI 的外层超时，所以我会继续把内部 page 创建路径显式包住，并在错误上传时保留阶段
+  信息，便于下一次准确判断是不是抖音响应慢。
+
+• Explored
+  └ Read target.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 内部 target 初始化确实使用 config.request_timeout，所以 300 秒配置理论上应该生效。为了排除旧 daemon/旧 build，我还会增加上下文后重启再试一次；如果
+  仍是 80-90 秒，基本就是 Chrome/CDP 或抖音页面自身在当前状态下中断请求。
+
+• Explored
+  └ Read error.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我会做一处小的工程化修正：给创建页面这一段独立设置 PAGE_CREATE_TIMEOUT，并把 new_page 失败标成 create browser page。这不会改变业务逻辑，但能让后续
+  验证看到准确阶段。
+
+• Edited core/src/cdp/pages.rs (+8 -1)
+     1  use std::sync::Arc;
+     2 +use std::time::Duration;
+     3
+     4 +use anyhow::Context;
+     5  use chromiumoxide::cdp::browser_protocol::target::CloseTargetParams;
+       ⋮
+    10
+    11 +const PAGE_CREATE_TIMEOUT: Duration = Duration::from_secs(300);
+    12 +
+    13  /// Thin page factory over one CDP connection. Higher-level runtime code can
+       ⋮
+    28          let browser = self.browser().await?;
+    25 -        let page = browser.new_page(start_url).await?;
+    29 +        let page = tokio::time::timeout(PAGE_CREATE_TIMEOUT, browser.new_page(start_url))
+    30 +            .await
+    31 +            .context("create browser page timed out")?
+    32 +            .context("create browser page")?;
+    33          Ok(PageSession::new(page))
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 补充上下文后我再跑一次格式化和编译。通过后会重启 daemon，再用同一个小样本看新的错误是否定位到具体阶段。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 检查通过。我会再停掉当前 daemon，并重新跑一次 8 条搜索；这次如果失败，错误里应该能显示是建页还是导航阶段。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 验证命令还在运行，没有在启动阶段立即失败。我继续等它返回；如果它卡满 5 分钟，我会停止继续撞抖音并给出当前可证明结果。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在已经跑过 1 分钟，仍未被旧的短路径截断。继续观察到返回结果或明确超时为止。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已经超过 90 秒，说明刚才的 90 秒连接/daemon 等待路径已被延长。现在还在等页面/搜索结果本身返回。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ Error: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次确实跑过了 90 秒才失败，所以我已经验证到旧短超时不再生效。错误仍是裸 Request timed out，我会给首次 navigate 增加阶段上下文，并查一下是否还有
+  120 秒级别的 CDP/页面默认值。
+
+• Explored
+  └ Search agent_*search_videos in runs
+    Search from_secs\(120\)|120\.0|REQUEST_TIMEOUT|Request timed out|Timeout in core
+    Read engine.rs, pages.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这次没有出现 create browser page 上下文，基本可以排除建 tab；剩下就是 ensure_site_page 的首个 navigate(douyin.com)。我会给这一步加上下文，并确认它
+  用的是 300 秒超时常量。
+
+• Edited core/src/runtime/engine.rs (+3 -2)
+     11  use crate::cdp::{BrowserEvent, Cdp, PageSession, PageSessionManager, StatusPayload, TargetInfo};
+     12 -use anyhow::{anyhow, Result};
+     12 +use anyhow::{anyhow, Context, Result};
+     13  use tokio::sync::{broadcast, Mutex};
+        ⋮
+    102              page.navigate_with_timeout(start_url, SITE_FIRST_OPEN_TIMEOUT_S)
+    103 -                .await?;
+    103 +                .await
+    104 +                .with_context(|| format!("open initial site page {start_url}"))?;
+    105          }
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 首开导航现在会带 open initial site page <url> 上下文。接着跑格式化和编译，确认没有语法问题。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译通过。我再重启 daemon 做最后一次验证；这次如果抖音首开仍失败，错误会明确指向首次打开 https://www.douyin.com/。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 旧 daemon 已停。我跑最后一次 8 条搜索验证，观察是否能拿到结果；如果还是限流/页面首开失败，就不继续反复请求。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 验证还在运行。它需要等抖音页面的 CDP 导航状态返回，我继续等到有结果或失败信息。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ Error: open initial site page https://www.douyin.com/: Request timed out.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在定位清楚了：失败发生在首次打开 https://www.douyin.com/ 的 page.goto，而不是 daemon 或建页。chromiumoxide 的 goto 自己还有 30
+  秒导航默认值，我会改成显式传 300 秒导航参数。
+
+• Explored
+  └ Search pub async fn goto|NavigationParams|GotoParams|timeout in page.rs
+    Read frame.rs, cmd.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 源码确认导航请求的 FrameNavigationRequest 默认就是 30 秒。需要绕开 page.goto(url) 的默认转换，构造带 timeout 的 NavigateParams。
+
+• Explored
+  └ Read page.rs
+    Search struct NavigateParams|NavigateParams in chromiumoxide-0.7.0
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• NavigateParams 本身没有 timeout 字段，timeout 是 chromiumoxide handler 给导航请求附的内部值。这里不能只靠参数；需要改用 Page::execute 发原始导航命
+  令，避开 goto 的 30 秒导航等待，再用我们自己的 wait_for_load_state(..., 300) 等 DOM ready。
+
+• Explored
+  └ Read cdp.rs, cmd.rs
+    Search fn execute|pub async fn execute in page.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我找到关键点了：handler 只要识别到 Page.navigate 就按内部 30 秒导航等待处理。更稳的做法是通过原始 CDP command 发送 Page.navigate，让它变成普通
+  request，再由我们自己的 300 秒 DOM ready 轮询负责等待。
+
+• Explored
+  └ Read page.rs
+    Search is_navigation\(|FrameNavigationRequest|command_future in handler
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• command_future 会按 method 名识别导航，所以原始 command 也会被拦进 30 秒导航等待。更直接的修复是改 chromiumoxide handler 的 request_timeout 配置进
+  入 FrameNavigationRequest，这需要用 crate 暴露的类型不够；我先检查能否通过 patch dependency 覆盖，或是否已有低侵入 API。
+
+• Explored
+  └ Read mod.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 低侵入路径更清楚了：不用 Page.navigate，改为在当前页执行 window.location.assign(url)，然后继续用我们已有的 wait_for_load_state 轮询 300 秒。这样不
+  会触发 chromiumoxide 的 30 秒导航包装。
+
+• Explored
+  └ Read session.rs
+    Search evaluate_json|Runtime\.evaluate|EvaluateParams in session.rs
+    Read mod.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• PageSession 已经有 JS evaluate 和 DOM ready 轮询，所以我会把 navigate_with_timeout 改为 JS location 跳转加 300 秒等待。这样既避免 30 秒内部导航超
+  时，也复用现有 readiness 逻辑。
+
+• Edited core/src/cdp/session.rs (+3 -1)
+    117          let timeout = seconds(timeout_seconds);
+    118 -        tokio::time::timeout(timeout, self.page.goto(url)).await??;
+    118 +        let target = serde_json::to_string(url)?;
+    119 +        let script = format!("window.location.assign({target}); true");
+    120 +        tokio::time::timeout(timeout, self.evaluate_json_raw(&script)).await??;
+    121          self.wait_for_load_state("domcontentloaded", timeout_seconds)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我还要修一下等待条件：JS 跳转返回后旧页面可能 עדיין是 complete，不能马上误判加载完成。我会让等待逻辑同时要求 URL 已离开旧地址，或者目标本来就是当前
+  地址。
+
+• Edited core/src/cdp/session.rs (+36 -1)
+    117          let timeout = seconds(timeout_seconds);
+    118 +        let before_url = self
+    119 +            .evaluate_json_raw("location.href")
+    120 +            .await
+    121 +            .ok()
+    122 +            .and_then(|v| v.as_str().map(ToOwned::to_owned));
+    123          let target = serde_json::to_string(url)?;
+        ⋮
+    125          tokio::time::timeout(timeout, self.evaluate_json_raw(&script)).await??;
+    121 -        self.wait_for_load_state("domcontentloaded", timeout_seconds)
+    126 +        self.wait_for_navigation_ready(before_url.as_deref(), timeout_seconds)
+    127              .await?;
+        ⋮
+    130
+    131 +    async fn wait_for_navigation_ready(
+    132 +        &self,
+    133 +        before_url: Option<&str>,
+    134 +        timeout_seconds: f64,
+    135 +    ) -> anyhow::Result<bool> {
+    136 +        let deadline = Instant::now() + seconds(timeout_seconds);
+    137 +        while Instant::now() < deadline {
+    138 +            let state = self
+    139 +                .evaluate_json("return { url: location.href, readyState: document.readyState };")
+    140 +                .await
+    141 +                .ok();
+    142 +            let url = state
+    143 +                .as_ref()
+    144 +                .and_then(|v| v.get("url"))
+    145 +                .and_then(Value::as_str)
+    146 +                .unwrap_or_default();
+    147 +            let ready = state
+    148 +                .as_ref()
+    149 +                .and_then(|v| v.get("readyState"))
+    150 +                .and_then(Value::as_str)
+    151 +                .unwrap_or_default();
+    152 +            let left_previous = before_url.is_none_or(|before| before == url || before != url);
+    153 +            if left_previous && matches!(ready, "interactive" | "complete") {
+    154 +                return Ok(true);
+    155 +            }
+    156 +            tokio::time::sleep(Duration::from_millis(250)).await;
+    157 +        }
+    158 +        Ok(false)
+    159 +    }
+    160 +
+    161      pub async fn wait_for_load_state(
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我发现刚才的 URL 条件写成了恒真，马上修成明确逻辑：旧 URL 等于目标时允许立即 ready，否则必须先离开旧 URL。
+
+• Edited core/src/cdp/session.rs (+7 -3)
+    125          tokio::time::timeout(timeout, self.evaluate_json_raw(&script)).await??;
+    126 -        self.wait_for_navigation_ready(before_url.as_deref(), timeout_seconds)
+    126 +        self.wait_for_navigation_ready(before_url.as_deref(), url, timeout_seconds)
+    127              .await?;
+        ⋮
+    133          before_url: Option<&str>,
+    134 +        target_url: &str,
+    135          timeout_seconds: f64,
+        ⋮
+    152                  .unwrap_or_default();
+    152 -            let left_previous = before_url.is_none_or(|before| before == url || before != url);
+    153 -            if left_previous && matches!(ready, "interactive" | "complete") {
+    153 +            let navigation_started = match before_url {
+    154 +                Some(before) => before == target_url || before != url,
+    155 +                None => true,
+    156 +            };
+    157 +            if navigation_started && matches!(ready, "interactive" | "complete") {
+    158                  return Ok(true);
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 导航等待逻辑修正好了。现在跑格式化和编译；之后再重启 daemon 试一次抖音首开。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 格式化通过，编译检查继续跑。
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 编译通过。现在重启 daemon 并再验证一次；这次首开不会再走 chromiumoxide 的 30 秒 Page.navigate 默认超时。
+
+• Ran cargo run -q -p socai-cli -- stop
+  └ socai rust daemon stopped
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 验证命令还在运行，已经绕过了之前 30 秒裸超时点。继续等页面状态或结果返回。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已经超过 1 分钟，还在等抖音页面完成或搜索结果出现。这个阶段符合新的长等待策略，我继续观察。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 现在已经超过旧的 90 秒边界。验证还没返回，说明首开链路确实按长等待在走；我继续等最终结果。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已经约 2 分钟，仍在等待。抖音当前页面响应可能很慢或处于限流状态；我会等到接近 5 分钟边界，不再额外增加请求。
+
+• Waited for background terminal · cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 验证继续挂在首开/页面状态等待中，已经超过 2 分半。长超时生效，但站点侧还没给出可用状态。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/agent_20260610_232507_search_videos
+    {
+    … +176 lines (ctrl + t to view transcript)
+      ]
+    }
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 小样本验证成功，首开大约等了 3 分钟后返回了 8 条结果。现在我会跑一次目标规模 30 条，验证滚动累积逻辑；这会复用已打开的页面，压力比重新首开小。
+
+• Ran cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 30 --pretty
+  └ run_dir: /Users/tonychong/.socai/runs/agent_20260610_232518_search_videos
+    {
+    … +356 lines (ctrl + t to view transcript)
+      ]
+    }
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 30 条验证能正常返回，但当前页面只加载/暴露了 20 条，结果是 requested: 30, count: 20。我会看一下滚动采集逻辑，确认是不是停得太早；如果能低风险改进，
+  就把滚动等待加长一点。
+
+• Explored
+  └ Read page.rs, page_scripts.js, tools.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 当前滚动逻辑已经做了累积去重，但抖音搜索页这次只给到了 20 个唯一视频卡；继续滚动没有新增。为了避免过度请求，我不再强行循环。接下来我会补一条知识文
+  档说明：字段尽力提取，num_videos 是目标数量，实际数量取决于抖音页面当次加载。
+
+• Explored
+  └ Read knowledge.md
+
+• Ran git status --short
+  └  M cli/src/daemon.rs
+     M cli/src/main.rs
+    … +12 lines (ctrl + t to view transcript)
+     M core/src/sites/xhs/tools.rs
+    ?? core/src/sites/dy/
+
+• Ran git diff --stat
+  └  cli/src/daemon.rs                 |  7 ++++--
+     cli/src/main.rs                   |  5 +++--
+    … +11 lines (ctrl + t to view transcript)
+     core/src/sites/xhs/tools.rs       |  4 +++-
+     14 files changed, 93 insertions(+), 27 deletions(-)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我看到工作树里还有不少用户/既有改动，和本次抖音支持无关的我不会回滚。现在只补 dy 自己的 knowledge 文档。
+
+• Edited core/src/sites/dy/knowledge.md (+3 -1)
+    13  - Do not call Douyin APIs or navigate directly to internal result URLs after the initial site entry.
+    14 -
+    14 +- `num_videos` is a target count. Return fewer videos when the live Douyin page only loads or exposes fewer unique cards.
+    15 +- Fields are best-effort from visible cards: title, author, video id, link, cover URL, duration, publish time, and like count when present.
+    16 +- Douyin can throttle the first page load. The shared first-open path uses a 5 minute timeout and avoids chromiumoxide's default 30 second `P
+        age.navigate` wait by assigning `window.location`.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 文档补完了。我最后再做一次 cargo check，并整理本次改动范围和验证结果。
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 最终编译检查通过。我会再抓一下本次相关文件的状态，确认没有遗漏需要说明的地方。
+
+• Ran git status --short core/src/sites/dy core/src/sites/mod.rs core/src/sites/registry.rs core/src/runtime/engine.rs core/src/cdp/lifecycle.rs
+  │ core/src/cdp/pages.rs core/src/cdp/session.rs cli/src/daemon.rs
+  └  M cli/src/daemon.rs
+     M core/src/cdp/lifecycle.rs
+    … +4 lines (ctrl + t to view transcript)
+     M core/src/sites/registry.rs
+    ?? core/src/sites/dy/
+
+• Ran git diff -- core/src/sites/dy/knowledge.md core/src/sites/mod.rs core/src/sites/registry.rs core/src/runtime/engine.rs core/src/cdp/
+  │ lifecycle.rs core/src/cdp/pages.rs core/src/cdp/session.rs cli/src/daemon.rs
+  └ diff --git a/cli/src/daemon.rs b/cli/src/daemon.rs
+    index e43fd1f..c65c0d7 100644
+    … +221 lines (ctrl + t to view transcript)
+     pub fn all_sites() -> &'static [&'static SiteSpec] {
+         SITES
+
+• Ran ps -axo pid,command | rg 'socai __daemon|socai-cli -- dy search_videos|target/debug/socai'
+  └ 52770 /Users/tonychong/socai/target/debug/socai __daemon
+    53433 /bin/zsh -c ps -axo pid,command | rg 'socai __daemon|socai-cli -- dy search_videos|target/debug/socai'
+    53436 rg socai __daemon|socai-cli -- dy search_videos|target/debug/socai
+
+• Explored
+  └ Read session.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 我看到当前导航等待函数沿用了旧行为：等满后返回 Ok(false)，调用方没有检查。顺手把它改成真正报错，这样 5 分钟耗尽时不会误判首开成功。
+
+• Edited core/src/cdp/session.rs (+5 -1)
+    125          tokio::time::timeout(timeout, self.evaluate_json_raw(&script)).await??;
+    126 -        self.wait_for_navigation_ready(before_url.as_deref(), url, timeout_seconds)
+    126 +        let loaded = self
+    127 +            .wait_for_navigation_ready(before_url.as_deref(), url, timeout_seconds)
+    128              .await?;
+    129 +        if !loaded {
+    130 +            anyhow::bail!("navigation did not reach DOM ready within {timeout_seconds:.1}s");
+    131 +        }
+    132          Ok(())
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 这个失败语义修完了。我再跑最后一次格式化和编译。
+
+• Ran cargo fmt --all
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 格式化通过，最终编译检查继续。
+
+• Ran cargo check -q
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 最终编译检查通过。实现和验证都完成了；抖音 30 条请求这次返回 20 条唯一视频，属于页面当次只暴露到 20 条的情况。
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已继续完成抖音支持，并把首次打开网页相关超时延长到 5 分钟。
+
+  主要改动：
+
+  - 新增 dy site：search_videos QUERY --num-videos N，走抖音首页搜索框输入关键词，采集搜索结果视频卡片。
+  - 注册到站点系统：core/src/sites/mod.rs、core/src/sites/registry.rs。
+  - 新增抖音实现目录：core/src/sites/dy。
+  - 首次打开相关等待改为 5 分钟：
+      - daemon 启动等待 90s -> 300s
+      - CDP connect/request timeout 300s
+      - site first open 300s
+      - page create 300s
+
+  - 修掉 chromiumoxide 默认 Page.navigate 30 秒导航等待问题：navigate_with_timeout 现在用 window.location.assign(...) 触发跳转，再由我们自己的 DOM
+    ready 轮询按传入 timeout 等待。
+
+  验证：
+
+  - cargo fmt --all
+  - cargo check -q
+  - cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 8 --pretty 成功，返回 8 条。
+  - cargo run -q -p socai-cli -- dy search_videos "露营" --num-videos 30 --pretty 成功执行，本次抖音页面实际只暴露 20 条唯一视频，所以返回 requested:
+    30, count: 20。这已在 knowledge.md 里说明为 best-effort 行为。
+
+  本次没有提交 commit。工作树里还有一些原本存在/格式化影响到的非抖音文件改动，我没有回滚。
+
+─ Worked for 18m 39s ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› 帮我把当前代码除了core/src/sites/creation/SKILL.md，其余改动commit到一个名为dy3的分支上，然后给我留在site-creation分支上，留着skill.md改动
+
+
+• 我会按你的要求做成两段：先把 core/src/sites/creation/SKILL.md 单独暂存起来，再在 dy3 分支提交其余所有当前改动，最后切回 site-creation 并恢复
+  SKILL.md 的未提交改动。
+
+• Ran git branch --show-current
+  └ site-creation
+
+• Ran git branch --list dy3 site-creation
+  └ * site-creation
+
+• Ran git status --short
+  └  M cli/src/daemon.rs
+     M cli/src/main.rs
+    … +12 lines (ctrl + t to view transcript)
+     M core/src/sites/xhs/tools.rs
+    ?? core/src/sites/dy/
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 当前确实在 site-creation，且 dy3 还不存在。SKILL.md 现在同时有 staged/unstaged 状态，我会用带 index 的 stash 保存它，最后恢复回来。
+
+• Ran git stash push -m keep-skill-md-for-site-creation -- core/src/sites/creation/SKILL.md
+  └ Saved working directory and index state On site-creation: keep-skill-md-for-site-creation
+
+• Ran git status --short
+  └  M cli/src/daemon.rs
+     M cli/src/main.rs
+    … +11 lines (ctrl + t to view transcript)
+     M core/src/sites/xhs/tools.rs
+    ?? core/src/sites/dy/
+
+• Ran git stash list --format='%gd %s'
+  └ stash@{0} On site-creation: keep-skill-md-for-site-creation
+    stash@{1} WIP on dev/tian/add-xhs-search-filter: 91f95bb update description
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• SKILL.md 已单独收起来了，剩下就是要进 dy3 的改动。现在创建 dy3、暂存并提交。
+
+• Ran git switch -c dy3
+  └ Switched to a new branch 'dy3'
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已切到新分支 dy3。我会把除 SKILL.md 外的当前改动全部加入同一个提交。
+
+• Ran git add -A
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 改动已暂存。我先确认 SKILL.md 没被带进这次提交，再提交。
+
+• Ran git diff --cached --name-status
+  └ M    cli/src/daemon.rs
+    M    cli/src/main.rs
+    … +16 lines (ctrl + t to view transcript)
+    M    core/src/sites/registry.rs
+    M    core/src/sites/xhs/tools.rs
+
+• Ran git status --short core/src/sites/creation/SKILL.md
+  └ (no output)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 确认 core/src/sites/creation/SKILL.md 不在暂存区。现在创建提交。
+
+• Ran git commit -m "feat: add douyin search support"
+  └ [dy3 8e38033] feat: add douyin search support
+     20 files changed, 1018 insertions(+), 27 deletions(-)
+    … +4 lines (ctrl + t to view transcript)
+     create mode 100644 core/src/sites/dy/page_scripts.js
+     create mode 100644 core/src/sites/dy/tools.rs
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• dy3 上的提交已完成。接下来切回 site-creation，并把刚才保存的 SKILL.md 改动恢复到工作区/索引状态。
+
+• Ran git switch site-creation
+  └ Switched to branch 'site-creation'
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已回到 site-creation。现在恢复 SKILL.md 的 stash，并保留它的 staged/unstaged 状态。
+
+• Ran git stash pop --index stash@{0}
+  └ On branch site-creation
+    Changes to be committed:
+    … +7 lines (ctrl + t to view transcript)
+
+    Dropped stash@{0} (aea7053c338791792e7bb66b284195c689f69462)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• SKILL.md 已恢复到 site-creation，并且仍保持原来的 staged/unstaged 两段状态。我做最后状态确认。
+
+• Ran git branch --show-current
+  └ site-creation
+
+• Ran git status --short
+  └ MM core/src/sites/creation/SKILL.md
+
+• Ran git log -1 --oneline dy3
+  └ 8e38033 feat: add douyin search support
+
+• Ran git stash list --format='%gd %s'
+  └ stash@{0} WIP on dev/tian/add-xhs-search-filter: 91f95bb update description
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 已完成。
+
+  - 新建分支：dy3
+  - 提交：8e38033 feat: add douyin search support
+  - 已切回：site-creation
+  - 当前工作区只剩：MM core/src/sites/creation/SKILL.md
+
+  我也确认了用于临时保存 SKILL.md 的 stash 已 pop 掉，没有残留。
