@@ -1,7 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use chromiumoxide::Browser;
 use serde::Serialize;
 use tokio::sync::{broadcast, Mutex};
 
@@ -26,16 +25,14 @@ pub enum CdpState {
         attempt: u8,
     },
     Connected {
-        #[allow(dead_code)] // held to tie WS lifetime to the variant
-        browser: Arc<Browser>,
-        /// Abort handle for the spawned WS pump task. On user disconnect we
-        /// must abort it so the underlying WebSocket actually closes — Chrome
-        /// keeps the "controlled by automated software" banner up until every
-        /// CDP client disconnects.
-        handler_task: tokio::task::AbortHandle,
+        /// Passive remote-debugging endpoint. We intentionally do not keep a
+        /// browser-wide CDP websocket open here: status/tab inventory uses the
+        /// HTTP debugging endpoints so connecting socai does not attach to or
+        /// instrument unrelated user tabs.
         endpoint: Endpoint,
         browser_version: String,
         targets: HashMap<String, TargetInfo>,
+        monitor_task: tokio::task::AbortHandle,
     },
 }
 
@@ -105,6 +102,7 @@ pub enum BrowserEvent {
 pub struct Cdp {
     state: Arc<Mutex<CdpState>>,
     events: broadcast::Sender<BrowserEvent>,
+    owned_targets: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Cdp {
@@ -113,6 +111,7 @@ impl Cdp {
         Self {
             state: Arc::new(Mutex::new(CdpState::initial())),
             events,
+            owned_targets: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -129,6 +128,25 @@ impl Cdp {
             CdpState::Connected { targets, .. } => page_list_from(targets),
             _ => Vec::new(),
         }
+    }
+
+    pub(crate) async fn endpoint(&self) -> anyhow::Result<Endpoint> {
+        match &*self.state.lock().await {
+            CdpState::Connected { endpoint, .. } => Ok(endpoint.clone()),
+            _ => Err(anyhow::anyhow!("CDP not connected")),
+        }
+    }
+
+    pub(crate) async fn register_owned_target(&self, target_id: impl Into<String>) {
+        self.owned_targets.lock().await.insert(target_id.into());
+    }
+
+    pub(crate) async fn unregister_owned_target(&self, target_id: &str) {
+        self.owned_targets.lock().await.remove(target_id);
+    }
+
+    pub(crate) async fn take_owned_targets(&self) -> Vec<String> {
+        self.owned_targets.lock().await.drain().collect()
     }
 
     /// Block until status transitions to Connected, or surface Disconnected

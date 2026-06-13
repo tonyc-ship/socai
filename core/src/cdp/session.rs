@@ -2,49 +2,28 @@ use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use chromiumoxide::cdp::browser_protocol::accessibility::EnableParams;
-use chromiumoxide::cdp::browser_protocol::input::{
-    DispatchKeyEventParams, DispatchKeyEventType, InsertTextParams,
-};
-use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use chromiumoxide::layout::Point;
-use chromiumoxide::page::ScreenshotParams;
-use chromiumoxide::types::{Command, Method, MethodId};
-use chromiumoxide::Page;
-use serde::Serialize;
-use serde_json::Value;
+use anyhow::{anyhow, Context};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use serde_json::{json, Value};
 
-/// Raw `Accessibility.getFullAXTree` command whose response is left as
-/// untyped JSON. chromiumoxide's generated `GetFullAxTreeParams` deserializes
-/// the reply into its own `AxNode` structs, which lag the live Chrome AX
-/// schema and fail (the historical `uninteresting` serde error). We only want
-/// the JSON for the debug snapshot, so we skip the typed round-trip entirely.
-#[derive(Debug, Serialize)]
-struct GetFullAxTreeRaw {}
-
-impl Method for GetFullAxTreeRaw {
-    fn identifier(&self) -> MethodId {
-        "Accessibility.getFullAXTree".into()
-    }
-}
-
-impl Command for GetFullAxTreeRaw {
-    type Response = Value;
-}
-
+use super::connection::Cdp;
+use super::raw_client::RawCdpClient;
 use super::snapshot::SnapshotRecorder;
 
-/// A tab-scoped session. Wraps a chromiumoxide `Page` with the small set of
-/// primitives the agent layer needs: `evaluate_json` (the JS-extractor entry
-/// point), `navigate`, and `page_info`. Higher-level tools (selector waits,
-/// click-by-selector, fill, etc.) live in the sites module.
+/// A tab-scoped session. Unlike the previous chromiumoxide-backed
+/// implementation, this connects directly to one page target websocket and
+/// sends only the commands socai needs. It does not enable Network/Page/Runtime
+/// event domains globally and does not auto-attach to unrelated browser tabs.
 ///
 /// `recorder` is an optional debug hook: when set (via `--debug-snapshot`),
 /// every `evaluate_json` — the universal perception point for the tools —
 /// first lets the recorder capture a DOM/a11y/screenshot bundle if the page
 /// changed since the last capture. See [`SnapshotRecorder`].
 pub struct PageSession {
-    page: Page,
+    target_id: String,
+    owner: Cdp,
+    client: RawCdpClient,
     recorder: StdMutex<Option<Arc<SnapshotRecorder>>>,
 }
 
@@ -63,15 +42,22 @@ return {
 "#;
 
 impl PageSession {
-    pub(crate) fn new(page: Page) -> Self {
-        Self {
-            page,
+    pub(crate) async fn connect(
+        target_id: String,
+        ws_url: &str,
+        owner: Cdp,
+    ) -> anyhow::Result<Self> {
+        let client = RawCdpClient::connect(ws_url).await?;
+        Ok(Self {
+            target_id,
+            owner,
+            client,
             recorder: StdMutex::new(None),
-        }
+        })
     }
 
     pub fn target_id(&self) -> &str {
-        self.page.target_id().inner()
+        &self.target_id
     }
 
     /// Attach a debug snapshot recorder. Captures begin on the next
@@ -93,10 +79,6 @@ impl PageSession {
     }
 
     /// Let an attached recorder capture the page *before* an operation runs.
-    /// Called at the top of every action (`navigate`, `click`, `type_text`,
-    /// `press_key`) and every `evaluate_json`, so the snapshot timeline has a
-    /// frame for each tool operation, showing the state it acted on. Cheap and
-    /// a no-op when no recorder is attached; content-deduped downstream.
     async fn snapshot_before(&self) {
         if let Some(recorder) = self.recorder() {
             recorder.before_operation(self).await;
@@ -115,7 +97,12 @@ impl PageSession {
     ) -> anyhow::Result<()> {
         self.snapshot_before().await;
         let timeout = seconds(timeout_seconds);
-        tokio::time::timeout(timeout, self.page.goto(url)).await??;
+        tokio::time::timeout(
+            timeout,
+            self.client.execute("Page.navigate", json!({ "url": url })),
+        )
+        .await
+        .map_err(|_| anyhow!("Page.navigate timed out after {timeout_seconds}s"))??;
         self.wait_for_load_state("domcontentloaded", timeout_seconds)
             .await?;
         Ok(())
@@ -152,14 +139,6 @@ impl PageSession {
     /// `serde_json::Value`. The expression is wrapped in an IIFE when it
     /// contains a top-level `return`, so callers can pass function-body style
     /// snippets.
-    ///
-    /// This is the tools' universal perception point. Before running the
-    /// caller's snippet, it lets an attached [`SnapshotRecorder`] capture the
-    /// *current* DOM — i.e. the state the tool is about to read or act on —
-    /// gated on whether the page changed since the last capture. Capturing
-    /// *before* (not after) means the snapshot reflects exactly what the tool
-    /// saw going into this operation; any change the operation causes is
-    /// captured before the next one.
     pub async fn evaluate_json(&self, expression: &str) -> anyhow::Result<Value> {
         self.snapshot_before().await;
         self.evaluate_json_raw(expression).await
@@ -169,26 +148,41 @@ impl PageSession {
     /// so its own DOM reads don't recurse back into capture.
     pub(crate) async fn evaluate_json_raw(&self, expression: &str) -> anyhow::Result<Value> {
         let wrapped = wrap_expression(expression);
-        let result = self.page.evaluate(wrapped.as_str()).await?;
-        let value: Value = result.into_value()?;
-        Ok(value)
+        let resp = self
+            .client
+            .execute(
+                "Runtime.evaluate",
+                json!({
+                    "expression": wrapped,
+                    "awaitPromise": true,
+                    "returnByValue": true,
+                }),
+            )
+            .await?;
+        if let Some(exception) = resp.get("exceptionDetails") {
+            anyhow::bail!("javascript exception: {}", summarize_exception(exception));
+        }
+        let result = resp
+            .get("result")
+            .ok_or_else(|| anyhow!("Runtime.evaluate missing result"))?;
+        remote_object_value(result)
     }
 
-    /// Turn on the CDP Accessibility domain. Not required for `getFullAXTree`
-    /// to return data, but it keeps `AXNodeId`s stable across calls, which makes
-    /// the per-node a11y dumps comparable between snapshots. The recorder calls
-    /// it once. Idempotent; persists across navigations within the target.
+    /// Turn on the CDP Accessibility domain. The recorder calls it once when
+    /// debug snapshots are enabled. This is intentionally opt-in because AX tree
+    /// collection can be expensive on large pages.
     pub(crate) async fn enable_accessibility(&self) -> anyhow::Result<()> {
-        self.page.execute(EnableParams::default()).await?;
+        self.client
+            .execute("Accessibility.enable", json!({}))
+            .await?;
         Ok(())
     }
 
     /// Full accessibility tree for the document as JSON (`{ "nodes": [...] }`).
-    /// Used by the snapshot recorder; backed by CDP `Accessibility.getFullAXTree`
-    /// with an untyped response (see [`GetFullAxTreeRaw`]).
     pub(crate) async fn ax_tree_json(&self) -> anyhow::Result<Value> {
-        let resp = self.page.execute(GetFullAxTreeRaw {}).await?;
-        Ok(resp.result)
+        self.client
+            .execute("Accessibility.getFullAXTree", json!({}))
+            .await
     }
 
     pub async fn page_info(&self) -> anyhow::Result<Value> {
@@ -197,42 +191,70 @@ impl PageSession {
 
     pub async fn click(&self, x: f64, y: f64) -> anyhow::Result<()> {
         self.snapshot_before().await;
-        self.page.click(Point::new(x, y)).await?;
+        self.dispatch_mouse("mouseMoved", x, y, "none", 0).await?;
+        self.dispatch_mouse("mousePressed", x, y, "left", 1).await?;
+        self.dispatch_mouse("mouseReleased", x, y, "left", 1)
+            .await?;
         Ok(())
     }
 
     pub async fn mouse_move(&self, x: f64, y: f64) -> anyhow::Result<()> {
         self.snapshot_before().await;
-        self.page.move_mouse(Point::new(x, y)).await?;
+        self.dispatch_mouse("mouseMoved", x, y, "none", 0).await
+    }
+
+    async fn dispatch_mouse(
+        &self,
+        event_type: &str,
+        x: f64,
+        y: f64,
+        button: &str,
+        click_count: i64,
+    ) -> anyhow::Result<()> {
+        self.client
+            .execute(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": event_type,
+                    "x": x,
+                    "y": y,
+                    "button": button,
+                    "clickCount": click_count,
+                }),
+            )
+            .await?;
         Ok(())
     }
 
     pub async fn type_text(&self, text: &str) -> anyhow::Result<()> {
         self.snapshot_before().await;
-        self.page.execute(InsertTextParams::new(text)).await?;
+        self.client
+            .execute("Input.insertText", json!({ "text": text }))
+            .await?;
         Ok(())
     }
 
     pub async fn press_key(&self, key: &str) -> anyhow::Result<()> {
         self.snapshot_before().await;
         let (vk, code, text) = key_definition(key);
-        let base = |event_type| {
-            let mut builder = DispatchKeyEventParams::builder()
-                .r#type(event_type)
-                .key(key)
-                .code(code)
-                .windows_virtual_key_code(vk)
-                .native_virtual_key_code(vk);
-            if !text.is_empty() {
-                builder = builder.text(text);
+        let base = |event_type: &str| {
+            let mut params = json!({
+                "type": event_type,
+                "key": key,
+                "code": code,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            });
+            if event_type == "keyDown" && !text.is_empty() {
+                params["text"] = Value::String(text.to_string());
             }
-            builder.build().map_err(anyhow::Error::msg)
+            params
         };
-        self.page
-            .execute(base(DispatchKeyEventType::KeyDown)?)
+        self.client
+            .execute("Input.dispatchKeyEvent", base("keyDown"))
             .await?;
-        self.page
-            .execute(base(DispatchKeyEventType::KeyUp)?)
+        self.client
+            .execute("Input.dispatchKeyEvent", base("keyUp"))
             .await?;
         Ok(())
     }
@@ -247,12 +269,40 @@ impl PageSession {
     }
 
     pub async fn screenshot_png(&self, full: bool) -> anyhow::Result<Vec<u8>> {
-        let params = ScreenshotParams::builder()
-            .format(CaptureScreenshotFormat::Png)
-            .full_page(full)
-            .capture_beyond_viewport(full)
-            .build();
-        Ok(self.page.screenshot(params).await?)
+        let mut params = json!({
+            "format": "png",
+            "captureBeyondViewport": full,
+            "fromSurface": true,
+        });
+        if full {
+            let metrics = self
+                .client
+                .execute("Page.getLayoutMetrics", json!({}))
+                .await?;
+            let content = metrics
+                .get("contentSize")
+                .ok_or_else(|| anyhow!("Page.getLayoutMetrics missing contentSize"))?;
+            let width = content.get("width").and_then(Value::as_f64).unwrap_or(1.0);
+            let height = content.get("height").and_then(Value::as_f64).unwrap_or(1.0);
+            params["clip"] = json!({
+                "x": content.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+                "y": content.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+                "width": width.max(1.0),
+                "height": height.max(1.0),
+                "scale": 1.0,
+            });
+        }
+        let resp = self
+            .client
+            .execute("Page.captureScreenshot", params)
+            .await?;
+        let data = resp
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Page.captureScreenshot missing data"))?;
+        BASE64
+            .decode(data)
+            .context("failed to decode screenshot PNG")
     }
 
     pub async fn save_screenshot(&self, path: impl AsRef<Path>, full: bool) -> anyhow::Result<()> {
@@ -264,12 +314,42 @@ impl PageSession {
         Ok(())
     }
 
-    /// Close the underlying tab. Consumes the session — the chromiumoxide
-    /// page handle is dropped on success.
+    /// Close the underlying tab. Consumes the session.
     pub async fn close(self) -> anyhow::Result<()> {
-        self.page.close().await?;
+        // `Page.close` often closes the target websocket before Chrome sends a
+        // command response. Treat that as success; cancellation paths that need
+        // a stronger close use `Target.closeTarget` via the HTTP endpoint.
+        let target_id = self.target_id.clone();
+        let _ = self.client.execute("Page.close", json!({})).await;
+        self.owner.unregister_owned_target(&target_id).await;
         Ok(())
     }
+}
+
+fn remote_object_value(object: &Value) -> anyhow::Result<Value> {
+    if let Some(value) = object.get("value") {
+        return Ok(value.clone());
+    }
+    if object.get("subtype").and_then(Value::as_str) == Some("null") {
+        return Ok(Value::Null);
+    }
+    if object.get("type").and_then(Value::as_str) == Some("undefined") {
+        return Ok(Value::Null);
+    }
+    if let Some(unserializable) = object.get("unserializableValue").and_then(Value::as_str) {
+        return Ok(Value::String(unserializable.to_string()));
+    }
+    Ok(Value::Null)
+}
+
+fn summarize_exception(exception: &Value) -> String {
+    exception
+        .get("exception")
+        .and_then(|value| value.get("description").or_else(|| value.get("value")))
+        .and_then(Value::as_str)
+        .or_else(|| exception.get("text").and_then(Value::as_str))
+        .unwrap_or("unknown exception")
+        .to_string()
 }
 
 fn seconds(value: f64) -> Duration {
