@@ -5,6 +5,7 @@
 //! visible, note modal open, etc.). The caller is responsible for creating
 //! the page and closing it after `run_agent` returns.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, ToolResult};
@@ -140,6 +141,7 @@ pub async fn search_notes_command(
         SEARCH_NOTES_COMMAND,
         search_notes_input(query, filters, num_notes)?,
         debug_snapshot,
+        None,
     )
     .await
 }
@@ -152,12 +154,14 @@ pub async fn topic_scan_command(
     num_notes: Option<i64>,
     download_media: bool,
     debug_snapshot: bool,
+    run_dir: Option<PathBuf>,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
         topic_scan_input(query, tab_label, filters, num_notes, download_media)?,
         debug_snapshot,
+        run_dir,
     )
     .await
 }
@@ -172,6 +176,7 @@ pub async fn extract_note_command(
         EXTRACT_NOTE_COMMAND,
         extract_note_input(note_id)?,
         debug_snapshot,
+        None,
     )
     .await
 }
@@ -229,17 +234,20 @@ async fn run_xhs_tool_command(
     spec: XhsCommandSpec,
     input: Value,
     debug_snapshot: bool,
+    run_dir: Option<PathBuf>,
 ) -> anyhow::Result<Value> {
-    let (run_dir, ctx) = command_context(spec.command_name);
+    let (run_dir, ctx) = command_context(spec.command_name, run_dir)?;
+    let command_run = run_metadata(&ctx);
     // Persist the full command input up front (best-effort) so a run is
     // debuggable from its dir alone — including the exact args — even when the
     // tool errors out partway.
     let invocation = json!({
         "command": spec.command_name,
         "tool": spec.tool_name,
+        "run": command_run.clone(),
         "input": input.clone(),
     });
-    let _ = std::fs::create_dir_all(&ctx.run_dir);
+    std::fs::create_dir_all(&ctx.run_dir)?;
     if let Ok(bytes) = serde_json::to_vec_pretty(&invocation) {
         let _ = std::fs::write(ctx.run_dir.join("command_input.json"), bytes);
     }
@@ -254,10 +262,12 @@ async fn run_xhs_tool_command(
         Ok::<Value, anyhow::Error>(data)
     })
     .await?;
+    let run = data.get("run").cloned().unwrap_or(command_run);
 
     Ok(json!({
         "command": spec.command_name,
         "run_dir": run_dir,
+        "run": run,
         "input": invocation.get("input").cloned().unwrap_or(Value::Null),
         "data": data,
     }))
@@ -328,8 +338,11 @@ async fn call_xhs_tool(
     serde_json::from_str(text.trim()).or_else(|_| Ok(json!({ "raw_reply": text })))
 }
 
-fn command_context(label: &str) -> (String, ToolContext) {
-    let run_dir = make_run_dir(label);
+fn command_context(label: &str, run_dir: Option<PathBuf>) -> anyhow::Result<(String, ToolContext)> {
+    let run_dir = run_dir.unwrap_or_else(|| make_run_dir(label));
+    if run_dir.as_os_str().is_empty() {
+        anyhow::bail!("run_dir is empty");
+    }
     let run_id = run_dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -337,7 +350,21 @@ fn command_context(label: &str) -> (String, ToolContext) {
         .to_string();
     let ctx = ToolContext::new(run_id, run_dir.clone());
     ctx.enable_site("xhs");
-    (run_dir.display().to_string(), ctx)
+    Ok((path_to_string(&run_dir), ctx))
+}
+
+fn run_metadata(ctx: &ToolContext) -> Value {
+    json!({
+        "id": ctx.run_id.clone(),
+        "dir": path_to_string(&ctx.run_dir),
+        "media_dir": path_to_string(&ctx.run_dir.join("site_media")),
+        "artifacts_dir": path_to_string(&ctx.run_dir.join("artifacts")),
+        "snapshots_dir": path_to_string(&ctx.run_dir.join("snapshots")),
+    })
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
 fn trimmed_required(value: &str, label: &str) -> anyhow::Result<String> {
@@ -1315,9 +1342,10 @@ impl Tool for TopicScanTool {
         let mut selected_cards = serde_json::to_value(&selected)?;
         history_snapshot.annotate_cards(&mut selected_cards);
 
-        let payload = json!({
+        let mut payload = json!({
             "ok": search.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "query": query,
+            "run": run_metadata(ctx),
             "tab": tab_result,
             "filters": filter_result,
             "search": search,
@@ -1336,24 +1364,39 @@ impl Tool for TopicScanTool {
         });
 
         // Persist as artifact so it shows up in the run dir + working memory.
-        let _ = ctx.write_json_artifact(
-            &format!("xhs_topic_scan_{}", sanitize_for_filename(&query)),
-            &payload,
-            "artifacts",
-            "topic_scan",
-            "json",
-            &format!(
-                "Topic scan: {query} ({} notes)",
-                payload
-                    .get("notes")
-                    .and_then(Value::as_array)
-                    .map(Vec::len)
-                    .unwrap_or(0)
-            ),
-            json!({"site": "xhs", "category": "topic_scan"}),
-        );
+        record_topic_scan_artifact(ctx, &query, &mut payload);
 
         Ok(json_result(&payload))
+    }
+}
+
+fn record_topic_scan_artifact(ctx: &ToolContext, query: &str, payload: &mut Value) {
+    let label = format!("xhs_topic_scan_{}", sanitize_for_filename(query));
+    let summary = format!(
+        "Topic scan: {query} ({} notes)",
+        payload
+            .get("notes")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    );
+    let path = ctx.next_artifact_path(&label, ".json", "artifacts");
+    if let Some(run) = payload.get_mut("run").and_then(Value::as_object_mut) {
+        run.insert("topic_scan_artifact".into(), json!(path_to_string(&path)));
+    }
+    let Ok(rendered) = serde_json::to_string_pretty(payload) else {
+        return;
+    };
+    if std::fs::write(&path, rendered).is_ok() {
+        let _ = ctx.register_artifact(
+            &path,
+            &label,
+            "json",
+            &summary,
+            json!({"site": "xhs", "category": "topic_scan"}),
+            Some(payload),
+            "topic_scan",
+        );
     }
 }
 
@@ -1418,5 +1461,29 @@ mod tests {
 
         assert!(options.include_media);
         assert!(!options.download_media);
+    }
+
+    #[test]
+    fn command_context_uses_custom_run_dir() {
+        let run_dir = PathBuf::from("target/socai-topic-scan-run");
+        let (rendered, ctx) = command_context("topic_scan", Some(run_dir.clone())).unwrap();
+
+        assert_eq!(rendered, path_to_string(&run_dir));
+        assert_eq!(ctx.run_id, "socai-topic-scan-run");
+        let run = run_metadata(&ctx);
+        assert_eq!(run.get("dir"), Some(&json!(path_to_string(&run_dir))));
+        assert_eq!(
+            run.get("media_dir"),
+            Some(&json!(path_to_string(&run_dir.join("site_media"))))
+        );
+        assert_eq!(
+            run.get("artifacts_dir"),
+            Some(&json!(path_to_string(&run_dir.join("artifacts"))))
+        );
+    }
+
+    #[test]
+    fn command_context_rejects_empty_custom_run_dir() {
+        assert!(command_context("topic_scan", Some(PathBuf::new())).is_err());
     }
 }
