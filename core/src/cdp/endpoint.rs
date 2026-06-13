@@ -223,25 +223,16 @@ async fn endpoint_from_active_port(profile: &Path) -> Option<Endpoint> {
     let contents = fs::read_to_string(&marker).ok()?;
     let mut lines = contents.lines();
     let port: u16 = lines.next()?.trim().parse().ok()?;
-    let ws_path = lines.next().map(str::trim).unwrap_or("").to_string();
 
-    // Prefer richer info via HTTP /json/version. Fall back to constructing the
-    // ws URL ourselves if the HTTP endpoint refuses but DevToolsActivePort
-    // gave us the path.
+    // `DevToolsActivePort` can outlive the actual remote-debugging HTTP server
+    // after Chrome restarts. The old chromiumoxide path could connect directly
+    // to the browser websocket, but the scoped-CDP runtime needs the HTTP
+    // debugging API for passive tab inventory and owned-tab creation. Validate
+    // `/json/version` here and ignore stale markers instead of accepting a
+    // constructed websocket that later fails with `/json/list` 404s.
     let http_url = format!("http://127.0.0.1:{port}");
     let source = format!("active_port:{}", marker.display());
-    if let Ok(endpoint) = endpoint_from_http_url(&http_url, &source).await {
-        return Some(endpoint);
-    }
-    if ws_path.is_empty() {
-        return None;
-    }
-    Some(Endpoint {
-        source,
-        browser_ws_url: format!("ws://127.0.0.1:{port}{ws_path}"),
-        http_version_url: None,
-        version: None,
-    })
+    endpoint_from_http_url(&http_url, &source).await.ok()
 }
 
 fn chrome_profile_roots() -> Vec<PathBuf> {
