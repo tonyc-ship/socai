@@ -13,20 +13,22 @@ use tokio::sync::{mpsc, oneshot};
 const COMMAND_CHANNEL_CAPACITY: usize = 64;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Minimal, target-scoped CDP client.
+/// Minimal CDP websocket client.
 ///
-/// This intentionally avoids `chromiumoxide::Handler`: we connect directly to a
-/// single page target websocket (`/devtools/page/<id>`) and execute only the
+/// This intentionally avoids `chromiumoxide::Handler`: we send only explicit
 /// commands socai needs. Events are ignored, and no browser-wide target
-/// discovery/auto-attach/domain enabling is performed.
+/// discovery/auto-attach/domain enabling is performed. The same transport is
+/// used for direct page-target websockets and for a browser websocket with an
+/// explicit `sessionId` attached to one socai-owned target.
 #[derive(Clone)]
-pub(crate) struct RawCdpClient {
+pub struct RawCdpClient {
     tx: mpsc::Sender<CommandRequest>,
 }
 
 struct CommandRequest {
     method: String,
     params: Value,
+    session_id: Option<String>,
     resp: oneshot::Sender<std::result::Result<Value, String>>,
 }
 
@@ -59,28 +61,38 @@ impl RawCdpClient {
         };
         let (ws, _) = connect_async_with_config(ws_url, Some(config))
             .await
-            .with_context(|| format!("failed to connect page CDP websocket: {ws_url}"))?;
+            .with_context(|| format!("failed to connect CDP websocket: {ws_url}"))?;
         let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         tokio::spawn(run_connection(ws, rx));
         Ok(Self { tx })
     }
 
     pub async fn execute(&self, method: impl Into<String>, params: Value) -> Result<Value> {
+        self.execute_for_session(None, method, params).await
+    }
+
+    pub async fn execute_for_session(
+        &self,
+        session_id: Option<&str>,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value> {
         let method = method.into();
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
             .send(CommandRequest {
                 method: method.clone(),
                 params,
+                session_id: session_id.map(ToOwned::to_owned),
                 resp: resp_tx,
             })
             .await
-            .map_err(|_| anyhow!("CDP page session is closed"))?;
+            .map_err(|_| anyhow!("CDP session is closed"))?;
 
         let response = tokio::time::timeout(COMMAND_TIMEOUT, resp_rx)
             .await
             .map_err(|_| anyhow!("CDP command timed out: {method}"))?
-            .map_err(|_| anyhow!("CDP page session closed while waiting for: {method}"))?;
+            .map_err(|_| anyhow!("CDP session closed while waiting for: {method}"))?;
         response.map_err(|err| anyhow!("CDP command failed ({method}): {err}"))
     }
 }
@@ -105,11 +117,14 @@ async fn run_connection<S>(
                 };
                 let id = next_id;
                 next_id = next_id.wrapping_add(1).max(1);
-                let payload = serde_json::json!({
+                let mut payload = serde_json::json!({
                     "id": id,
                     "method": command.method,
                     "params": command.params,
                 });
+                if let Some(session_id) = command.session_id {
+                    payload["sessionId"] = Value::String(session_id);
+                }
                 let text = match serde_json::to_string(&payload) {
                     Ok(text) => text,
                     Err(err) => {

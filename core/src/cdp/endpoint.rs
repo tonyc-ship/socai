@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use super::raw_client::RawCdpClient;
 
 const INSPECT_URL: &str = "chrome://inspect/#remote-debugging";
 const DEFAULT_DEVTOOLS_PORTS: &[u16] = &[9222, 9223];
@@ -223,16 +226,67 @@ async fn endpoint_from_active_port(profile: &Path) -> Option<Endpoint> {
     let contents = fs::read_to_string(&marker).ok()?;
     let mut lines = contents.lines();
     let port: u16 = lines.next()?.trim().parse().ok()?;
+    let ws_path = lines.next().map(str::trim).unwrap_or("").to_string();
 
-    // `DevToolsActivePort` can outlive the actual remote-debugging HTTP server
-    // after Chrome restarts. The old chromiumoxide path could connect directly
-    // to the browser websocket, but the scoped-CDP runtime needs the HTTP
-    // debugging API for passive tab inventory and owned-tab creation. Validate
-    // `/json/version` here and ignore stale markers instead of accepting a
-    // constructed websocket that later fails with `/json/list` 404s.
+    // Prefer richer info via HTTP /json/version. If the HTTP debugging API is
+    // unavailable (some user Chrome launches expose only the websocket path),
+    // keep the browser websocket fallback. The scoped-CDP runtime can use that
+    // websocket with raw `Target.getTargets`/`Target.createTarget` without
+    // chromiumoxide's global discovery/auto-init behavior.
     let http_url = format!("http://127.0.0.1:{port}");
     let source = format!("active_port:{}", marker.display());
-    endpoint_from_http_url(&http_url, &source).await.ok()
+    if let Ok(endpoint) = endpoint_from_http_url(&http_url, &source).await {
+        return Some(endpoint);
+    }
+    if ws_path.is_empty() {
+        return None;
+    }
+    let browser_ws_url = format!("ws://127.0.0.1:{port}{ws_path}");
+    validate_browser_ws_endpoint(&browser_ws_url)
+        .await
+        .map(|version| Endpoint {
+            source,
+            browser_ws_url,
+            http_version_url: None,
+            version: Some(version),
+        })
+}
+
+async fn validate_browser_ws_endpoint(browser_ws_url: &str) -> Option<VersionInfo> {
+    let client = tokio::time::timeout(HTTP_TIMEOUT, RawCdpClient::connect(browser_ws_url))
+        .await
+        .ok()?
+        .ok()?;
+    let version = tokio::time::timeout(
+        HTTP_TIMEOUT,
+        client.execute("Browser.getVersion", json!({})),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    Some(version_info_from_browser_ws(browser_ws_url, &version))
+}
+
+fn version_info_from_browser_ws(browser_ws_url: &str, version: &Value) -> VersionInfo {
+    VersionInfo {
+        browser: version
+            .get("product")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        protocol_version: version
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        user_agent: version
+            .get("userAgent")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        v8_version: version
+            .get("jsVersion")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        web_socket_debugger_url: Some(browser_ws_url.to_string()),
+    }
 }
 
 fn chrome_profile_roots() -> Vec<PathBuf> {

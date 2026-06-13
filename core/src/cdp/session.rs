@@ -12,9 +12,9 @@ use super::raw_client::RawCdpClient;
 use super::snapshot::SnapshotRecorder;
 
 /// A tab-scoped session. Unlike the previous chromiumoxide-backed
-/// implementation, this connects directly to one page target websocket and
-/// sends only the commands socai needs. It does not enable Network/Page/Runtime
-/// event domains globally and does not auto-attach to unrelated browser tabs.
+/// implementation, this sends only the commands socai needs to one owned page
+/// target. It does not enable Network/Page/Runtime event domains globally and
+/// does not auto-attach to unrelated browser tabs.
 ///
 /// `recorder` is an optional debug hook: when set (via `--debug-snapshot`),
 /// every `evaluate_json` — the universal perception point for the tools —
@@ -24,6 +24,7 @@ pub struct PageSession {
     target_id: String,
     owner: Cdp,
     client: RawCdpClient,
+    session_id: Option<String>,
     recorder: StdMutex<Option<Arc<SnapshotRecorder>>>,
 }
 
@@ -52,8 +53,24 @@ impl PageSession {
             target_id,
             owner,
             client,
+            session_id: None,
             recorder: StdMutex::new(None),
         })
+    }
+
+    pub(crate) fn attached(
+        target_id: String,
+        client: RawCdpClient,
+        session_id: String,
+        owner: Cdp,
+    ) -> Self {
+        Self {
+            target_id,
+            owner,
+            client,
+            session_id: Some(session_id),
+            recorder: StdMutex::new(None),
+        }
     }
 
     pub fn target_id(&self) -> &str {
@@ -78,6 +95,12 @@ impl PageSession {
         self.recorder.lock().ok().and_then(|guard| guard.clone())
     }
 
+    async fn execute(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        self.client
+            .execute_for_session(self.session_id.as_deref(), method, params)
+            .await
+    }
+
     /// Let an attached recorder capture the page *before* an operation runs.
     async fn snapshot_before(&self) {
         if let Some(recorder) = self.recorder() {
@@ -99,7 +122,7 @@ impl PageSession {
         let timeout = seconds(timeout_seconds);
         tokio::time::timeout(
             timeout,
-            self.client.execute("Page.navigate", json!({ "url": url })),
+            self.execute("Page.navigate", json!({ "url": url })),
         )
         .await
         .map_err(|_| anyhow!("Page.navigate timed out after {timeout_seconds}s"))??;
@@ -149,7 +172,6 @@ impl PageSession {
     pub(crate) async fn evaluate_json_raw(&self, expression: &str) -> anyhow::Result<Value> {
         let wrapped = wrap_expression(expression);
         let resp = self
-            .client
             .execute(
                 "Runtime.evaluate",
                 json!({
@@ -172,17 +194,13 @@ impl PageSession {
     /// debug snapshots are enabled. This is intentionally opt-in because AX tree
     /// collection can be expensive on large pages.
     pub(crate) async fn enable_accessibility(&self) -> anyhow::Result<()> {
-        self.client
-            .execute("Accessibility.enable", json!({}))
-            .await?;
+        self.execute("Accessibility.enable", json!({})).await?;
         Ok(())
     }
 
     /// Full accessibility tree for the document as JSON (`{ "nodes": [...] }`).
     pub(crate) async fn ax_tree_json(&self) -> anyhow::Result<Value> {
-        self.client
-            .execute("Accessibility.getFullAXTree", json!({}))
-            .await
+        self.execute("Accessibility.getFullAXTree", json!({})).await
     }
 
     pub async fn page_info(&self) -> anyhow::Result<Value> {
@@ -211,25 +229,23 @@ impl PageSession {
         button: &str,
         click_count: i64,
     ) -> anyhow::Result<()> {
-        self.client
-            .execute(
-                "Input.dispatchMouseEvent",
-                json!({
-                    "type": event_type,
-                    "x": x,
-                    "y": y,
-                    "button": button,
-                    "clickCount": click_count,
-                }),
-            )
-            .await?;
+        self.execute(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": button,
+                "clickCount": click_count,
+            }),
+        )
+        .await?;
         Ok(())
     }
 
     pub async fn type_text(&self, text: &str) -> anyhow::Result<()> {
         self.snapshot_before().await;
-        self.client
-            .execute("Input.insertText", json!({ "text": text }))
+        self.execute("Input.insertText", json!({ "text": text }))
             .await?;
         Ok(())
     }
@@ -250,11 +266,9 @@ impl PageSession {
             }
             params
         };
-        self.client
-            .execute("Input.dispatchKeyEvent", base("keyDown"))
+        self.execute("Input.dispatchKeyEvent", base("keyDown"))
             .await?;
-        self.client
-            .execute("Input.dispatchKeyEvent", base("keyUp"))
+        self.execute("Input.dispatchKeyEvent", base("keyUp"))
             .await?;
         Ok(())
     }
@@ -275,10 +289,7 @@ impl PageSession {
             "fromSurface": true,
         });
         if full {
-            let metrics = self
-                .client
-                .execute("Page.getLayoutMetrics", json!({}))
-                .await?;
+            let metrics = self.execute("Page.getLayoutMetrics", json!({})).await?;
             let content = metrics
                 .get("contentSize")
                 .ok_or_else(|| anyhow!("Page.getLayoutMetrics missing contentSize"))?;
@@ -292,10 +303,7 @@ impl PageSession {
                 "scale": 1.0,
             });
         }
-        let resp = self
-            .client
-            .execute("Page.captureScreenshot", params)
-            .await?;
+        let resp = self.execute("Page.captureScreenshot", params).await?;
         let data = resp
             .get("data")
             .and_then(Value::as_str)
@@ -320,7 +328,7 @@ impl PageSession {
         // command response. Treat that as success; cancellation paths that need
         // a stronger close use `Target.closeTarget` via the HTTP endpoint.
         let target_id = self.target_id.clone();
-        let _ = self.client.execute("Page.close", json!({})).await;
+        let _ = self.execute("Page.close", json!({})).await;
         self.owner.unregister_owned_target(&target_id).await;
         Ok(())
     }

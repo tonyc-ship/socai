@@ -5,6 +5,7 @@ use serde::Serialize;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::cdp::endpoint::Endpoint;
+use crate::cdp::raw_client::RawCdpClient;
 
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
@@ -25,11 +26,12 @@ pub enum CdpState {
         attempt: u8,
     },
     Connected {
-        /// Passive remote-debugging endpoint. We intentionally do not keep a
-        /// browser-wide CDP websocket open here: status/tab inventory uses the
-        /// HTTP debugging endpoints so connecting socai does not attach to or
-        /// instrument unrelated user tabs.
+        /// Remote-debugging endpoint. When Chrome exposes the HTTP debugging
+        /// API, status/tab inventory uses that passive control plane. When it
+        /// only exposes the browser websocket, `browser_client` is used for raw
+        /// `Target.*` commands without chromiumoxide's global auto-init.
         endpoint: Endpoint,
+        browser_client: Option<RawCdpClient>,
         browser_version: String,
         targets: HashMap<String, TargetInfo>,
         monitor_task: tokio::task::AbortHandle,
@@ -134,6 +136,13 @@ impl Cdp {
         match &*self.state.lock().await {
             CdpState::Connected { endpoint, .. } => Ok(endpoint.clone()),
             _ => Err(anyhow::anyhow!("CDP not connected")),
+        }
+    }
+
+    pub(crate) async fn browser_client(&self) -> Option<RawCdpClient> {
+        match &*self.state.lock().await {
+            CdpState::Connected { browser_client, .. } => browser_client.clone(),
+            _ => None,
         }
     }
 
