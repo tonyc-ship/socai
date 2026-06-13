@@ -4,9 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-
-use super::raw_client::RawCdpClient;
 
 const INSPECT_URL: &str = "chrome://inspect/#remote-debugging";
 const DEFAULT_DEVTOOLS_PORTS: &[u16] = &[9222, 9223];
@@ -242,51 +239,12 @@ async fn endpoint_from_active_port(profile: &Path) -> Option<Endpoint> {
         return None;
     }
     let browser_ws_url = format!("ws://127.0.0.1:{port}{ws_path}");
-    validate_browser_ws_endpoint(&browser_ws_url)
-        .await
-        .map(|version| Endpoint {
-            source,
-            browser_ws_url,
-            http_version_url: None,
-            version: Some(version),
-        })
-}
-
-async fn validate_browser_ws_endpoint(browser_ws_url: &str) -> Option<VersionInfo> {
-    let client = tokio::time::timeout(HTTP_TIMEOUT, RawCdpClient::connect(browser_ws_url))
-        .await
-        .ok()?
-        .ok()?;
-    let version = tokio::time::timeout(
-        HTTP_TIMEOUT,
-        client.execute("Browser.getVersion", json!({})),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    Some(version_info_from_browser_ws(browser_ws_url, &version))
-}
-
-fn version_info_from_browser_ws(browser_ws_url: &str, version: &Value) -> VersionInfo {
-    VersionInfo {
-        browser: version
-            .get("product")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        protocol_version: version
-            .get("protocolVersion")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        user_agent: version
-            .get("userAgent")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        v8_version: version
-            .get("jsVersion")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        web_socket_debugger_url: Some(browser_ws_url.to_string()),
-    }
+    Some(Endpoint {
+        source,
+        browser_ws_url,
+        http_version_url: None,
+        version: None,
+    })
 }
 
 fn chrome_profile_roots() -> Vec<PathBuf> {
