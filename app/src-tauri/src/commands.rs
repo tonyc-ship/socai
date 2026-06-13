@@ -12,7 +12,7 @@ use socai_core::runtime::{
 };
 use socai_core::sites::xhs::{
     search_notes_command, topic_scan_command, xhs_agent_instructions, xhs_agent_tools,
-    XhsPageRuntime, XHS_HOME_URL,
+    TopicScanCommandOptions, XhsPageRuntime, XHS_HOME_URL,
 };
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
@@ -76,17 +76,21 @@ pub async fn tool_topic_scan(
     query: String,
     num_notes: Option<i64>,
     download_media: Option<bool>,
+    force_reread: Option<bool>,
 ) -> Result<Value, String> {
     require_connected(&runtime).await?;
     let page = temporary_page(&runtime, XHS_HOME_URL, "tool · topic_scan").await?;
     let result = topic_scan_command(
         page.clone(),
-        &query,
-        None,
-        None,
-        num_notes,
-        download_media.unwrap_or(false),
-        false,
+        TopicScanCommandOptions {
+            query: &query,
+            tab_label: None,
+            filters: None,
+            num_notes,
+            download_media: download_media.unwrap_or(false),
+            force_reread: force_reread.unwrap_or(false),
+            debug_snapshot: false,
+        },
     )
     .await;
     close_page(page).await;

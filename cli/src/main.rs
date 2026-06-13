@@ -58,6 +58,9 @@ enum Command {
         /// local_path fields in the JSON output.
         #[arg(long = "download-media")]
         download_media: bool,
+        /// Bypass already-analyzed history and re-open/re-analyze notes.
+        #[arg(long = "force-reread")]
+        force_reread: bool,
         #[arg(long)]
         pretty: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
@@ -143,6 +146,7 @@ async fn main() -> Result<()> {
             filter,
             num_notes,
             download_media,
+            force_reread,
             pretty,
             debug_snapshot,
         } => {
@@ -158,6 +162,9 @@ async fn main() -> Result<()> {
             }
             if download_media {
                 input["download_media"] = serde_json::json!(true);
+            }
+            if force_reread {
+                input["force_reread"] = serde_json::json!(true);
             }
 
             let result =

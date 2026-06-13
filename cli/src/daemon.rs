@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use socai_core::runtime::SocaiRuntime;
 use socai_core::sites::xhs::{
-    extract_note_command, search_notes_command, topic_scan_command, XHS_HOME_URL,
+    extract_note_command, search_notes_command, topic_scan_command, TopicScanCommandOptions,
+    XHS_HOME_URL,
 };
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -318,16 +319,23 @@ impl DaemonState {
                 .get("download_media")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let force_reread = args
+                .get("force_reread")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let debug_snapshot = debug_snapshot_flag(&args);
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
             topic_scan_command(
                 page,
-                &query,
-                tab_label,
-                filters,
-                num_notes,
-                download_media,
-                debug_snapshot,
+                TopicScanCommandOptions {
+                    query: &query,
+                    tab_label,
+                    filters,
+                    num_notes,
+                    download_media,
+                    force_reread,
+                    debug_snapshot,
+                },
             )
             .await
         }

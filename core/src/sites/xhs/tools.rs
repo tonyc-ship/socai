@@ -14,7 +14,9 @@ use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
 use crate::sites::xhs::page::XHS_SEARCH_FILTERS;
-use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime};
+use crate::sites::xhs::{
+    HistoryEntry, ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime,
+};
 
 /// Default number of notes `topic_scan` reads when the caller doesn't specify.
 const DEFAULT_NUM_NOTES: i64 = 10;
@@ -144,20 +146,32 @@ pub async fn search_notes_command(
     .await
 }
 
+pub struct TopicScanCommandOptions<'a> {
+    pub query: &'a str,
+    pub tab_label: Option<&'a str>,
+    pub filters: Option<&'a Value>,
+    pub num_notes: Option<i64>,
+    pub download_media: bool,
+    pub force_reread: bool,
+    pub debug_snapshot: bool,
+}
+
 pub async fn topic_scan_command(
     page: Arc<PageSession>,
-    query: &str,
-    tab_label: Option<&str>,
-    filters: Option<&Value>,
-    num_notes: Option<i64>,
-    download_media: bool,
-    debug_snapshot: bool,
+    options: TopicScanCommandOptions<'_>,
 ) -> anyhow::Result<Value> {
     run_xhs_tool_command(
         page,
         TOPIC_SCAN_COMMAND,
-        topic_scan_input(query, tab_label, filters, num_notes, download_media)?,
-        debug_snapshot,
+        topic_scan_input(
+            options.query,
+            options.tab_label,
+            options.filters,
+            options.num_notes,
+            options.download_media,
+            options.force_reread,
+        )?,
+        options.debug_snapshot,
     )
     .await
 }
@@ -200,6 +214,7 @@ fn topic_scan_input(
     filters: Option<&Value>,
     num_notes: Option<i64>,
     download_media: bool,
+    force_reread: bool,
 ) -> anyhow::Result<Value> {
     let mut input = json!({
         "query": trimmed_required(query, "query")?,
@@ -213,6 +228,9 @@ fn topic_scan_input(
     }
     if download_media {
         input["download_media"] = json!(true);
+    }
+    if force_reread {
+        input["force_reread"] = json!(true);
     }
     Ok(input)
 }
@@ -376,6 +394,31 @@ fn get_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 
 fn get_bool(input: &Value, key: &str, default: bool) -> bool {
     input.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn force_reread(input: &Value) -> bool {
+    get_bool(input, "force_reread", false)
+}
+
+fn history_summary(entry: &HistoryEntry) -> Value {
+    json!({
+        "note_id": &entry.note_id,
+        "title": &entry.title,
+        "author": &entry.author,
+        "url": &entry.url,
+        "level": &entry.level,
+        "include_media": entry.include_media,
+        "analysis_count": entry.analysis_count,
+        "first_seen_at": &entry.first_seen_at,
+        "last_seen_at": &entry.last_seen_at,
+    })
+}
+
+fn topic_scan_cached_entity_is_complete(entity: &Value, level: &str, comment_count: i64) -> bool {
+    if level == "deep" && comment_count > 0 {
+        return entity.get("top_comments").is_some();
+    }
+    true
 }
 
 fn read_note_options(input: &Value) -> ReadNoteOptions {
@@ -579,6 +622,11 @@ impl Tool for ReadNoteTool {
                 "level": { "type": "string", "enum": ["card", "lite", "deep"], "default": "lite" },
                 "include_media": { "type": "boolean", "default": false },
                 "download_media": { "type": "boolean", "default": false },
+                "force_reread": {
+                    "type": "boolean",
+                    "description": "Bypass already-analyzed history and reopen/re-extract the note.",
+                    "default": false
+                },
                 "max_images": { "type": "integer", "default": 12, "minimum": 1 },
                 "max_video_frames": { "type": "integer", "default": 4, "minimum": 1 }
             }
@@ -593,28 +641,44 @@ impl Tool for ReadNoteTool {
             .and_then(|i| usize::try_from(i).ok());
         let wait_seconds = get_f64(&input, "wait_seconds", 6.0);
         let options = read_note_options(&input);
+        let force_reread_requested = force_reread(&input);
 
         // Cross-run dedup: short-circuit when a previous run already covers
         // this note at the requested level + media. Only fires when note_id
         // is known up front. Downloads are intentionally never skipped because
         // the caller expects fresh local files in the current run dir.
         if let Some(id) = note_id.as_deref().filter(|s| !s.trim().is_empty()) {
-            if !options.download_media
+            if !force_reread_requested
+                && !options.download_media
                 && self
                     .history
                     .is_satisfied_by(id, &options.level, options.include_media)
             {
-                let entry = self.history.get(id).unwrap_or_default();
-                return Ok(json_result(&json!({
-                    "ok": true,
-                    "skipped": true,
-                    "reason": "already_analyzed",
-                    "note_id": id,
-                    "requested_level": options.level,
-                    "requested_include_media": options.include_media,
-                    "requested_download_media": options.download_media,
-                    "history": entry,
-                })));
+                if let Some(cached) =
+                    self.history
+                        .cached_result(id, &options.level, options.include_media)
+                {
+                    let entry = self.history.get(id).unwrap_or_default();
+                    return Ok(json_result(&json!({
+                        "ok": true,
+                        "status": "skipped",
+                        "skip_reason": "already_analyzed",
+                        "skipped": true,
+                        "reason": "already_analyzed",
+                        "note_id": id,
+                        "requested_level": &options.level,
+                        "requested_include_media": options.include_media,
+                        "requested_download_media": options.download_media,
+                        "cached_result_returned": true,
+                        "cache_key": cached.cache_key,
+                        "analyzed_at": cached.analyzed_at,
+                        "history": history_summary(&entry),
+                        "entity": cached.entity,
+                    })));
+                }
+                // Metadata-only history from older socai versions has no
+                // cached entity to return. Re-read once so future skips are
+                // evidence-complete without requiring a second flag.
             }
         }
 
@@ -1063,12 +1127,15 @@ impl Tool for TopicScanTool {
          collect up to `num_notes` cards in page order (scrolling only if the \
          first page is too small) → open each note and read its body + top \
          comments → return one compact bundle (search results + selected cards \
-         + note bodies + comments). Pass `download_media=true` to download \
-         note images/videos into the run dir and include local paths. Defaults \
-         to 10 notes; pass a larger `num_notes` to scan more (each note is \
-         opened, so latency scales with it). Prefer this for XHS topic \
-         research. Do not repeat the same scan unless the previous one was \
-         clearly insufficient."
+         + note bodies + comments). Already-analyzed notes return cached note \
+         entities when available; metadata-only old history is re-read once to \
+         populate the cache. Pass `force_reread=true` to bypass history and \
+         re-open notes. Pass `download_media=true` to download note \
+         images/videos into the run dir and include local paths. Defaults to 10 \
+         notes; pass a larger `num_notes` to scan more (each note is opened, \
+         so latency scales with it). Prefer this for XHS topic research. Do \
+         not repeat the same scan unless the previous one was clearly \
+         insufficient."
     }
 
     fn input_schema(&self) -> Value {
@@ -1091,6 +1158,11 @@ impl Tool for TopicScanTool {
                     "type": "boolean",
                     "description": "Download note images/videos into the command run_dir and include local_path fields in returned notes.",
                     "default": false
+                },
+                "force_reread": {
+                    "type": "boolean",
+                    "description": "Bypass already-analyzed history and reopen/re-analyze notes.",
+                    "default": false
                 }
             },
             "required": ["query"]
@@ -1112,6 +1184,7 @@ impl Tool for TopicScanTool {
         // genuinely expensive enrichment and not needed for topic research).
         let include_media = false;
         let download_media = get_bool(&input, "download_media", false);
+        let force_reread_requested = force_reread(&input);
 
         let media = media_for(
             ctx,
@@ -1148,7 +1221,7 @@ impl Tool for TopicScanTool {
         let level = "deep";
         let comment_count = TOPIC_SCAN_COMMENTS;
         let requested_media = include_media;
-        let can_use_cached_reads = !download_media;
+        let can_use_cached_reads = !download_media && !force_reread_requested;
         let want = num_notes.max(1) as usize;
 
         // Read top-to-bottom: pull cards from the results state (which only
@@ -1202,6 +1275,11 @@ impl Tool for TopicScanTool {
                 notes.push(json!({
                     "scan_level": level,
                     "source_position": card.position,
+                    "ok": true,
+                    "status": "skipped",
+                    "skip_reason": "already_processed",
+                    "note_id": &card.note_id,
+                    "cached_result_returned": false,
                     "skipped": {"reason": "already_processed"},
                     "entity": &card,
                 }));
@@ -1213,15 +1291,43 @@ impl Tool for TopicScanTool {
                     .history
                     .is_satisfied_by(&card.note_id, level, requested_media)
             {
-                let entry = self.history.get(&card.note_id).unwrap_or_default();
-                notes.push(json!({
-                    "scan_level": level,
-                    "source_position": card.position,
-                    "skipped": {"reason": "already_analyzed", "history": entry},
-                    "entity": &card,
-                }));
-                ctx.mark_processed_note(&card.note_id, level, requested_media);
-                continue;
+                let cached = self
+                    .history
+                    .cached_result(&card.note_id, level, requested_media)
+                    .filter(|cached| {
+                        topic_scan_cached_entity_is_complete(&cached.entity, level, comment_count)
+                    });
+                if let Some(cached) = cached {
+                    let history_entry = self.history.get(&card.note_id).unwrap_or_default();
+                    let history = history_summary(&history_entry);
+                    let cache_key = cached.cache_key;
+                    let analyzed_at = cached.analyzed_at;
+                    notes.push(json!({
+                        "scan_level": level,
+                        "source_position": card.position,
+                        "ok": true,
+                        "status": "skipped",
+                        "skip_reason": "already_analyzed",
+                        "note_id": &card.note_id,
+                        "cached_result_returned": true,
+                        "cache_key": &cache_key,
+                        "analyzed_at": &analyzed_at,
+                        "history": history.clone(),
+                        "skipped": {
+                            "reason": "already_analyzed",
+                            "history": history,
+                            "cached_result_returned": true,
+                            "cache_key": cache_key,
+                            "analyzed_at": analyzed_at,
+                        },
+                        "entity": cached.entity,
+                    }));
+                    ctx.mark_processed_note(&card.note_id, level, requested_media);
+                    continue;
+                }
+                // Metadata-only history (or deep topic-scan cache without
+                // comments) cannot satisfy downstream evidence needs. Re-read
+                // once so the returned note and future cache are deep.
             }
             let read_result = xhs
                 .read_note_with_options(
@@ -1329,6 +1435,7 @@ impl Tool for TopicScanTool {
                 "comments_per_note": TOPIC_SCAN_COMMENTS,
                 "include_media": include_media,
                 "download_media": download_media,
+                "force_reread": force_reread_requested,
             },
             "timing": {
                 "media": media_timing,
@@ -1418,5 +1525,39 @@ mod tests {
 
         assert!(options.include_media);
         assert!(!options.download_media);
+    }
+
+    #[test]
+    fn force_reread_uses_single_flag() {
+        assert!(force_reread(&json!({"force_reread": true})));
+        assert!(!force_reread(&json!({"no_cache": true})));
+    }
+
+    #[test]
+    fn topic_scan_input_includes_only_force_reread_cache_flag() {
+        let input = topic_scan_input("攀岩", None, None, Some(2), false, true).unwrap();
+
+        assert_eq!(input["force_reread"], json!(true));
+        assert!(input.get("include_cached_results").is_none());
+        assert!(input.get("no_cache").is_none());
+    }
+
+    #[test]
+    fn topic_scan_cached_entity_requires_comments_for_deep_cache() {
+        assert!(topic_scan_cached_entity_is_complete(
+            &json!({"top_comments": []}),
+            "deep",
+            12,
+        ));
+        assert!(!topic_scan_cached_entity_is_complete(
+            &json!({"content": "cached without comments"}),
+            "deep",
+            12,
+        ));
+        assert!(topic_scan_cached_entity_is_complete(
+            &json!({"content": "lite cache"}),
+            "lite",
+            12,
+        ));
     }
 }

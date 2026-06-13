@@ -121,10 +121,14 @@ Video fields: `url`, `resolved_url`, `poster_url`, optional `transcript`,
 - Cards carry `already_analyzed` / `history_level` / `history_include_media`
   flags when a prior run already read them. `read_note` and `topic_scan`
   short-circuit notes already covered at the requested level and media
-  setting — the returned payload has `skipped: true` plus the prior
-  `history` entry. To deepen prior analysis, request a higher `level` (e.g.
-  `deep` after a `lite`) or set `include_media: true`. Media downloads are not
-  cache-skipped because fresh local files are expected in the current run dir.
+  setting. Skipped payloads include `status: "skipped"`, `skip_reason`,
+  `cached_result_returned`, `cache_key`, `analyzed_at`, a summary of the prior
+  `history` entry, and the cached note entity in `entity` when available. If
+  metadata-only history has no cached entity yet, the note is re-read and the
+  cache is populated. Use `force_reread` to bypass history and re-analyze. To
+  deepen prior analysis, request a higher `level` (e.g. `deep` after a `lite`)
+  or set `include_media: true`. Media downloads are not cache-skipped because
+  fresh local files are expected in the current run dir.
 - Keep DOM text, comment evidence, image OCR/vision, and video transcript/frame
   evidence labeled separately in final answers.
 - If a read returns a stale-note warning or note-id mismatch, close the current
