@@ -319,6 +319,7 @@ impl DaemonState {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let debug_snapshot = debug_snapshot_flag(&args);
+            let output_dir = output_dir_arg(&args)?;
             let page = self.runtime.ensure_site_page("xhs", XHS_HOME_URL).await?;
             topic_scan_command(
                 page,
@@ -328,6 +329,7 @@ impl DaemonState {
                 num_notes,
                 download_media,
                 debug_snapshot,
+                output_dir,
             )
             .await
         }
@@ -609,6 +611,20 @@ mod tests {
     }
 
     #[test]
+    fn output_dir_arg_accepts_output_dir() {
+        assert_eq!(
+            output_dir_arg(&json!({ "output_dir": "/tmp/socai-output" })).unwrap(),
+            Some(PathBuf::from("/tmp/socai-output"))
+        );
+        assert_eq!(output_dir_arg(&json!({})).unwrap(), None);
+    }
+
+    #[test]
+    fn output_dir_arg_rejects_run_dir_key() {
+        assert!(output_dir_arg(&json!({ "run_dir": "/tmp/socai-output" })).is_err());
+    }
+
+    #[test]
     fn result_metrics_extracts_safe_counts() {
         let metrics = result_metrics(&json!({
             "run_dir": "/tmp/socai-run",
@@ -823,6 +839,25 @@ fn debug_snapshot_flag(args: &Value) -> bool {
     args.get("debug_snapshot")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn output_dir_arg(args: &Value) -> Result<Option<PathBuf>> {
+    if args.get("run_dir").is_some() {
+        anyhow::bail!("run_dir is not supported; use output_dir");
+    }
+    optional_path_arg(args, "output_dir")
+}
+
+fn optional_path_arg(args: &Value, key: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("{key} must be a non-empty string"))?;
+    Ok(Some(PathBuf::from(value)))
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String> {

@@ -87,6 +87,7 @@ pub async fn tool_topic_scan(
         num_notes,
         download_media.unwrap_or(false),
         false,
+        None,
     )
     .await;
     close_page(page).await;

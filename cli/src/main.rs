@@ -6,6 +6,7 @@ mod version;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::Value;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "socai")]
@@ -58,8 +59,16 @@ enum Command {
         /// local_path fields in the JSON output.
         #[arg(long = "download-media")]
         download_media: bool,
+        /// Write command artifacts (including downloaded media) into this run directory.
+        /// Relative paths are resolved against the caller's current directory before
+        /// the request is sent to the daemon.
+        #[arg(long = "output-dir", value_name = "PATH")]
+        output_dir: Option<PathBuf>,
         #[arg(long)]
         pretty: bool,
+        /// Accepted for compatibility; tool commands already print JSON by default.
+        #[arg(long, hide = true)]
+        json: bool,
         /// Record DOM + a11y tree + screenshot bundles to <run_dir>/snapshots/
         /// at every page change between tool operations.
         #[arg(long = "debug-snapshot")]
@@ -143,7 +152,9 @@ async fn main() -> Result<()> {
             filter,
             num_notes,
             download_media,
+            output_dir,
             pretty,
+            json: _,
             debug_snapshot,
         } => {
             let mut input = serde_json::json!({ "query": query, "debug_snapshot": debug_snapshot });
@@ -158,6 +169,13 @@ async fn main() -> Result<()> {
             }
             if download_media {
                 input["download_media"] = serde_json::json!(true);
+            }
+            if let Some(output_dir) = output_dir {
+                input["output_dir"] = Value::String(
+                    resolve_output_dir(output_dir)?
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
 
             let result =
@@ -192,6 +210,17 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_output_dir(path: PathBuf) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("--output-dir must not be empty");
+    }
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
 }
 
 /// Parse repeated `--filter group=option` args into a `{group: option}` object.
