@@ -54,8 +54,8 @@ enum Command {
         /// holds fewer.
         #[arg(long = "num-notes")]
         num_notes: Option<i64>,
-        /// Download note images/videos into the command run_dir, include
-        /// local_path fields, and emit media_manifest JSON.
+        /// Download media, add local_path fields, emit media_manifest /
+        /// media_manifest_path, and write <run_dir>/media_manifest.json.
         #[arg(long = "download-media")]
         download_media: bool,
         #[arg(long)]
