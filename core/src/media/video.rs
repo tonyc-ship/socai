@@ -16,7 +16,8 @@ impl MediaProcessor {
     /// Download the playable video (and poster, when present) to the run's
     /// media directory without transcription, frame extraction, OCR, or vision.
     /// The returned video object preserves the input shape and adds
-    /// `local_path` / `poster_local_path` where downloads succeed.
+    /// `local_path` / `poster_local_path` where downloads succeed. Posters are
+    /// saved at the stable note-local path `site_media/<note>/post.jpg`.
     pub async fn download_video(
         &self,
         video: &Value,
@@ -43,12 +44,7 @@ impl MediaProcessor {
             .to_string();
         if !poster_url.is_empty() {
             match self
-                .download_file(
-                    &poster_url,
-                    referer,
-                    label,
-                    &url_suffix(&poster_url, ".jpg"),
-                )
+                .download_named_file(&poster_url, referer, label, "post.jpg")
                 .await
             {
                 Ok(path) => insert_string(&mut result, "poster_local_path", path.to_string_lossy()),
@@ -153,7 +149,7 @@ impl MediaProcessor {
     ) {
         match self.download_bytes(poster_url, referer).await {
             Ok(poster) if !poster.is_empty() => {
-                match self.save_bytes(&poster, label, &url_suffix(poster_url, ".jpg")) {
+                match self.save_named_bytes(&poster, label, "post.jpg") {
                     Ok(path) => insert_string(result, "poster_local_path", path.to_string_lossy()),
                     Err(err) => insert_string(result, "poster_save_error", format!("{err:#}")),
                 }

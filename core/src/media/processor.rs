@@ -6,7 +6,9 @@ use crate::agent::Backend as LlmProvider;
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::media::common::{ensure_dir, find_in_path, save_bytes, MediaConfig, USER_AGENT};
+use crate::media::common::{
+    ensure_dir, find_in_path, save_bytes, save_named_bytes, MediaConfig, USER_AGENT,
+};
 use crate::media::timing::TimingRecord;
 
 #[derive(Clone)]
@@ -91,6 +93,10 @@ impl MediaProcessor {
         save_bytes(&self.config.base_dir, payload, label, suffix)
     }
 
+    pub fn save_named_bytes(&self, payload: &[u8], label: &str, filename: &str) -> Result<PathBuf> {
+        save_named_bytes(&self.config.base_dir, payload, label, filename)
+    }
+
     pub async fn download_file(
         &self,
         url: &str,
@@ -100,6 +106,17 @@ impl MediaProcessor {
     ) -> Result<PathBuf> {
         let payload = self.download_bytes(url, referer).await?;
         self.save_bytes(&payload, label, suffix)
+    }
+
+    pub async fn download_named_file(
+        &self,
+        url: &str,
+        referer: &str,
+        label: &str,
+        filename: &str,
+    ) -> Result<PathBuf> {
+        let payload = self.download_bytes(url, referer).await?;
+        self.save_named_bytes(&payload, label, filename)
     }
 
     pub async fn download_file_with_timeout(

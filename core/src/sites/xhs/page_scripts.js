@@ -231,7 +231,7 @@ const SocaiXhsPageScripts = (() => {
           author_id: card.user?.userId || card.user?.id || '',
           author_url: card.user?.userId ? `https://www.xiaohongshu.com/user/profile/${card.user.userId}` : '',
           likes: String(card.interactInfo?.likedCount || card.interactInfo?.likes || ''),
-          cover_url: card.cover?.urlDefault || card.cover?.urlPre || '',
+          cover_url: cleanImageUrl(card.cover?.urlDefault || card.cover?.urlPre || ''),
           type: card.type || '',
           position: i,
           xsec_token: token,
