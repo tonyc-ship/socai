@@ -31,6 +31,20 @@ pub struct VersionInfo {
     pub web_socket_debugger_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DebugTarget {
+    #[serde(rename = "id", default)]
+    pub target_id: String,
+    #[serde(rename = "type", default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(rename = "webSocketDebuggerUrl", default)]
+    pub web_socket_debugger_url: Option<String>,
+}
+
 /// Resolve only explicitly supplied endpoints (args + env vars). Returns None
 /// when nothing explicit was set; the caller decides whether to fall back to
 /// profile-scan discovery.
@@ -103,6 +117,68 @@ pub async fn wait_for_existing_chrome_endpoint(
     }
 }
 
+pub async fn list_debug_targets(endpoint: &Endpoint) -> anyhow::Result<Vec<DebugTarget>> {
+    let url = endpoint_url(endpoint, "json/list")?;
+    get_json(url.as_str()).await
+}
+
+pub async fn create_debug_page(
+    endpoint: &Endpoint,
+    start_url: &str,
+) -> anyhow::Result<DebugTarget> {
+    let mut url = endpoint_url(endpoint, "json/new")?;
+    let start_url = start_url.trim();
+    if !start_url.is_empty() {
+        url.set_query(Some(start_url));
+    }
+    let resp = debug_http_client()?
+        .put(url)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(resp.json().await?)
+}
+
+pub async fn close_debug_target(endpoint: &Endpoint, target_id: &str) -> anyhow::Result<bool> {
+    let target_id = target_id.trim();
+    if target_id.is_empty() {
+        return Ok(false);
+    }
+    let url = endpoint_url(endpoint, &format!("json/close/{target_id}"))?;
+    debug_http_client()?
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(true)
+}
+
+pub fn http_base_url(endpoint: &Endpoint) -> anyhow::Result<String> {
+    if let Some(version_url) = endpoint.http_version_url.as_deref() {
+        let mut url = reqwest::Url::parse(version_url)?;
+        url.set_path("");
+        url.set_query(None);
+        url.set_fragment(None);
+        return Ok(url.as_str().trim_end_matches('/').to_string());
+    }
+
+    let mut url = reqwest::Url::parse(&endpoint.browser_ws_url)?;
+    match url.scheme() {
+        "ws" => url
+            .set_scheme("http")
+            .map_err(|_| anyhow::anyhow!("failed to convert ws endpoint to http"))?,
+        "wss" => url
+            .set_scheme("https")
+            .map_err(|_| anyhow::anyhow!("failed to convert wss endpoint to https"))?,
+        "http" | "https" => {}
+        scheme => anyhow::bail!("unsupported CDP endpoint scheme: {scheme}"),
+    }
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 /// Open the chrome://inspect remote-debugging page in the user's default
 /// Chrome. Best-effort; failures are swallowed so first-run UX still degrades
 /// gracefully to a printed instruction.
@@ -149,9 +225,11 @@ async fn endpoint_from_active_port(profile: &Path) -> Option<Endpoint> {
     let port: u16 = lines.next()?.trim().parse().ok()?;
     let ws_path = lines.next().map(str::trim).unwrap_or("").to_string();
 
-    // Prefer richer info via HTTP /json/version. Fall back to constructing the
-    // ws URL ourselves if the HTTP endpoint refuses but DevToolsActivePort
-    // gave us the path.
+    // Prefer richer info via HTTP /json/version. If the HTTP debugging API is
+    // unavailable (some user Chrome launches expose only the websocket path),
+    // keep the browser websocket fallback. The scoped-CDP runtime can use that
+    // websocket with raw `Target.getTargets`/`Target.createTarget` without
+    // chromiumoxide's global discovery/auto-init behavior.
     let http_url = format!("http://127.0.0.1:{port}");
     let source = format!("active_port:{}", marker.display());
     if let Ok(endpoint) = endpoint_from_http_url(&http_url, &source).await {
@@ -160,9 +238,10 @@ async fn endpoint_from_active_port(profile: &Path) -> Option<Endpoint> {
     if ws_path.is_empty() {
         return None;
     }
+    let browser_ws_url = format!("ws://127.0.0.1:{port}{ws_path}");
     Some(Endpoint {
         source,
-        browser_ws_url: format!("ws://127.0.0.1:{port}{ws_path}"),
+        browser_ws_url,
         http_version_url: None,
         version: None,
     })
@@ -236,13 +315,30 @@ fn shellexpand(s: &str) -> String {
     s.to_string()
 }
 
+fn endpoint_url(endpoint: &Endpoint, path: &str) -> anyhow::Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&http_base_url(endpoint)?)?;
+    url.set_path(path.trim_start_matches('/'));
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
 async fn get_json<T: for<'de> serde::Deserialize<'de>>(url: &str) -> anyhow::Result<T> {
-    let resp = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()?
+    let resp = debug_http_client()?
         .get(url)
         .send()
         .await?
         .error_for_status()?;
     Ok(resp.json().await?)
+}
+
+fn debug_http_client() -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        // Chrome's remote-debugging HTTP API is always a local control plane
+        // endpoint (`127.0.0.1:<port>`). Do not honor HTTP(S)_PROXY / ALL_PROXY
+        // here: proxy tools such as Clash can otherwise intercept `/json/list`
+        // and return 502 even though Chrome is healthy.
+        .no_proxy()
+        .timeout(HTTP_TIMEOUT)
+        .build()?)
 }
