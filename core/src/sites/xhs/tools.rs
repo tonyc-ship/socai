@@ -388,6 +388,10 @@ fn read_note_options(input: &Value) -> ReadNoteOptions {
         download_media: get_bool(input, "download_media", false),
         max_images: get_i64(input, "max_images", 12).max(1) as usize,
         max_video_frames: get_i64(input, "max_video_frames", 4).max(1) as usize,
+        poster_url_fallback: get_str(input, "poster_url_fallback")
+            .unwrap_or("")
+            .to_string(),
+        note_id_fallback: get_str(input, "note_id_fallback").unwrap_or("").to_string(),
     }
 }
 
@@ -1241,6 +1245,8 @@ impl Tool for TopicScanTool {
                         // enrichment-oriented default.
                         max_images: if download_media { 100 } else { 12 },
                         max_video_frames: 4,
+                        poster_url_fallback: card.cover_url.clone(),
+                        note_id_fallback: card.note_id.clone(),
                     },
                 )
                 .await;

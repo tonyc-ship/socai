@@ -81,6 +81,20 @@ pub(crate) fn save_bytes(
     Ok(path)
 }
 
+pub(crate) fn save_named_bytes(
+    base_dir: &Path,
+    payload: &[u8],
+    label: &str,
+    filename: &str,
+) -> Result<PathBuf> {
+    let safe_label = sanitize_label(label, "media");
+    let safe_filename = sanitize_filename(filename, "asset.bin");
+    let dir = ensure_dir(&base_dir.join(&safe_label))?;
+    let path = dir.join(safe_filename);
+    std::fs::write(&path, payload)?;
+    Ok(path)
+}
+
 pub(crate) fn url_suffix(url: &str, fallback: &str) -> String {
     let without_query = url.split('?').next().unwrap_or("");
     let suffix = Path::new(without_query)
@@ -187,6 +201,52 @@ fn sanitize_label(label: &str, fallback: &str) -> String {
     }
 }
 
+fn sanitize_filename(filename: &str, fallback: &str) -> String {
+    let raw_name = Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let cleaned: String = raw_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches(['.', '_', '-']);
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub(crate) fn empty_object() -> Value {
     Value::Object(Map::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_named_bytes_writes_fixed_file_inside_label_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = save_named_bytes(dir.path(), b"poster", "note/one", "post.jpg").unwrap();
+
+        assert_eq!(path, dir.path().join("note_one").join("post.jpg"));
+        assert_eq!(std::fs::read(path).unwrap(), b"poster");
+    }
+
+    #[test]
+    fn save_named_bytes_strips_path_components_from_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = save_named_bytes(dir.path(), b"poster", "note", "../post.jpg").unwrap();
+
+        assert_eq!(path, dir.path().join("note").join("post.jpg"));
+        assert_eq!(std::fs::read(path).unwrap(), b"poster");
+    }
 }

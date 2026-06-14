@@ -75,6 +75,8 @@ pub struct ReadNoteOptions {
     pub download_media: bool,
     pub max_images: usize,
     pub max_video_frames: usize,
+    pub poster_url_fallback: String,
+    pub note_id_fallback: String,
 }
 
 impl Default for ReadNoteOptions {
@@ -85,6 +87,8 @@ impl Default for ReadNoteOptions {
             download_media: false,
             max_images: 12,
             max_video_frames: 4,
+            poster_url_fallback: String::new(),
+            note_id_fallback: String::new(),
         }
     }
 }
@@ -582,15 +586,38 @@ impl<'a> XhsPageRuntime<'a> {
         note_id: &str,
         index: Option<usize>,
         wait_seconds: f64,
-        options: ReadNoteOptions,
+        mut options: ReadNoteOptions,
     ) -> Result<Value> {
         let mut open = None;
+        if options.note_id_fallback.trim().is_empty() && !note_id.trim().is_empty() {
+            options.note_id_fallback = note_id.trim().to_string();
+        }
         if !note_id.is_empty() || index.is_some() {
             let opened = self.open_note(note_id, index, wait_seconds).await?;
             if !script_ok(&opened) {
                 return Ok(
                     json!({ "ok": false, "open": opened, "error": opened.get("error").and_then(Value::as_str).unwrap_or("open_failed") }),
                 );
+            }
+            if options.poster_url_fallback.trim().is_empty() {
+                if let Some(cover_url) = opened
+                    .get("target")
+                    .and_then(|target| target.get("cover_url"))
+                    .and_then(Value::as_str)
+                    .filter(|url| !url.trim().is_empty())
+                {
+                    options.poster_url_fallback = cover_url.to_string();
+                }
+            }
+            if options.note_id_fallback.trim().is_empty() {
+                if let Some(target_note_id) = opened
+                    .get("target")
+                    .and_then(|target| target.get("note_id"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                {
+                    options.note_id_fallback = target_note_id.to_string();
+                }
             }
             open = Some(opened);
         }
@@ -1016,6 +1043,10 @@ impl<'a> XhsPageRuntime<'a> {
 
         let mut note = parse_note(&body, &options.level);
 
+        if note.note_id.is_empty() && !options.note_id_fallback.trim().is_empty() {
+            note.note_id = options.note_id_fallback.trim().to_string();
+        }
+
         // Fall back to the live page URL when the JS payload didn't populate
         // body.url. One extra evaluate is cheap and keeps extraction stable
         // across navigation styles.
@@ -1044,6 +1075,10 @@ impl<'a> XhsPageRuntime<'a> {
             "waited_ms": raw.get("waited_ms").and_then(Value::as_i64).unwrap_or(0),
             "attempts": raw.get("attempts").and_then(Value::as_i64).unwrap_or(0),
         }));
+
+        if note.r#type == "video" && !options.poster_url_fallback.trim().is_empty() {
+            apply_video_poster_fallback(&mut note.video, &options.poster_url_fallback);
+        }
 
         if options.include_media {
             self.enrich_note_media(&mut note, options.max_images, options.max_video_frames)
@@ -1440,6 +1475,20 @@ fn insert_value_string(value: &mut Value, key: &str, text: &str) {
     }
 }
 
+fn apply_video_poster_fallback(video: &mut Value, fallback_url: &str) {
+    let fallback_url = fallback_url.trim();
+    if fallback_url.is_empty() {
+        return;
+    }
+    let has_poster = video
+        .get("poster_url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| !url.trim().is_empty());
+    if !has_poster {
+        insert_value_string(video, "poster_url", fallback_url);
+    }
+}
+
 fn search_transition_ok(state: &Value, query: &str) -> bool {
     if state
         .get("page_state")
@@ -1596,5 +1645,23 @@ mod tests {
 
         let body = json!({});
         assert_eq!(parse_note(&body, "lite").image_count, 0);
+    }
+
+    #[test]
+    fn video_poster_fallback_fills_missing_url() {
+        let mut video = json!({});
+
+        apply_video_poster_fallback(&mut video, " https://img.example/cover.jpg ");
+
+        assert_eq!(video["poster_url"], "https://img.example/cover.jpg");
+    }
+
+    #[test]
+    fn video_poster_fallback_preserves_existing_url() {
+        let mut video = json!({ "poster_url": "https://img.example/poster.jpg" });
+
+        apply_video_poster_fallback(&mut video, "https://img.example/cover.jpg");
+
+        assert_eq!(video["poster_url"], "https://img.example/poster.jpg");
     }
 }
