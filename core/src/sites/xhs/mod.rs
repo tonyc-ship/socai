@@ -1,5 +1,6 @@
 pub mod entities;
 pub mod history;
+mod media_manifest;
 pub mod page;
 pub mod tools;
 

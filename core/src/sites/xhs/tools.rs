@@ -13,6 +13,9 @@ use crate::media::{timing_delta, MediaProcessor, TimingSnapshot};
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
+use crate::sites::xhs::media_manifest::{
+    ensure_entity_note_id, topic_scan_media_manifest, write_media_manifest_file,
+};
 use crate::sites::xhs::page::XHS_SEARCH_FILTERS;
 use crate::sites::xhs::{ReadNoteOptions, XhsHistoryStore, XhsNoteCard, XhsPageRuntime};
 
@@ -1064,7 +1067,8 @@ impl Tool for TopicScanTool {
          first page is too small) → open each note and read its body + top \
          comments → return one compact bundle (search results + selected cards \
          + note bodies + comments). Pass `download_media=true` to download \
-         note images/videos into the run dir and include local paths. Defaults \
+         note images/videos into the run dir, include local paths, and emit a \
+         stable media_manifest_path. Defaults \
          to 10 notes; pass a larger `num_notes` to scan more (each note is \
          opened, so latency scales with it). Prefer this for XHS topic \
          research. Do not repeat the same scan unless the previous one was \
@@ -1089,7 +1093,7 @@ impl Tool for TopicScanTool {
                 },
                 "download_media": {
                     "type": "boolean",
-                    "description": "Download note images/videos into the command run_dir and include local_path fields in returned notes.",
+                    "description": "Download note images/videos into the command run_dir, include local_path fields in returned notes, and write a stable media_manifest.json surfaced by media_manifest_path.",
                     "default": false
                 }
             },
@@ -1242,7 +1246,8 @@ impl Tool for TopicScanTool {
                 .await;
             let mut entry = match read_result {
                 Ok(payload) => {
-                    let entity = payload.get("entity").cloned().unwrap_or(Value::Null);
+                    let mut entity = payload.get("entity").cloned().unwrap_or(Value::Null);
+                    ensure_entity_note_id(&mut entity, &card);
                     json!({
                         "scan_level": level,
                         "source_position": card.position,
@@ -1315,7 +1320,24 @@ impl Tool for TopicScanTool {
         let mut selected_cards = serde_json::to_value(&selected)?;
         history_snapshot.annotate_cards(&mut selected_cards);
 
-        let payload = json!({
+        let media_manifest_metadata = if download_media {
+            let media_manifest = topic_scan_media_manifest(&notes, &ctx.run_dir);
+            let media_manifest_count = media_manifest.as_array().map(Vec::len).unwrap_or_default();
+            let (media_manifest_path, media_manifest_error) =
+                match write_media_manifest_file(ctx, &media_manifest) {
+                    Ok(path) => (Some(path), None),
+                    Err(err) => (None, Some(format!("{err:#}"))),
+                };
+            Some((
+                media_manifest_count,
+                media_manifest_path,
+                media_manifest_error,
+            ))
+        } else {
+            None
+        };
+
+        let mut payload = json!({
             "ok": search.get("ok").and_then(Value::as_bool).unwrap_or(false),
             "query": query,
             "tab": tab_result,
@@ -1334,6 +1356,19 @@ impl Tool for TopicScanTool {
                 "media": media_timing,
             }
         });
+        if let Some((media_manifest_count, media_manifest_path, media_manifest_error)) =
+            media_manifest_metadata
+        {
+            if let Some(map) = payload.as_object_mut() {
+                map.insert("media_manifest_count".into(), json!(media_manifest_count));
+                if let Some(path) = media_manifest_path {
+                    map.insert("media_manifest_path".into(), json!(path));
+                }
+                if let Some(error) = media_manifest_error {
+                    map.insert("media_manifest_error".into(), json!(error));
+                }
+            }
+        }
 
         // Persist as artifact so it shows up in the run dir + working memory.
         let _ = ctx.write_json_artifact(
